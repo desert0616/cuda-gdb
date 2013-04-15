@@ -457,45 +457,41 @@ kernels_update_kernels (kernels_t kernels)
 {
   kernel_t      kernel;
   kernel_t      next_kernel;
-  cuda_coords_t current;
-  cuda_coords_t filter;
-  cuda_iterator itr;
+  CUDBGGridStatus status;
 
   gdb_assert (kernels);
 
-  /* reset all the kernels to not currently running */
   kernels->num_present_kernels = 0;
-  for (kernel = kernels->head; kernel; kernel = kernel->next)
-    kernel->present = false;
 
   /* rediscover the kernels currently running on the hardware */
-  filter     = CUDA_WILDCARD_COORDS;
-  filter.dev = kernels->dev_id;
-  itr = cuda_iterator_create (CUDA_ITERATOR_TYPE_WARPS, &filter, CUDA_SELECT_VALID);
-
-  for (cuda_iterator_start (itr);
-       !cuda_iterator_end (itr);
-       cuda_iterator_next (itr))
-    {
-      current = cuda_iterator_get_current (itr);
-      kernel  = kernels_find_kernel_by_grid_id (kernels, current.gridId);
-      gdb_assert (kernel);
-      kernel->launched = true;
-      kernel->present  = true;
-    }
-
-  cuda_iterator_destroy(itr);
-
-  /* terminate the kernels that we had seen running at some point
-     but are not here on the hardware anymore. */
   kernel = kernels->head;
   while (kernel)
     {
       next_kernel = kernel->next;
+
+      /* reset the kernel to not currently running */
+      kernel->present = false;
+
+      cuda_api_get_grid_status (kernel->dev_id, kernel->grid_id, &status);
+
+      if (status == CUDBG_GRID_STATUS_ACTIVE || status == CUDBG_GRID_STATUS_SLEEPING)
+        {
+          kernel->launched = true;
+          kernel->present = true;
+          ++kernels->num_present_kernels;
+        }
+      else if (status == CUDBG_GRID_STATUS_TERMINATED ||
+               status == CUDBG_GRID_STATUS_UNDETERMINED ||
+               status == CUDBG_GRID_STATUS_INVALID)
+        {
+          kernel->present = false;
+        }
+
+      /* terminate the kernels that we had seen running at some point
+         but are not here on the hardware anymore. */
       if (kernel->launched && !kernel->present)
-        kernels_terminate_kernel (kernels, kernel);
-      if (kernel->launched && kernel->present)
-        ++kernels->num_present_kernels;
+          kernels_terminate_kernel (kernels, kernel);
+
       kernel = next_kernel;
     }
 }

@@ -194,7 +194,6 @@ cuda_nat_mourn_inferior (struct target_ops *ops)
   if (!cuda_exception.valid)
   {
     cuda_cleanup ();
-    clear_solib ();
     host_target_ops.to_mourn_inferior (ops);
   }
 }
@@ -383,7 +382,6 @@ static bool sendAck = false;
 extern struct breakpoint *step_resume_breakpoint;
 
 #ifdef __linux__
-#ifndef __arm__
 static void
 cuda_clear_pending_sigint (pid_t pid)
 {
@@ -393,13 +391,11 @@ cuda_clear_pending_sigint (pid_t pid)
   gdb_assert (WIFSTOPPED (status) && WSTOPSIG (status) == SIGINT);
 }
 #endif
-#endif
 
 static int
 cuda_check_pending_sigint (pid_t pid)
 {
 #ifdef __linux__
-#ifndef __arm__
   sigset_t pending, blocked, ignored;
 
   linux_proc_pending_signals (pid, &pending, &blocked, &ignored);
@@ -408,7 +404,6 @@ cuda_check_pending_sigint (pid_t pid)
       cuda_clear_pending_sigint (pid);
       return 1;
     }
-#endif
 #endif
 
    /* No pending SIGINT */
@@ -688,6 +683,13 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
     r = host_target_ops.to_wait (ops, ptid, ws, target_options);
   }
 
+  /* Immediately detect if the inferior is exiting.
+     In these situations, do not investigate the device. */
+  if (ws->kind == TARGET_WAITKIND_EXITED) {
+    cuda_trace ("cuda_wait: target is exiting, avoiding device inspection");
+    return r;
+  }
+
   cuda_initialize_target ();
 
   /* Suspend all the CUDA devices. */
@@ -747,8 +749,34 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
     }
   else if (cuda_breakpoint_hit_p (cuda_clock ()))
     {
+      struct regcache *regcache;
+      CORE_ADDR pc;
+
       cuda_trace ("cuda_wait: stopped because of a breakpoint");
       cuda_set_signo (TARGET_SIGNAL_TRAP);
+
+      /* Rewind host PC and consume pending SIGTRAP
+         Sometimes, one thread can hit both a host and a device
+         breakpoint at the same time, in which case host SIGTRAP
+         is triggered while SIGTRAP from back end is blocked (pending).
+         When resuming, host PC is not rewound because focus is on the
+         device.
+
+         Before switching to CUDA thread, we check if that's the case.
+         If so, manually rewind the host PC and consume the pending SIGTRAP.
+         This allows the host breakpoint to be hit again after resuming. */
+
+      /* r is guaranteed to be the return of host_wait in this case */
+      regcache = get_thread_regcache (r);
+      pc = regcache_read_pc (regcache) - gdbarch_decr_pc_after_break (target_gdbarch);
+      if (breakpoint_inserted_here_p (get_regcache_aspace (regcache), pc))
+        {
+          /* Rewind the PC */
+          regcache_write_pc (regcache, pc);
+          /* Remove the pending notification */
+          cuda_notification_consume_pending ();
+        }
+
       cuda_coords_update_current (true, false);
     }
   else if (cuda_system_is_broken (cuda_clock ()))
@@ -919,7 +947,6 @@ static int
 cuda_nat_remove_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_tgt)
 {
   uint32_t dev;
-  kernels_t kernels;
   CORE_ADDR cuda_addr;
   bool is_cuda_addr;
   bool removed;
@@ -935,16 +962,7 @@ cuda_nat_remove_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_t
           if (!device_is_any_context_present (dev))
             continue;
 
-          /* If we haven't received a launch notification, don't bother
-             removing breakpoints.  Let the caller think this operation
-             was successful, as this is not an error. */
-          kernels = device_get_kernels (dev);
-          if (kernels_get_num_kernels (kernels) == 0)
-            {
-              removed = true;
-              continue;
-            }
-
+          /* We need to remove breakpoints even if no kernels remain on the device */
           removed |= cuda_api_unset_breakpoint (dev, bp_tgt->placed_address);
         }
       return !removed;
@@ -1279,15 +1297,17 @@ cuda_nat_attach (void)
   target_read_memory (attachDataAvailableFlagAddr, &attachDataAvailable, 1);
 
   if (attachDataAvailable)
-    /* Resume the inferior to collect more data. CUDA_ATTACH_STATE_COMPLETE will
-       be set once this completes. */
+    /* Resume the inferior to collect more data. CUDA_ATTACH_STATE_COMPLETE and
+       CUDBG_IPC_FLAG_NAME will be set once this completes. */
     continue_command (0, 0);
   else
-    /* No data to collect, attach complete. */
-    cuda_api_set_attach_state (CUDA_ATTACH_STATE_COMPLETE);
+    {
+      /* Enable debugger callbacks from the CUDA driver */
+      target_write_memory (debugFlagAddr, &one, 1);
 
-  /* Enable debugger callbacks from the CUDA driver */
-  target_write_memory (debugFlagAddr, &one, 1);
+      /* No data to collect, attach complete. */
+      cuda_api_set_attach_state (CUDA_ATTACH_STATE_COMPLETE);
+    }
 }
 
 static void
@@ -1301,9 +1321,10 @@ cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
 
   debugFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_IPC_FLAG_NAME));
 
-  /* If the CUDA driver isn't available, tread the inferior as a host-only
-     process */
-  if (!debugFlagAddr)
+  /* If the CUDA driver isn't available or if the Debug API is not
+     initialized, treat the inferior as a host-only process */
+  if (!debugFlagAddr || 
+       cuda_api_get_state () != CUDA_API_STATE_INITIALIZED)
     {
       host_target_ops.to_detach (ops, args, from_tty);
       return;
@@ -1341,7 +1362,9 @@ cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
   if (needCleanupOnDetach)
     {
       /* Clear all breakpoints */
-      delete_command(NULL, 0);
+      delete_command (NULL, 0);
+      cuda_system_cleanup_breakpoints ();
+      cuda_options_disable_break_on_launch ();
 
       /* Now resume the app. */
       continue_command (0, 0);
@@ -1349,12 +1372,9 @@ cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
 
   target_write_memory (debugFlagAddr, &zero, 1);
 
-  /* Finalize the API to cleanup state before the app is resumed below */
-  cuda_api_finalize ();
+  cuda_cleanup ();
 
   /* Call the host detach routine. */
   host_target_ops.to_detach (ops, args, from_tty);
-
-  cuda_cleanup ();
 }
 

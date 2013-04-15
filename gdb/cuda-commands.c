@@ -1634,9 +1634,9 @@ cuda_command_switch (char *switch_string)
 
   /* Do the actual switch if possible */
   if (!solution->valid)
-    ui_out_field_string (uiout, NULL, _("Invalid coordinates. CUDA focus unchanged."));
+    error (_("Invalid coordinates. CUDA focus unchanged."));
   else if (ignore_solution)
-    ui_out_field_string (uiout, NULL, _("Request cannot be satisfied. CUDA focus unchanged."));
+    error (_("Request cannot be satisfied. CUDA focus unchanged."));
   else if (current.valid && cuda_coords_equal (solution, &current))
     ui_out_field_string (uiout, NULL, _("CUDA focus unchanged.\n"));
   else

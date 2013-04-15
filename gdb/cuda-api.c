@@ -179,6 +179,26 @@ cuda_api_finalize ()
 }
 
 void
+cuda_api_initialize_attach_stub ()
+{
+  CUDBGResult res;
+
+  if (!api_initialized)
+    return;
+
+  /* Mark the API as not initialized as early as possible. If the finalize()
+   * call fails, we won't try to do anything stupid afterwards. */
+  api_initialized = false;
+
+  res = cudbgAPI->initializeAttachStub ();
+  cuda_api_print_api_call_result (res);
+
+  if (res != CUDBG_SUCCESS)
+    error (_("Error: Failed to initialize attach stub (error=%u).\n"),
+            res);
+}
+
+void
 cuda_api_resume_device (uint32_t dev)
 {
   CUDBGResult res;
@@ -1103,4 +1123,34 @@ cuda_api_memcheck_read_error_address (uint32_t dev, uint32_t sm, uint32_t wp, ui
     error (_("Error: Failed to read error address "
              "(dev=%u, sm=%u, wp=%u, ln=%u, error=%u).\n"),
            dev, sm, wp, ln, res);
+}
+
+cuda_api_state_t
+cuda_api_get_state ()
+{
+    return api_initialized ? CUDA_API_STATE_INITIALIZED:
+                             CUDA_API_STATE_UNINITIALIZED;
+}
+
+void
+cuda_api_get_grid_status (uint32_t dev, uint32_t grid_id, CUDBGGridStatus *status)
+{
+  CUDBGResult res;
+
+  if (!api_initialized)
+    return;
+
+  res = cudbgAPI->getGridStatus (dev, grid_id, status);
+  cuda_api_print_api_call_result (res);
+  if (res != CUDBG_SUCCESS)
+    error (_("Error: Failed to get grid status "
+             "(dev=%u, grid_id=%u, error=%u).\n"),
+           dev, grid_id, res);
+}
+
+bool
+cuda_api_attach_or_detach_in_progress (void)
+{
+  return (attach_state == CUDA_ATTACH_STATE_DETACHING ||
+          attach_state == CUDA_ATTACH_STATE_IN_PROGRESS);
 }

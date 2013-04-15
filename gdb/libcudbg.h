@@ -161,6 +161,8 @@ typedef enum {
     CUDBGAPIREQ_getNextAsyncEvent,
     CUDBGAPIREQ_acknowledgeSyncEvents,
     CUDBGAPIREQ_requestCleanupOnDetach,
+    CUDBGAPIREQ_initializeAttachStub,
+    CUDBGAPIREQ_getGridStatus,
 } CUDBGAPIREQ_t;
 
 typedef enum {

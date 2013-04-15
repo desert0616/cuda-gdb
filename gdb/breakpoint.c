@@ -3333,9 +3333,26 @@ print_it_typical (bpstat bs)
       /* Inform the user that the driver has hit an internal error. */
       res = cuda_get_last_driver_internal_error_code ();
 
-      error (_("The CUDA driver has hit an internal error.\n"
-               "Error code: 0x%"PRIx64"\n"
-               "Further execution or debugging is unreliable.\n"), res);
+      if (cuda_api_get_attach_state () == CUDA_ATTACH_STATE_DETACHING ||
+          cuda_api_get_attach_state () == CUDA_ATTACH_STATE_IN_PROGRESS)
+        {
+          if ((unsigned int)res == CUDBG_ERROR_INVALID_DEVICE)
+            error (_("The CUDA driver does not support attaching to a\n"
+                     "running CUDA application on this GPU.\n"));
+          else if ((unsigned int)res == CUDBG_ERROR_FORK_FAILED)
+            error (_("The CUDA driver hit an error while forking off\n"
+                     "the debugger process.\n"));
+          else if ((unsigned int)res == CUDBG_ERROR_OS_RESOURCES)
+            error (_("The CUDA driver could not allocate operating system\n"
+                     "resources for attaching to the application.\n"));
+          else
+            error (_("The CUDA driver hit an internal error while attaching\n"
+                     "to the application.\n"));
+        }
+      else
+        error (_("The CUDA driver has hit an internal error.\n"
+                 "Error code: 0x%"PRIx64"\n"
+                 "Further execution or debugging is unreliable.\n"), res);
 
       result = PRINT_NOTHING;
       break;
@@ -6268,6 +6285,23 @@ cuda_clean_shadow_host_breakpoints (struct breakpoint *b, elf_image_t elf_image)
     }
 }
 
+/* When a CUDA ELF image gets unloaded, any pointer to its objfile or any of
+   its section becomes invalid. cuda_update_breakpoint_locations updates those
+   pointers in all the breakpoint locations pointing to objfile. */
+void
+cuda_reset_invalid_breakpoint_location_section (struct objfile *objfile)
+{
+  struct breakpoint *b = NULL;
+  struct bp_location *loc = NULL;
+
+  ALL_BREAKPOINTS (b)
+    {
+      for (loc = b->loc; loc; loc = loc->next)
+        if (loc->section && loc->section->objfile == objfile)
+          loc->section = NULL;
+    }
+}
+
 void
 cuda_resolve_breakpoints (elf_image_t elf_image)
 {
@@ -6316,6 +6350,12 @@ cuda_resolve_breakpoints (elf_image_t elf_image)
       created_loc = cuda_add_location (b, elf_image);
       if (created_loc)
         continue;
+
+      /* restore the section (and objfile) if it has been removed after
+         unloading the ELF image for one reason or another. */
+      for (loc = b->loc; loc; loc = loc->next)
+        if (!loc->section)
+          b->loc->section = find_pc_section (loc->address);
     }
 }
 
@@ -6350,6 +6390,14 @@ cuda_unresolve_breakpoints (uint64_t context_id)
        && b->type != bp_cuda_autostep) /* CUDA - autostep */
         continue;
 
+      /* CUDA - breakpoints */
+      /* Disable breakpoint with explicit device address. */
+      if (b->cuda_explicit_device_address && b->enable_state == bp_enabled)
+        {
+          warning(_("Breakpoint %d is disabled because device address may change on the next run."), b->number);
+          disable_breakpoint (b);
+        }
+
       for (loc = b->loc; loc; loc = next_loc)
         {
           next_loc = loc->next;
@@ -6361,6 +6409,9 @@ cuda_unresolve_breakpoints (uint64_t context_id)
             continue;
 
           memset (&loc->cuda, 0, sizeof loc->cuda);
+
+        /* the objfile and the section do not exist anymore */
+        loc->section = NULL;
 
           cuda_trace ("  -> unresolved CUDA breakpoint %d\n", b->number);
         }
@@ -7692,6 +7743,13 @@ Couldn't determine the static tracepoint marker to probe"));
       if (bp_loc_is_permanent (loc))
 	make_breakpoint_permanent (b);
 
+      /* CUDA - breakpoints */
+      /* Mark breakpoint that is set with explicit device address */
+      if (sal.explicit_pc && cuda_is_device_code_address(loc->address))
+        b->cuda_explicit_device_address = 1;
+      else
+        b->cuda_explicit_device_address = 0;
+
       if (b->cond_string)
 	{
 	  char *arg = b->cond_string;
@@ -8806,6 +8864,16 @@ watch_command_1 (char *arg, int accessflag, int from_tty)
   if (val != NULL)
     release_value (val);
 
+  /* CUDA - no device watchpoints */
+  /* Check if the watchpoint is set on a device variable. If yes, then
+     intercept this command.*/
+  if (val != NULL)
+    {
+      CORE_ADDR addr = value_raw_address(val);
+      if (addr == 0 || cuda_is_device_code_address(addr))
+        error (_("Device watchpoints are not supported"));
+    }       
+
   tok = arg;
   while (*tok == ' ' || *tok == '\t')
     tok++;
@@ -9246,6 +9314,11 @@ until_break_command (char *arg, int from_tty, int anywhere)
     error (_("Junk at end of arguments."));
 
   resolve_sal_pc (&sal);
+
+  /* CUDA - gdb bug fix */
+  /* resolve_sal_pc() may reinitialize the frame stack. Therefore, the saved
+     'frame' pointer ends up pointing to freed memory. We need to recompute it. */
+  frame = get_selected_frame (NULL);
 
   if (anywhere)
     /* If the user told us to continue until a specified location,

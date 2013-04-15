@@ -3866,6 +3866,8 @@ linux_nat_kill (struct target_ops *ops)
      GDB core does not know that the threads have terminated for some reason. */
   if (!cuda_exception.valid)
     target_mourn_inferior ();
+  else
+    cuda_is_target_mourn_pending = true;
 }
 
 static void

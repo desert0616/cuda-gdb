@@ -1220,6 +1220,15 @@ quit_target (void *arg)
 {
   struct qt_args *qt = (struct qt_args *)arg;
 
+  if (cuda_exception.valid && cuda_is_target_mourn_pending)
+    {
+      cuda_exception.valid = false;
+      cuda_exception.recoverable = false;
+      cuda_is_target_mourn_pending = false;
+      
+      target_mourn_inferior ();
+    }
+
   /* Kill or detach all inferiors.  */
   iterate_over_inferiors (kill_or_detach, qt);
 

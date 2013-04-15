@@ -1497,6 +1497,22 @@ get_prev_frame_1 (struct frame_info *this_frame)
   if (get_frame_type (this_frame) == INLINE_FRAME)
     return get_prev_frame_raw (this_frame);
 
+  /* CUDA - frames */
+  /* Stop unwinding if the current frame is the outermost CUDA device frame */
+  if (this_frame->level >= 0
+      && cuda_focus_is_device ()
+      && cuda_frame_outermost_p (this_frame->next))
+    {
+      if (frame_debug)
+	{
+	  fprintf_unfiltered (gdb_stdlog, "-> ");
+	  fprint_frame (gdb_stdlog, NULL);
+	  fprintf_unfiltered (gdb_stdlog, " // Outermost CUDA frame }\n");
+	}
+      this_frame->stop_reason = UNWIND_NULL_ID;
+      return NULL;
+    }
+
   /* Check that this frame's ID was valid.  If it wasn't, don't try to
      unwind to the prev frame.  Be careful to not apply this test to
      the sentinel frame.  */
@@ -1536,6 +1552,10 @@ get_prev_frame_1 (struct frame_info *this_frame)
      are, there is most likely a stack cycle.  As with the inner-than
      test above, avoid comparing the inner-most and sentinel frames.  */
   if (this_frame->level > 0
+      /* CUDA - frames */
+      /* A CUDA frame may have a size of 0. Therefore two different frames may
+         correctly share the same frame id. */
+      && !cuda_focus_is_device ()
       && frame_id_eq (this_id, get_frame_id (this_frame->next)))
     {
       if (frame_debug)

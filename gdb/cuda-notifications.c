@@ -343,3 +343,9 @@ cuda_notification_mark_consumed (void)
 
   cuda_notification_release_lock ();
 }
+
+void
+cuda_notification_consume_pending (void)
+{
+  cuda_notification_info.pending_send = false;
+}

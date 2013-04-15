@@ -1,3 +1,5 @@
+#!/bin/sh
+
 #
 # NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
 # Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
@@ -14,8 +16,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, see <http://www.gnu.org/licenses/>.
 #
-
-#! /bin/sh
 
 # Similar to gdb.sh (original), but without system search paths and
 # architecture translation.

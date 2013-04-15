@@ -4398,6 +4398,20 @@ infrun: not switching back to stepped thread, it has vanished\n");
       return;
     }
 
+  /* CUDA - next */
+  /* Stop stepping during a 'next' command if the cuda coordinates have
+     changed focus to ensure that control properly moves to the next warp
+     when the previous one runs to completion. */
+  if (cuda_focus_is_device ()
+  && !cuda_coords_is_current (&previous_cuda_coords)
+  && ecs->event_thread->step_over_calls == STEP_OVER_ALL)
+    {
+      ecs->event_thread->stop_step = 1;
+      print_stop_reason (END_STEPPING_RANGE, 0);
+      stop_stepping(ecs);
+      return;
+    }
+
   /* Re-fetch current thread's frame in case the code above caused
      the frame cache to be re-initialized, making our FRAME variable
      a dangling pointer.  */

@@ -176,6 +176,11 @@ blockvector_for_pc_sect (CORE_ADDR pc, struct obj_section *section,
         innermost = b;
       if (BLOCK_END (b) < BLOCK_END (innermost))
         innermost = b;
+      /* If this block's superblock is the current 'innermost' block, then this
+         block must be made the new 'innermost'.  lookup_symbol_block will traverse
+         backwards from this block, through each superblock. */
+      if (BLOCK_SUPERBLOCK (b) == innermost)
+        innermost = b;
     }
 
   if (innermost)

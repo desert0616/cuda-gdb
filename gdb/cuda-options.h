@@ -43,6 +43,7 @@ bool cuda_options_thread_selection_physical (void);
 bool cuda_options_api_failures_ignore (void);
 bool cuda_options_api_failures_stop (void);
 bool cuda_options_api_failures_hide (void);
+void cuda_options_disable_break_on_launch (void);
 
 #endif
 

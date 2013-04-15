@@ -769,7 +769,7 @@ cuda_coords_find_valid (cuda_coords_t wished, cuda_coords_t found[CK_MAX], cuda_
 {
   cuda_coords_t origin = { true, 0, 0, { 0, 0 }, { 0, 0, 0 }, 0, 0, 0, 0 };
   cuda_coords_kind_t kind;
-  uint32_t relative_distance_logical, relative_distance_physical;
+  uint64_t relative_distance_logical, relative_distance_physical;
   uint64_t absolute_distance_logical, absolute_distance_physical;
   uint64_t best_relative_distance_logical = 0ULL, best_relative_distance_physical = 0ULL;
   uint64_t best_absolute_distance_logical = 0ULL, best_absolute_distance_physical = 0ULL;

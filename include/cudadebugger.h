@@ -88,7 +88,7 @@ typedef unsigned char bool;
 
 #define CUDBG_API_VERSION_MAJOR      5  /* Major release version number */
 #define CUDBG_API_VERSION_MINOR      0  /* Minor release version number */
-#define CUDBG_API_VERSION_REVISION  74  /* Revision (build) number */
+#define CUDBG_API_VERSION_REVISION  77  /* Revision (build) number */
 
 /*---------------------------------- Constants -------------------------------*/
 
@@ -183,6 +183,8 @@ typedef enum {
     CUDBG_ERROR_LANE_NOT_IN_SYSCALL         = 0x0022,  /* The specified lane is not inside a device syscall */
     CUDBG_ERROR_MEMCHECK_NOT_ENABLED        = 0x0023,  /* Memcheck has not been enabled */
     CUDBG_ERROR_INVALID_ENVVAR_ARGS         = 0x0024,  /* Some environment variable's value is invalid */
+    CUDBG_ERROR_OS_RESOURCES                = 0x0025,  /* Error while allocating resources from the OS */
+    CUDBG_ERROR_FORK_FAILED                 = 0x0026,  /* Error while forking the debugger process */
 } CUDBGResult;
 
 /*------------------------------ Grid Attributes -----------------------------*/
@@ -196,6 +198,15 @@ typedef struct {
     CUDBGAttribute attribute;
     uint64_t       value;
 } CUDBGAttributeValuePair;
+
+typedef enum {
+    CUDBG_GRID_STATUS_INVALID,          /* An invalid grid ID was passed, or an error occurred during status lookup */
+    CUDBG_GRID_STATUS_PENDING,          /* The grid was launched but is not running on the HW yet */
+    CUDBG_GRID_STATUS_ACTIVE,           /* The grid is currently running on the HW */
+    CUDBG_GRID_STATUS_SLEEPING,         /* The grid is on the device, doing a join */
+    CUDBG_GRID_STATUS_TERMINATED,       /* The grid has finished executing */
+    CUDBG_GRID_STATUS_UNDETERMINED,     /* The grid is either PENDING or TERMINATED */
+} CUDBGGridStatus;
 
 /*------------------------------- Kernel Types -------------------------------*/
 
@@ -465,7 +476,8 @@ typedef const struct CUDBGAPI_st *CUDBGAPI;
 
 CUDBGResult cudbgGetAPI(uint32_t major, uint32_t minor, uint32_t rev, CUDBGAPI *api);
 CUDBGResult cudbgGetAPIVersion(uint32_t *major, uint32_t *minor, uint32_t *rev);
-CUDBGResult cudbgMain(int apiClientPid, uint32_t apiClientRevision, int sessionId, int attachState, int attachEventInitialized, int writeFd, int detachFd);
+CUDBGResult cudbgMain(int apiClientPid, uint32_t apiClientRevision, int sessionId, int attachState,
+                      int attachEventInitialized, int writeFd, int detachFd, int attachStubInUse);
 
 struct CUDBGAPI_st {
     /* Initialization */
@@ -581,6 +593,8 @@ struct CUDBGAPI_st {
     CUDBGResult (*acknowledgeSyncEvents)(void);
     CUDBGResult (*getNextAsyncEvent)(CUDBGEvent *event);
     CUDBGResult (*requestCleanupOnDetach)(void);
+    CUDBGResult (*initializeAttachStub)(void);
+    CUDBGResult (*getGridStatus)(uint32_t dev, uint32_t gridId, CUDBGGridStatus *status);
 };
 
 #ifdef __cplusplus

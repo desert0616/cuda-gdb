@@ -63,7 +63,7 @@ bool
 cuda_autostep_stop (void)
 {
   struct thread_info *tp = NULL;
-  
+
   if (target_has_execution && !ptid_equal (inferior_ptid, null_ptid))
     tp = inferior_thread ();
 
@@ -77,7 +77,7 @@ autostep_report_exception_host (uint64_t before_pc)
   struct gdbarch *gdbarch = get_current_arch ();
   struct type *type_uint32   = builtin_type (gdbarch)->builtin_uint32;
   struct type *type_data_ptr = builtin_type (gdbarch)->builtin_data_ptr;
-  
+
   struct symtab_and_line before_sal = find_pc_line (before_pc, 0);
 
   printf_filtered (_("Autostep precisely caught exception at %s:%d (0x%" PRIx64 ")\n"),
@@ -107,7 +107,7 @@ autostep_report_exception_device (int before_ln, uint64_t before_pc,
     {
       /* Exception in active lane. We know the exception must have been at the
          previous pc */
-      
+
       struct symtab_and_line before_sal = find_pc_line (before_pc, 0);
 
       if (before_sal.symtab && before_sal.line)
@@ -115,7 +115,7 @@ autostep_report_exception_device (int before_ln, uint64_t before_pc,
         before_sal.symtab->filename, before_sal.line, before_pc);
       else
         printf_filtered (_("Autostep precisely caught exception. (0x%" PRIx64 ")\n"), before_pc);
-    
+
       set_internalvar (lookup_internalvar ("autostep_exception_pc"),
         value_from_longest (type_data_ptr, (LONGEST) before_pc));
       set_internalvar (lookup_internalvar ("autostep_exception_line"),
@@ -134,7 +134,7 @@ autostep_report_exception_device (int before_ln, uint64_t before_pc,
         after_pc);
       printf_filtered (_("This is probably %s:%d (0x%" PRIx64 ")\n"),
         guess_sal.symtab->filename, guess_sal.line, guess_pc);
-    
+
       set_internalvar (lookup_internalvar ("autostep_exception_pc"),
         value_from_longest (type_data_ptr, (LONGEST) guess_pc));
       set_internalvar (lookup_internalvar ("autostep_exception_line"),
@@ -150,7 +150,7 @@ handle_autostep_host (void)
   uint64_t before_pc, after_pc;
   int remaining;
   bool single_inst;
-  
+
   /* Check we're at the an autostep bp */
   before_pc = stop_pc;
   astep = cuda_find_autostep_by_addr (before_pc);
@@ -168,7 +168,7 @@ handle_autostep_host (void)
 
   /* Step until we are out of the autostep range */
   remaining = astep->cuda_autostep_length;
-  
+
   while (remaining > 0)
     {
       before_pc = regcache_read_pc (get_current_regcache ());
@@ -177,15 +177,15 @@ handle_autostep_host (void)
       cuda_set_autostep_pending (false);
 
       /* Basically does a next/nexti */
-      step_1 (true, single_inst, NULL);
+      step_1 (false, single_inst, NULL);
 
       if (cuda_autostep_stop ())
         {
           struct thread_info *tp = NULL;
-          
+
           if (target_has_execution && !ptid_equal (inferior_ptid, null_ptid))
             tp = inferior_thread ();
-          
+
           if (tp && signal_pass_state (tp->stop_signal))
             {
               /* This is an exception */
@@ -202,7 +202,7 @@ handle_autostep_host (void)
         }
 
       after_pc = regcache_read_pc (get_current_regcache ());
-      
+
       /* Handle overlapping autosteps */
       if (cuda_get_autostep_pending ())
         {
@@ -236,7 +236,7 @@ handle_autostep_device ()
   cuda_set_autostep_stepping (true);
 
   /* Iterate through all warps in current grid that are at a breakpoint */
-  
+
   filter = CUDA_WILDCARD_COORDS;
   filter.valid = true;
   filter.gridId = CUDA_CURRENT;
@@ -280,19 +280,19 @@ handle_autostep_device ()
       /* Set focus to current warp */
       c.ln = warp_get_lowest_active_lane (c.dev, c.sm, c.wp);
       cuda_coords_set_current_physical (c.dev, c.sm, c.wp, c.ln);
-      
+
       /* Step until we are out of the autostep range */
       remaining = astep->cuda_autostep_length;
-      
+
       while (remaining>0)
         {
           before_pc = warp_get_active_virtual_pc (c.dev, c.sm, c.wp);
-          
+
           /* Clear pending flag to test if we encounter another autostep */
           cuda_set_autostep_pending (false);
 
           /* Basically does a next/nexti */
-          step_1 (true, single_inst, NULL);
+          step_1 (false, single_inst, NULL);
 
           /* Make sure we can continue stepping this warp */
           if (!cuda_focus_is_device () || !warp_is_valid (c.dev, c.sm, c.wp))
@@ -306,14 +306,14 @@ handle_autostep_device ()
             break;
 
           after_pc = warp_get_active_virtual_pc (c.dev, c.sm, c.wp);
-          
+
           if (cuda_autostep_stop ())
             {
               struct thread_info *tp = NULL;
-              
+
               if (target_has_execution && !ptid_equal (inferior_ptid, null_ptid))
                 tp = inferior_thread ();
-          
+
               if (tp && signal_pass_state (tp->stop_signal))
                 {
                   /* This is an exception */
@@ -330,7 +330,7 @@ handle_autostep_device ()
                 }
 
               cuda_set_autostep_stepping (false);
-              
+
               do_cleanups (old_cleanups);
               return;
             }
@@ -354,7 +354,7 @@ handle_autostep_device ()
             }
         }
     }
-  
+
   /* Mark that autostepping has been handled */
   cuda_set_autostep_pending (false);
   cuda_set_autostep_stepping (false);

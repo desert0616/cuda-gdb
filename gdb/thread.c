@@ -1217,6 +1217,13 @@ thread_command (char *tidstr, int from_tty)
     {
       if (ptid_equal (inferior_ptid, null_ptid))
 	error (_("No thread selected"));
+      
+      /* CUDA - focus */
+      if (cuda_focus_is_device ())
+        {
+          printf_unfiltered (_("Focus not set on any host thread.\n"));
+          return;
+        }
 
       if (target_has_stack)
 	{
@@ -1230,7 +1237,7 @@ thread_command (char *tidstr, int from_tty)
 			     target_pid_to_str (inferior_ptid));
 	}
       else
-	error (_("No stack."));
+        error (_("No stack."));
       return;
     }
 

@@ -31,11 +31,12 @@
 #include "cuda-defs.h"
 #include "gdb_assert.h"
 
-#define CUDA_GDB_RECORD_FORMAT_WORK   "WORK:%10d\n"
-#define CUDA_GDB_RECORD_FORMAT_DEVICE  "%4d:%10d\n"
-#define CUDA_GDB_RECORD_SIZE                     16
-#define CUDA_GDB_RECORD_WORK_LOCK                 0
-#define CUDA_GDB_RECORD_DEVICE(i)         ((i) + 1)
+#define RECORD_FORMAT_MASTER   "LOCK:%10d\n"
+#define RECORD_FORMAT_DEVICE    "%4d:%10d\n"
+#define RECORD_SIZE                       16
+#define RECORD_MASTER                      0
+#define RECORD_DEVICE(i)           ((i) + 1)
+#define DEVICE_RECORD(i)           ((i) - 1)
 
 static const char cuda_gdb_lock_file[] = "cuda-gdb.lock";
 static char cuda_gdb_tmp_basedir[CUDA_GDB_TMP_BUF_SIZE];
@@ -134,47 +135,66 @@ cuda_gdb_tmpdir_cleanup_self (void *unused)
 }
 
 static void
-cuda_gdb_record_read_pid (int record_idx, int *dev_id, int *pid)
-{
-  char record[CUDA_GDB_TMP_BUF_SIZE];
-  int res;
-
-  *pid = 0;
-
-  res = lseek (cuda_gdb_lock_fd, record_idx * CUDA_GDB_RECORD_SIZE, SEEK_SET);
-  if (res == -1)
-    return;
-
-  res = read (cuda_gdb_lock_fd, record, CUDA_GDB_TMP_BUF_SIZE);
-  if (res == -1)
-    return;
-
-  if (record_idx == 0)
-    sscanf (record, CUDA_GDB_RECORD_FORMAT_WORK, pid);
-  else
-    sscanf (record, CUDA_GDB_RECORD_FORMAT_DEVICE, dev_id, pid);
-}
-
-static void
-cuda_gdb_record_write (int record_idx, int dev_id, int pid)
+cuda_gdb_record_write (int record_idx, int pid)
 {
   char record[CUDA_GDB_TMP_BUF_SIZE];
   int res;
 
   if (record_idx == 0)
-    snprintf (record, CUDA_GDB_TMP_BUF_SIZE, CUDA_GDB_RECORD_FORMAT_WORK,
+    snprintf (record, CUDA_GDB_TMP_BUF_SIZE, RECORD_FORMAT_MASTER,
               pid);
   else
-    snprintf (record, CUDA_GDB_TMP_BUF_SIZE, CUDA_GDB_RECORD_FORMAT_DEVICE,
-              dev_id, pid);
+    snprintf (record, CUDA_GDB_TMP_BUF_SIZE, RECORD_FORMAT_DEVICE,
+              DEVICE_RECORD (record_idx), pid);
 
-  res = lseek (cuda_gdb_lock_fd, record_idx * CUDA_GDB_RECORD_SIZE, SEEK_SET);
+  res = lseek (cuda_gdb_lock_fd, record_idx * RECORD_SIZE, SEEK_SET);
   if (res == -1)
     return;
 
   res = write (cuda_gdb_lock_fd, record, strlen (record));
   if (res == -1)
     return;
+}
+
+static void
+cuda_gdb_record_set_lock (int record_idx, bool enable_lock)
+{
+  struct flock lock = {0};
+  int pid = 0;
+  int e = 0;
+
+  lock.l_type = enable_lock ? F_WRLCK: F_UNLCK;
+  lock.l_whence = SEEK_SET;
+  lock.l_start = record_idx * RECORD_SIZE;
+  lock.l_len = RECORD_SIZE;
+
+  e = fcntl (cuda_gdb_lock_fd, F_SETLK, &lock);
+
+  if (e && (errno == EACCES || errno == EAGAIN))
+    {
+      if (record_idx == RECORD_MASTER)
+        error (_("An instance of cuda-gdb is already using device %d.\n"
+                 "If you believe you are seeing this message in error, try "
+                 "deleting %s/%s.\n"), DEVICE_RECORD (record_idx),
+               cuda_gdb_tmp_basedir, cuda_gdb_lock_file);
+      else
+        error (_("Another cuda-gdb instance is working with the lock file. Try again.\n"
+                 "If you believe you are seeing this message in error, try deleting %s/%s.\n"),
+               cuda_gdb_tmp_basedir, cuda_gdb_lock_file);
+    }
+  else if (e)
+    error (_("Internal error with the cuda-gdb lock file (errno=%d).\n"), errno);
+}
+
+static void
+cuda_gdb_lock_file_initialize ()
+{
+  uint32_t i;
+
+  for (i = 0; i < CUDBG_MAX_DEVICES; i++)
+    {
+      cuda_gdb_record_write (RECORD_DEVICE(i), 0);
+    }
 }
 
 static void
@@ -190,48 +210,14 @@ cuda_gdb_record_remove_all (void *unused)
     {
       if (dev_mask & (1 << i))
         {
-          /* Clear the record for this device */
-          cuda_gdb_record_write (CUDA_GDB_RECORD_DEVICE(i), i, 0);
-
+          cuda_gdb_record_write (RECORD_DEVICE(i), 0);
+          cuda_gdb_record_set_lock (RECORD_DEVICE(i), false);
           dev_mask &= ~(1 << i);
         }
     }
 
   if (cuda_gdb_lock_fd != -1)
     close (cuda_gdb_lock_fd);
-}
-
-static int
-cuda_gdb_record_set_lock (int record_idx, bool enable_lock)
-{
-  struct flock lock = {0};
-
-  lock.l_type = enable_lock ? F_WRLCK: F_UNLCK;
-  lock.l_whence = SEEK_SET;
-  lock.l_start = record_idx * CUDA_GDB_RECORD_SIZE;
-  lock.l_len = CUDA_GDB_RECORD_SIZE;
-
-  return fcntl (cuda_gdb_lock_fd, F_SETLK, &lock);
-}
-
-static void
-cuda_gdb_error_multiple_instances (int pid, int dev_id)
-{
-  error (_("An instance of cuda-gdb (pid %d) is already using device %d. "
-           "If you believe\nyou are seeing this message in error, try "
-           "deleting %s/%s.\n"), pid, dev_id, cuda_gdb_tmp_basedir,
-           cuda_gdb_lock_file);
-}
-
-static void
-cuda_gdb_lock_file_initialize ()
-{
-  uint32_t i;
-
-  for (i = 0; i < CUDBG_MAX_DEVICES; i++)
-    {
-      cuda_gdb_record_write (CUDA_GDB_RECORD_DEVICE(i), i, 0);
-    }
 }
 
 /* Check for the presence of the CUDA_VISIBLE_DEVICES variable. If it is
@@ -247,6 +233,7 @@ cuda_gdb_lock_file_create ()
   int res, pid, i, ignored;
   bool initialize_lock_file = false;
   mode_t old_umask;
+  int my_pid = (int) getpid();
 
   snprintf (buf, sizeof (buf), "%s/%s",
               cuda_gdb_tmp_basedir, cuda_gdb_lock_file);
@@ -270,10 +257,8 @@ cuda_gdb_lock_file_create ()
   make_final_cleanup (cuda_gdb_record_remove_all, NULL);
 
   /* Get the mutex ("work") lock before doing anything */
-  res = cuda_gdb_record_set_lock (CUDA_GDB_RECORD_WORK_LOCK, true);
-  if (res)
-      error (_("Another cuda-gdb instance is working with the lock file, "
-               "try again\n"));
+  cuda_gdb_record_set_lock (RECORD_MASTER, true);
+  cuda_gdb_record_write (RECORD_MASTER, my_pid);
 
   if (initialize_lock_file)
     cuda_gdb_lock_file_initialize ();
@@ -283,15 +268,8 @@ cuda_gdb_lock_file_create ()
       /* Lock all devices */
       for (i = 0; i < CUDBG_MAX_DEVICES; i++)
         {
-          res = cuda_gdb_record_set_lock (CUDA_GDB_RECORD_DEVICE(i), true);
-          if (res)
-            {
-              pid = 0;
-              cuda_gdb_record_read_pid (CUDA_GDB_RECORD_DEVICE(i), &ignored, &pid);
-              cuda_gdb_error_multiple_instances (pid, i);
-            }
- 
-          cuda_gdb_record_write (CUDA_GDB_RECORD_DEVICE(i), i, (int)getpid());
+          cuda_gdb_record_set_lock (RECORD_DEVICE(i), true);
+          cuda_gdb_record_write (RECORD_DEVICE(i), my_pid);
           dev_mask |= 1 << i;
         }
     }
@@ -311,26 +289,17 @@ cuda_gdb_lock_file_create ()
               (++num_devices < CUDBG_MAX_DEVICES) &&
               (dev_id < CUDBG_MAX_DEVICES))
             {
-              res = cuda_gdb_record_set_lock (CUDA_GDB_RECORD_DEVICE(dev_id), true);
-
-              if (res)
-                {
-                  cuda_gdb_record_read_pid (CUDA_GDB_RECORD_DEVICE(dev_id),
-                                            &dev_id, &pid);
-
-                  cuda_gdb_error_multiple_instances (pid, dev_id);
-                }
-                
-                cuda_gdb_record_write (CUDA_GDB_RECORD_DEVICE(dev_id), dev_id, (int)getpid());
-
-                dev_mask |= 1 << dev_id;
+              cuda_gdb_record_set_lock (RECORD_DEVICE(dev_id), true);
+              cuda_gdb_record_write (RECORD_DEVICE(dev_id), my_pid);
+              dev_mask |= 1 << dev_id;
             }
           else
             break;
         } while ((visible_devices = strstr (visible_devices, ",")));
     }
-    
-    cuda_gdb_record_set_lock (CUDA_GDB_RECORD_WORK_LOCK, false);
+
+    cuda_gdb_record_write (RECORD_MASTER, 0);
+    cuda_gdb_record_set_lock (RECORD_MASTER, false);
 }
 
 static void

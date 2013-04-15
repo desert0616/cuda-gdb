@@ -24,10 +24,13 @@
 #include "block.h"
 #include "value.h"
 
+#include "cuda-defs.h"
 #include "cuda-coords.h"
 #include "cuda-api.h"
 #include "cuda-textures.h"
 #include "cuda-options.h"
+#include "cuda-kernel.h"
+#include "cuda-state.h"
 
 
 #define TEXTURE_DIM_MAX    4
@@ -224,10 +227,11 @@ bool
 cuda_find_tex_id (cuda_tex_map_t *mapping,
                   uint32_t *texid)
 {
-  struct symbol *kernel = NULL;
+  kernel_t kernel = NULL;
+  struct symbol *symbol = NULL;
   struct minimal_symbol *msymbol;
   const char *name = NULL;
-  uint32_t dev, sm, wp, ln;
+  uint32_t dev, sm, wp;
   uint64_t pc;
 
   gdb_assert (texid);
@@ -238,19 +242,23 @@ cuda_find_tex_id (cuda_tex_map_t *mapping,
       return true;
     }
 
-  /* get the current kernel's name
-     NOTE: we want the mangled name, cuda_current_kernel_name gives demangled */
-  cuda_coords_get_current_physical (&dev, &sm, &wp, &ln);
-  cuda_api_read_virtual_pc (dev, sm, wp, ln, &pc);
+  /* Get the current kernel's name. We want the mangled name,
+     cuda_current_kernel_name gives demangled. */
+  cuda_coords_get_current_physical (&dev, &sm, &wp, NULL);
+  kernel = warp_get_kernel (dev, sm, wp);
+  pc = kernel_get_virt_code_base (kernel);
   msymbol = lookup_minimal_symbol_by_pc (pc);
-  kernel = find_pc_function (pc);
-  if (kernel && msymbol != NULL &&
-      SYMBOL_VALUE_ADDRESS (msymbol) > BLOCK_START (SYMBOL_BLOCK_VALUE (kernel)))
+  symbol = find_pc_function (pc);
+
+  if (symbol && msymbol != NULL &&
+      SYMBOL_VALUE_ADDRESS (msymbol) > BLOCK_START (SYMBOL_BLOCK_VALUE (symbol)))
       name = SYMBOL_LINKAGE_NAME (msymbol);
-  else if (kernel)
-      name = SYMBOL_LINKAGE_NAME (kernel);
+  else if (symbol)
+      name = SYMBOL_LINKAGE_NAME (symbol);
   else if (msymbol != NULL)
       name = SYMBOL_LINKAGE_NAME (msymbol);
+
+  cuda_textures_trace ("current kernel name: %s", name);
 
   if (!name)
     return false;
@@ -429,6 +437,8 @@ cuda_texture_read_tex_contents (CORE_ADDR addr, gdb_byte *buf)
   cuda_tex_map_t *kernel_to_tex_id = NULL;
   uint32_t tex_id = 0;
 
+  cuda_textures_trace ("read tex contents for address %lx", addr);
+
   if (addr == (CORE_ADDR)(uintptr_t)&texture_address)
     *(CORE_ADDR*)buf = addr;
   else
@@ -442,8 +452,7 @@ cuda_texture_read_tex_contents (CORE_ADDR addr, gdb_byte *buf)
     texture_address.is_bindless = kernel_to_tex_id->use_symindex;
   }
 
-  cuda_textures_trace ("read tex contents for address %lx buf %lx",
-                       addr, *(uint64_t*)buf);
+  cuda_textures_trace ("read tex contents sets buf to %lx", *(uint64_t*)buf);
 }
 
 void

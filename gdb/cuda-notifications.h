@@ -68,6 +68,8 @@ bool cuda_notification_aliased_event (void);
 void cuda_notification_reset_aliased_event (void);
 bool cuda_notification_received (void);
 
+void cuda_notification_consume_pending (void);
+
 /* For debugging purposes */
 void cuda_notification_trace (char *fmt, ...);
 

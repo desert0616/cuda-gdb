@@ -863,7 +863,13 @@ print_frame (struct frame_info *frame, int print_level,
       struct cleanup *args_list_chain;
 
       args.frame = frame;
-      args.func = find_pc_function (get_frame_address_in_block (frame));
+      /* CUDA - inlining */
+      /* find_pc_function() is blind when it comes to inlined frames. Using
+         get_frame_function instead solves that problem. */
+      if (cuda_frame_p (get_next_frame (frame)))
+        args.func = get_frame_function (frame);
+      else
+        args.func = find_pc_function (get_frame_address_in_block (frame));
       args.stream = gdb_stdout;
       args_list_chain = make_cleanup_ui_out_list_begin_end (uiout, "args");
       catch_errors (print_args_stub, &args, "", RETURN_MASK_ERROR);

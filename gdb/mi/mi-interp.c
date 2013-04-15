@@ -36,6 +36,8 @@
 #include "gdbthread.h"
 #include "solist.h"
 
+#include "cuda-api.h"
+
 /* These are the interpreter setup, etc. functions for the MI interpreter */
 static void mi_execute_command_wrapper (char *cmd);
 static void mi_command_loop (int mi_version);
@@ -478,6 +480,14 @@ mi_on_resume (ptid_t ptid)
 
   /* Suppress output while calling an inferior function.  */
   if (tp->in_infcall)
+    return;
+
+  /* CUDA - Attach/Detach support
+     If cuda-gdb is attaching or detaching, the inferior might
+     have been resumed to collect more information, and it does
+     not mean that attach/detach has completed. So we need to
+     return early and not send the "running" message to the client. */
+  if (cuda_api_attach_or_detach_in_progress ())
     return;
 
   /* To cater for older frontends, emit ^running, but do it only once

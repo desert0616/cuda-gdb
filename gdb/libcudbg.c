@@ -167,6 +167,25 @@ cudbgInitialize(void)
 }
 
 static CUDBGResult
+cudbgInitializeAttachStub ()
+{
+    void *d;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+    CUDBGResult res;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    ipcreq.kind = CUDBGAPIREQ_initializeAttachStub;
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_REQUEST((void *)&d);
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    res = ipcres->result;
+
+    return res;
+}
+
+static CUDBGResult
 cudbgPostFinalize(void)
 {
     CUDBGResult res;
@@ -1776,6 +1795,29 @@ cudbgMemcheckReadErrorAddress(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t l
     return res;
 }
 
+static CUDBGResult
+cudbgGetGridStatus(uint32_t dev, uint32_t grid_id, CUDBGGridStatus *status)
+{
+    void *d;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+    CUDBGResult res;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    ipcreq.kind = CUDBGAPIREQ_getGridStatus;
+    ipcreq.apiData.request.dev = dev;
+    ipcreq.apiData.request.val = grid_id;
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_REQUEST((void *)&d);
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    res = ipcres->result;
+
+    *status = (CUDBGGridStatus)ipcres->apiData.result.val;
+
+    return res;
+}
+
 /*Stubs (Unused functions) Assert if they are called */
 
 static CUDBGResult
@@ -2032,6 +2074,8 @@ static const struct CUDBGAPI_st cudbgCurrentApi = {
     cudbgAcknowledgeSyncEvents,
     cudbgGetNextAsyncEvent,
     cudbgRequestCleanupOnDetach,
+    cudbgInitializeAttachStub,
+    cudbgGetGridStatus,
 };
 
 CUDBGResult

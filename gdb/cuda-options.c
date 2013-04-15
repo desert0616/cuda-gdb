@@ -392,7 +392,7 @@ cuda_set_break_on_launch (char *args, int from_tty, struct cmd_list_element *c)
 }
 
 static void
-cuda_options_initialize_break_on_launch(void)
+cuda_options_initialize_break_on_launch (void)
 {
   cuda_break_on_launch = cuda_break_on_launch_none;
 
@@ -407,6 +407,14 @@ cuda_options_initialize_break_on_launch(void)
                           "  all         : a breakpoint is set at the entrance of all kernels"),
                         cuda_set_break_on_launch, cuda_show_break_on_launch,
                         &setcudalist, &showcudalist);
+}
+
+void
+cuda_options_disable_break_on_launch (void)
+{
+  cuda_break_on_launch = cuda_break_on_launch_none;
+
+  cuda_set_break_on_launch (NULL, 0, NULL);
 }
 
 bool

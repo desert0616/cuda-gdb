@@ -26,7 +26,7 @@ uint32_t        kernel_get_dev_id         (kernel_t kernel);
 uint32_t        kernel_get_grid_id        (kernel_t kernel);
 const char*     kernel_get_name           (kernel_t kernel);
 uint64_t        kernel_get_virt_code_base (kernel_t kernel);
-context_t       kernel_get_contexti       (kernel_t kernel);
+context_t       kernel_get_context        (kernel_t kernel);
 module_t        kernel_get_module         (kernel_t kernel);
 CuDim3          kernel_get_grid_dim       (kernel_t kernel);
 CuDim3          kernel_get_block_dim      (kernel_t kernel);

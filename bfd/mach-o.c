@@ -2588,20 +2588,16 @@ bfd_mach_o_read_command (bfd *abfd, bfd_mach_o_load_command *command)
       if (bfd_mach_o_read_dyld_info (abfd, command) != 0)
 	return -1;
       break;
-    /* CUDA - missing Mach-o load commands */
-    case BFD_MACH_O_LC_VERSION_MIN_MACOSX:
-    case BFD_MACH_O_LC_VERSION_MIN_IPHONEOS:
-    case BFD_MACH_O_LC_FUNCTION_STARTS:
-    case BFD_MACH_O_LC_LOAD_UPWARD_DYLIB:
-    case BFD_MACH_O_LC_ROUTINES_64:
+    default:
+      /* CUDA - missing Mach-o load commands */
       /* Those commands can be safely ignored. They are included by the static
          linker, Starting with 10.7, the linker has some options to force not
          to use those load commands (-no_functions_starts and 
          -no_version_load_command). */
-      break;
-    default:
+#if 0
       fprintf (stderr, "unable to read unknown load command 0x%lx\n",
 	       (unsigned long) command->type);
+#endif
       break;
     }
 

@@ -551,6 +551,11 @@ struct breakpoint
     /* Ada task number for task-specific breakpoint, or 0 if don't care.  */
     int task;
 
+    /* CUDA - breakpoints */
+    /* Nonzero if the break command is set with an explicit device address */
+    /* Such breakpoint will be disabled on the next run */
+    char cuda_explicit_device_address;
+
     /* CUDA - autostep */
     /* The length of the autostep */
     unsigned int cuda_autostep_length;

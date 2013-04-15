@@ -29,13 +29,21 @@ typedef enum {
   CUDA_ATTACH_STATE_DETACH_COMPLETE
 } cuda_attach_state_t;
 
+typedef enum {
+  CUDA_API_STATE_UNINITIALIZED,
+  CUDA_API_STATE_INITIALIZED,
+} cuda_api_state_t;
+
 /* Initialization */
 int  cuda_api_get_api (void);
 int  cuda_api_initialize (void);
+void cuda_api_initialize_attach_stub (void);
 void cuda_api_finalize (void);
+cuda_api_state_t cuda_api_get_state (void);
 
 /* Attach support */
 void cuda_api_set_attach_state (cuda_attach_state_t state);
+bool cuda_api_attach_or_detach_in_progress (void);
 cuda_attach_state_t cuda_api_get_attach_state (void);
 void cuda_api_request_cleanup_on_detach (void);
 
@@ -87,6 +95,7 @@ void cuda_api_get_block_dim (uint32_t dev, uint32_t sm, uint32_t wp, CuDim3 *blo
 void cuda_api_get_tid (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *tid);
 void cuda_api_get_elf_image (uint32_t dev, uint32_t sm, uint32_t wp, bool relocated, void **elfImage, uint64_t *size);
 void cuda_api_get_blocking (uint32_t dev, uint32_t sm, uint32_t wp, bool *blocking);
+void cuda_api_get_grid_status (uint32_t dev, uint32_t grid_id, CUDBGGridStatus *status);
 
 /* Device Properties */
 void cuda_api_get_device_type (uint32_t dev, char *buf, uint32_t sz);

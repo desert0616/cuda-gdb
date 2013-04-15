@@ -1580,6 +1580,11 @@ finish_forward (struct symbol *function, struct frame_info *frame)
 					 get_stack_frame_id (frame),
                                          bp_finish);
 
+  /* Don't break on specific thread when device has focus as the
+     thread focus may be incorrect. */
+  if (cuda_focus_is_device() && breakpoint != 0)
+    breakpoint->thread = -1;
+
   old_chain = make_cleanup_delete_breakpoint (breakpoint);
 
   tp->proceed_to_finish = 1;    /* We want stop_registers, please...  */

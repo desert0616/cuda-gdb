@@ -250,6 +250,7 @@ cuda_elf_image_unload (elf_image_t elf_image)
   /* Make sure that all its users will be cleaned up. */
   clear_current_source_symtab_and_line ();
   clear_displays ();
+  cuda_reset_invalid_breakpoint_location_section (objfile);
   if (!cuda_options_debug_general () && objfile->name)
     if (unlink (objfile->name))
       cuda_trace ("unable to unlink file %s", objfile->name);

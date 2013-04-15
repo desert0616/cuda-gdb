@@ -89,6 +89,7 @@ typedef bool (*cuda_thread_func)(cuda_coords_t *, void *);
 /*------------------------------ Global Variables ------------------------------*/
 
 extern bool cuda_debugging_enabled;
+extern bool cuda_is_target_mourn_pending;
 struct gdbarch * cuda_get_gdbarch (void);
 bool cuda_is_cuda_gdbarch (struct gdbarch *);
 
@@ -185,6 +186,7 @@ void cuda_write_memory (CORE_ADDR address, const gdb_byte *buf, struct type *typ
 /*Breakpoints */
 void cuda_resolve_breakpoints (elf_image_t elf_image);
 void cuda_unresolve_breakpoints (uint64_t context);
+void cuda_reset_invalid_breakpoint_location_section (struct objfile *objfile);
 int cuda_breakpoint_address_match (struct gdbarch *gdbarch,
                                    struct address_space *aspace1, CORE_ADDR addr1,
                                    struct address_space *aspace2, CORE_ADDR addr2);
