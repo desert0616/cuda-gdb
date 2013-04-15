@@ -2179,6 +2179,8 @@ find_line_symtab (struct symtab *symtab, int line,
 	  continue;
 	if (symtab->fullname != NULL
 	    && symtab_to_fullname (s) != NULL
+            && IS_ABSOLUTE_PATH (symtab->fullname) /* CUDA - filenames */
+            && IS_ABSOLUTE_PATH (s->fullname) /* CUDA - filenames */
 	    && FILENAME_CMP (symtab->fullname, s->fullname) != 0)
 	  continue;	
 	l = LINETABLE (s);

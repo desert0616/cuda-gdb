@@ -8719,9 +8719,25 @@ dwarf_decode_lines (struct line_header *lh, char *comp_dir, bfd *abfd,
 	    continue;
 
 	  if (current_subfile->symtab == NULL)
+/* CUDA - filenames */
+#if 0 
 	    current_subfile->symtab = allocate_symtab (current_subfile->name,
 						       cu->objfile);
-	  fe->symtab = current_subfile->symtab;
+	    fe->symtab = current_subfile->symtab;
+#else
+        {
+          /* Generate filename, dirname, and fullname */
+          char *basename = xstrdup (lbasename (current_subfile->name));
+          char *dirname = ldirname (current_subfile->name);
+          char *fullname = xfullpath (current_subfile->name);
+
+          /* Create the symtab and set dirname and fullname */
+          current_subfile->symtab = allocate_symtab (basename, cu->objfile);
+          current_subfile->symtab->dirname = dirname;
+          current_subfile->symtab->fullname = fullname;
+          fe->symtab = current_subfile->symtab;
+        }
+#endif
 	}
     }
 }

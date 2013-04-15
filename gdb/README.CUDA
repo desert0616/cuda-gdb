@@ -165,3 +165,11 @@ CHANGES TO GDB SOURCE CODE REQUIRED FOR CUDA SUPPORT
   if the newly forked process has already exited.  More specifically, wait
   will not return in this situation, which causes a hang.  So, now the
   wait is predicated on a successful ptrace kill operation.
+
+/* CUDA - filenames */
+
+  Make sure to set up the basename, dirname, and fullname of symbol tables and
+  partial symbol tables. If the basename of those tables is set to a fullname,
+  breakpoint resolution may fail.
+
+  Also, the fullname should only be used when absolute.

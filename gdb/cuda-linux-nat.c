@@ -421,6 +421,8 @@ cuda_nat_resume (struct target_ops *ops, ptid_t ptid, int sstep, enum target_sig
 {
   uint32_t dev;
   cuda_coords_t c;
+  bool cuda_event_found = false;
+  CUDBGEvent event;
 
   cuda_trace ("cuda_resume: sstep=%d", sstep);
 
@@ -463,6 +465,19 @@ cuda_nat_resume (struct target_ops *ops, ptid_t ptid, int sstep, enum target_sig
      timeout events will be ignored until next time. */
   cuda_notification_mark_consumed ();
   cuda_sigtrap_restore_settings ();
+
+  /* A request for an ack by the application can be received after an
+     asynchronous device event is received by cuda-gdb. We need to check
+     if such an event is pending, otherwise the application might wait
+     forever for an ack from cuda-gdb */
+  cuda_api_get_next_event (&event);
+  cuda_event_found = event.kind != CUDBG_EVENT_INVALID;
+
+  if (cuda_event_found)
+    {
+      cuda_process_events (&event);
+      sendAck = true;
+    }
 
   /* Acknowledge the CUDA debugger API */
   if (sendAck)

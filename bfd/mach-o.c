@@ -2593,6 +2593,7 @@ bfd_mach_o_read_command (bfd *abfd, bfd_mach_o_load_command *command)
     case BFD_MACH_O_LC_VERSION_MIN_IPHONEOS:
     case BFD_MACH_O_LC_FUNCTION_STARTS:
     case BFD_MACH_O_LC_LOAD_UPWARD_DYLIB:
+    case BFD_MACH_O_LC_ROUTINES_64:
       /* Those commands can be safely ignored. They are included by the static
          linker, Starting with 10.7, the linker has some options to force not
          to use those load commands (-no_functions_starts and 

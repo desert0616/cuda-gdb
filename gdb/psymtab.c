@@ -1417,9 +1417,25 @@ allocate_psymtab (const char *filename, struct objfile *objfile)
 		     sizeof (struct partial_symtab));
 
   memset (psymtab, 0, sizeof (struct partial_symtab));
+/* CUDA - filenames */
+#if 0
   psymtab->filename = obsavestring (filename, strlen (filename),
 				    &objfile->objfile_obstack);
   psymtab->symtab = NULL;
+#else
+  {
+    /* Generate filename, dirname, and fullname */
+    char *basename = xstrdup (lbasename (filename));
+    char *dirname = ldirname (filename);
+    char *fullname = xfullpath (filename);
+
+    /* Set the psymtab filename, dirname, fullname */
+    psymtab->filename = basename;
+    psymtab->dirname = dirname;
+    psymtab->fullname = fullname;
+    psymtab->symtab = NULL;
+}
+#endif
 
   /* Prepend it to the psymtab list for the objfile it belongs to.
      Psymtabs are searched in most recent inserted -> least recent
