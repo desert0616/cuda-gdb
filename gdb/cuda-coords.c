@@ -327,7 +327,7 @@ cuda_coords_to_fancy_string (cuda_coords_t *c, char *string, uint32_t size)
   case CUDA_INVALID:  s += sprintf (s, "invalid"); break;               \
   case CUDA_WILDCARD: s += sprintf (s, "*");       break;               \
   case CUDA_CURRENT:  s += sprintf (s, "current"); break;               \
-  default:            s += sprintf (s, "%"PRIu64, (uint64_t) c->x);     \
+  default:            s += sprintf (s, "%"PRId64, (int64_t) c->x);     \
   }
 
 #define SPRINTF_SEPARATOR(s, first)                 \

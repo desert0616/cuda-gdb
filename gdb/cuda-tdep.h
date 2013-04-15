@@ -51,7 +51,8 @@ extern bool cuda_producer_is_open64;
 #define CUDA_ELFOSABIV_ABI           3  /* ELFOSABIV_RELOC + Calling Convention */
 #define CUDA_ELFOSABIV_SYSCALL       4  /* ELFOSABIV_ABI + Improved syscall relocation */
 #define CUDA_ELFOSABIV_SEPCOMP       5  /* ELFOSABIV_SYSCALL + new caller-callee save conventions */
-#define CUDA_ELFOSABIV_LATEST        CUDA_ELFOSABIV_SEPCOMP
+#define CUDA_ELFOSABIV_ABI3          6  /* ELFOSABIV_SEPCOMP + fixes */
+#define CUDA_ELFOSABIV_LATEST        CUDA_ELFOSABIV_ABI3
 #define CUDA_ELF_TEXT_PREFIX  ".text."  /* CUDA ELF text section format: ".text.KERNEL" */
 
 /*Return values that exceed 384-bits in size are returned in memory.

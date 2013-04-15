@@ -278,6 +278,36 @@ cuda_options_debug_api ()
 }
 
 /*
+ * set debug cuda extra convenience variables
+ */
+static int cuda_debug_convenience_vars;
+
+static void
+cuda_show_debug_convenience_vars (struct ui_file *file, int from_tty,
+                               struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("Use of extra convenience variables is %s.\n"), value);
+}
+
+static void
+cuda_options_initialize_debug_convenience_vars ()
+{
+  cuda_debug_convenience_vars = false;
+
+  add_setshow_zinteger_cmd ("convenience_vars", class_maintenance, &cuda_debug_convenience_vars,
+                            _("Set use of extra convenience variables used for debugging."),
+                            _("Show use of extra convenience variables used for debugging."),
+                            _("When non-zero, extra convenience variables are available for debugging."),
+                            NULL, cuda_show_debug_convenience_vars,
+                            &setdebugcudalist, &showdebugcudalist);
+}
+
+bool
+cuda_options_debug_convenience_vars ()
+{
+  return cuda_debug_convenience_vars;
+}
+/*
  * set cuda memcheck
  */
 int cuda_memcheck_auto;
@@ -762,6 +792,7 @@ cuda_options_initialize ()
   cuda_options_initialize_debug_siginfo ();
   cuda_options_initialize_debug_textures ();
   cuda_options_initialize_debug_api ();
+  cuda_options_initialize_debug_convenience_vars ();
   cuda_options_initialize_memcheck ();
   cuda_options_initialize_coalescing ();
   cuda_options_initialize_break_on_launch ();

@@ -261,7 +261,7 @@ kernel_print (kernel_t kernel)
   fprintf (stderr, "    Kernel %"PRIu64":\n", kernel->id);
   fprintf (stderr, "        name        : %s\n", kernel->name);
   fprintf (stderr, "        device id   : %u\n", kernel->dev_id);
-  fprintf (stderr, "        grid id     : %u\n", kernel->grid_id);
+  fprintf (stderr, "        grid id     : %d\n", kernel->grid_id);
   fprintf (stderr, "        module id   : 0x%"PRIx64"\n", module_get_id (kernel->module));
   fprintf (stderr, "        entry point : 0x%"PRIx64"\n", kernel->virt_code_base);
   fprintf (stderr, "        dimensions  : %s\n", kernel->dimensions);

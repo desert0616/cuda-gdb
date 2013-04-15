@@ -666,6 +666,9 @@ cuda_update_convenience_variables (void)
   ptxStorageKind memcheck_error_address_segment = ptxUNSPECIFIEDStorage;
   struct value *kernel_array, *blocks_array;
 
+  if (!cuda_options_debug_convenience_vars ())
+    return;
+
   num_total_kernels   = cuda_system_get_num_kernels ();
   num_present_kernels = cuda_convenience_get_present_blocks_kernels (&kernel_array, &blocks_array);
 
@@ -2740,7 +2743,7 @@ cuda_gdb_session_create (void)
             "%s/session%d", cuda_gdb_tmpdir_getdir (),
             cuda_gdb_session_id);
 
-  cuda_trace ("new session %d created", cuda_gdb_session_id);
+  cuda_trace ("creating new session %d", cuda_gdb_session_id);
 
   ret = cuda_gdb_dir_create (cuda_gdb_session_dir, S_IRWXU | S_IRWXG,
                              override_umask, &dir_exists);
@@ -2748,6 +2751,8 @@ cuda_gdb_session_create (void)
   if (!ret && dir_exists)
     error (_("A stale CUDA session directory was found. "
              "Try deleting %s and retrying."), cuda_gdb_session_dir);
+  else if (ret)
+    error (_("Failed to create session directory: %s (ret=%d)."), cuda_gdb_session_dir, ret);
 
   return ret;
 }

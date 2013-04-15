@@ -3981,6 +3981,13 @@ read_func_scope (struct die_info *die, struct dwarf2_cu *cu)
       return;
     }
 
+  /* CUDA - intercept functions with 0x0 low_pc and high_pc */
+  /* With CNP and SM35, weak definitions of functions with no strong
+     definition lead to DWARF nodes with zero addresses that
+     should just be ignored. */
+  if (lowpc == 0 && highpc == 0)
+    return;
+
   lowpc += baseaddr;
   highpc += baseaddr;
 

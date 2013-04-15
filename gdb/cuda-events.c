@@ -224,9 +224,6 @@ cuda_event_kernel_ready (uint32_t dev_id, uint64_t context_id, uint64_t module_i
        cuda_options_break_on_launch_system ()))
     cuda_create_auto_breakpoint (virt_code_base, context_id);
 
-  remove_breakpoints ();
-  insert_breakpoints ();
-
 #if __linux__
   if (lp)
     inferior_ptid = previous_ptid;
@@ -273,6 +270,15 @@ cuda_event_timeout (void)
   cuda_trace ("CUDBG_EVENT_TIMEOUT\n");
 }
 
+static void
+cuda_event_post_process (void)
+{
+  /* Launch (kernel ready) events may require additional
+     breakpoint handling (via remove/insert). */
+  remove_breakpoints ();
+  insert_breakpoints ();
+}
+
 void
 cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind)
 {
@@ -291,6 +297,9 @@ cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind)
 
   gdb_assert (event);
 
+  /* Step 1:  Consume all events (synchronous and asynchronous).
+     We must consume every event prior to any generic operations
+     that will force a state collection across the device. */
   for (; event->kind != CUDBG_EVENT_INVALID;
        (kind == CUDA_EVENT_SYNC) ? cuda_api_get_next_sync_event (event) :
                                    cuda_api_get_next_async_event (event))
@@ -388,5 +397,8 @@ cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind)
           gdb_assert (0);
         }
     }
+
+  /* Step 2:  Post-process events after they've all been consumed. */
+  cuda_event_post_process ();
 }
 

@@ -1144,7 +1144,7 @@ cuda_api_get_grid_status (uint32_t dev, uint32_t grid_id, CUDBGGridStatus *statu
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to get grid status "
-             "(dev=%u, grid_id=%u, error=%u).\n"),
+             "(dev=%u, grid_id=%d, error=%u).\n"),
            dev, grid_id, res);
 }
 

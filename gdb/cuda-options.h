@@ -28,6 +28,7 @@ bool cuda_options_debug_textures (void);
 bool cuda_options_debug_libcudbg (void);
 bool cuda_options_debug_siginfo (void);
 bool cuda_options_debug_api (void);
+bool cuda_options_debug_convenience_vars (void);
 bool cuda_options_memcheck (void);
 bool cuda_options_coalescing (void);
 bool cuda_options_break_on_launch_application(void);
