@@ -19,6 +19,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "top.h"
 #include "target.h"
@@ -937,9 +955,9 @@ print_gdb_help (struct ui_file *stream)
   get_init_files (&system_gdbinit, &home_gdbinit, &local_gdbinit);
 
   fputs_unfiltered (_("\
-This is the GNU debugger.  Usage:\n\n\
-    gdb [options] [executable-file [core-file or process-id]]\n\
-    gdb [options] --args executable-file [inferior-arguments ...]\n\n\
+This is the GNU debugger with CUDA suport.  Usage:\n\n\
+    cuda-gdb [options] [executable-file [core-file or process-id]]\n\
+    cuda-gdb [options] --args executable-file [inferior-arguments ...]\n\n\
 Options:\n\n\
 "), stream);
   fputs_unfiltered (_("\
@@ -1015,6 +1033,9 @@ At startup, GDB reads the following init files and executes their commands:\n\
   fputs_unfiltered (_("\n\
 For more information, type \"help\" from within GDB, or consult the\n\
 GDB manual (available as on-line info or a printed manual).\n\
+For more information about CUDA-related features, type \"help cuda\"\n\
+or \"help info cuda\" from within GDB, or consult the CUDA-GDB manual.\n\
+Report CUDA-related bugs to \"cuda-debugger-bugs@nvidia.com\".\n\
 "), stream);
   if (REPORT_BUGS_TO[0] && stream == gdb_stdout)
     fprintf_unfiltered (stream, _("\

@@ -19,6 +19,24 @@
    Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston,
    MA 02110-1301, USA.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifndef _BFD_MACH_O_H_
 #define _BFD_MACH_O_H_
 
@@ -133,7 +151,13 @@ typedef enum bfd_mach_o_load_command_type
   BFD_MACH_O_LC_REEXPORT_DYLIB = 0x1f,  /* Load and re-export lib.  */
   BFD_MACH_O_LC_LAZY_LOAD_DYLIB = 0x20, /* Delay load of lib until use.  */
   BFD_MACH_O_LC_ENCRYPTION_INFO = 0x21, /* Encrypted segment info.  */
-  BFD_MACH_O_LC_DYLD_INFO = 0x22	/* Compressed dyld information.  */
+  BFD_MACH_O_LC_DYLD_INFO = 0x22,	/* Compressed dyld information.  */
+  /* CUDA - missing Mach-o load commands */
+  BFD_MACH_O_LC_LOAD_UPWARD_DYLIB = 0x23,    /* load upward dylib */
+  BFD_MACH_O_LC_VERSION_MIN_MACOSX = 0x24,   /* build for MacOSX min OS version */
+  BFD_MACH_O_LC_VERSION_MIN_IPHONEOS = 0x25, /* build for iPhoneOS min OS version */
+  BFD_MACH_O_LC_FUNCTION_STARTS = 0x26,      /* compressed table of function start addresses */
+  BFD_MACH_O_LC_DYLD_ENVIRONMENT = 0x27,     /* string for dyld to treat */
 }
 bfd_mach_o_load_command_type;
 
@@ -912,6 +936,8 @@ bfd_boolean bfd_mach_o_build_commands (bfd *);
 bfd_boolean bfd_mach_o_set_section_contents (bfd *, asection *, const void *,
                                              file_ptr, bfd_size_type);
 unsigned int bfd_mach_o_version (bfd *);
+/* CUDA - word size */
+unsigned long bfd_mach_o_cputype (bfd *);
 
 extern const bfd_target mach_o_fat_vec;
 

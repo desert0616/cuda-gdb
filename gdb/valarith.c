@@ -19,6 +19,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "value.h"
 #include "symtab.h"
@@ -32,6 +50,8 @@
 #include <math.h>
 #include "infcall.h"
 #include "exceptions.h"
+#include "cuda-tdep.h"
+#include "cuda-textures.h"
 
 /* Define whether or not the C operator '/' truncates towards zero for
    differently signed operands (truncation direction is undefined in C). */
@@ -94,6 +114,10 @@ value_ptradd (struct value *arg1, LONGEST arg2)
   arg1 = coerce_array (arg1);
   valptrtype = check_typedef (value_type (arg1));
   sz = find_size_for_pointer_math (valptrtype);
+
+  /* CUDA - textures */
+  if (TYPE_TARGET_TYPE (valptrtype) && cuda_texture_is_tex_ptr (valptrtype))
+    return cuda_texture_value_ptradd (valptrtype, arg1, arg2);
 
   return value_from_pointer (valptrtype,
 			     value_as_address (arg1) + sz * arg2);

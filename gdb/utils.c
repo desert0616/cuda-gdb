@@ -19,6 +19,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "gdb_assert.h"
 #include <ctype.h>
@@ -723,12 +741,29 @@ discard_all_inferior_continuations (struct inferior *inf)
   inf->continuations = NULL;
 }
 
+/* CUDA - focus */
+struct thread_cleanup
+{
+  ptid_t ptid;
+  cuda_coords_t cuda_coords;
+};
+
 static void
 restore_thread_cleanup (void *arg)
 {
-  ptid_t *ptid_p = arg;
+  struct thread_cleanup *old = arg;
 
-  switch_to_thread (*ptid_p);
+  /* CUDA - focus */
+  /* If the focus was previously set on a CUDA device, restore it there.
+     Otherwise, restore it on the host thread. */
+  if (old->cuda_coords.valid)
+    {
+      cuda_coords_set_current (&old->cuda_coords);
+      switch_to_cuda_thread (NULL);
+      return;
+    }
+
+  switch_to_thread (old->ptid);
 }
 
 /* Walk down the continuation list of PTID, and execute all the
@@ -744,13 +779,14 @@ do_all_continuations_ptid (ptid_t ptid,
 			   struct continuation **continuations_p)
 {
   struct cleanup *old_chain;
-  ptid_t current_thread;
   struct cleanup *as_cleanup;
+  struct thread_cleanup save;
 
   if (*continuations_p == NULL)
     return;
 
-  current_thread = inferior_ptid;
+  save.ptid = inferior_ptid;
+  cuda_coords_get_current (&save.cuda_coords);
 
   /* Restore selected thread on exit.  Don't try to restore the frame
      as well, because:
@@ -761,7 +797,7 @@ do_all_continuations_ptid (ptid_t ptid,
       change the frame layout (frame ids change), which would trigger
       a warning if we used make_cleanup_restore_current_thread.  */
 
-  old_chain = make_cleanup (restore_thread_cleanup, &current_thread);
+  old_chain = make_cleanup (restore_thread_cleanup, &save);
 
   /* Let the continuation see this thread as selected.  */
   switch_to_thread (ptid);

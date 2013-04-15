@@ -26,6 +26,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "bfd.h"
 #include "symtab.h"
@@ -65,6 +83,9 @@
 #define MAP_FAILED ((void *) -1)
 #endif
 #endif
+
+#include "cuda-tdep.h"
+#include "cuda-textures.h"
 
 #if 0
 /* .debug_info header for a compilation unit
@@ -1131,6 +1152,14 @@ static void dwarf2_mark (struct dwarf2_cu *);
 static void dwarf2_clear_marks (struct dwarf2_per_cu_data *);
 
 static struct type *get_die_type (struct die_info *die, struct dwarf2_cu *cu);
+
+/* CUDA - Memory Segments */
+static void make_segmented_type (struct objfile *objfile,
+                                 struct type **sym_type,
+                                 int flags);
+
+static void make_segmented_type_aux (struct type **sym_type,
+                                     int flags, htab_t marked_types);
 
 /* Try to locate the sections we need for DWARF 2 debugging
    information and return true if we have enough to do something.  */
@@ -5529,6 +5558,82 @@ process_enumeration_scope (struct die_info *die, struct dwarf2_cu *cu)
   new_symbol (die, this_type, cu);
 }
 
+/* CUDA - Memory Segments */
+static void
+make_segmented_type (struct objfile *objfile, struct type **sym_type, int flags)
+{
+  htab_t copied_types;
+  htab_t marked_types;
+
+  /* Sanity check */
+  if (!objfile || !sym_type || !*sym_type)
+    return;
+
+  /* Create required hash tables */
+  copied_types = create_copied_types_hash (objfile);
+  marked_types = htab_create_alloc_ex (1, htab_hash_pointer, htab_eq_pointer,
+                                       NULL, &objfile->objfile_obstack,
+                                       hashtab_obstack_allocate,
+                                       dummy_obstack_deallocate);
+
+  /* First, we need to make a deep copy of the type, so it is not overwritten
+     with subsequent passes (and so this pass doesn't overwrite any previous
+     passes. */
+  *sym_type = copy_type_recursive (objfile, *sym_type, copied_types);
+
+  /* Then we mark the segment for each field of the type, marking the types that
+     have already been visited using marked_types. */
+  make_segmented_type_aux (sym_type, flags, marked_types);
+
+  /* Cleanup */
+  htab_delete (copied_types);
+  htab_delete (marked_types);
+}
+
+/* CUDA - Memory Segments */
+static void
+make_segmented_type_aux (struct type **sym_type, int flags, htab_t marked_types)
+{
+  unsigned int i;
+  int ptr_flags = 0;
+  int is_ptr = 0;
+  void **slot;
+
+  /* Bail out if sym_type has already been handled. Otherwise mark it as handled
+     before processing its FIELDS. */
+  slot = htab_find_slot (marked_types, sym_type, INSERT);
+  if (*slot != NULL)
+    return;
+  else
+    *slot = sym_type;
+
+  /* If this is a pointer type, save off the current flags. */
+  if (TYPE_CODE (*sym_type) == TYPE_CODE_PTR)
+    {
+      is_ptr = 1;
+      ptr_flags = TYPE_INSTANCE_FLAGS (*sym_type);
+    }
+
+  /* Set the address class for this symbol's type. */
+  *sym_type = make_type_with_address_space (*sym_type, flags);
+
+  /* CUDA Fix. If it's an enum type, we're done processing it. The 'type' of
+     its TYPE_FIELDS is undetermined, therefore there is no need to parse the
+     TYPE_FIELDS.  Enum types have no TARGET_TYPEs either. */
+  if (TYPE_CODE (*sym_type) == TYPE_CODE_ENUM)
+    return;
+
+  /* We need to follow this type's fields, if there are any */
+  for (i = 0; i < TYPE_NFIELDS (*sym_type); i++)
+    make_segmented_type_aux (&TYPE_FIELDS (*sym_type)[i].type,
+                             flags, marked_types);
+
+  /* We need to follow target types */
+  if (TYPE_TARGET_TYPE (*sym_type))
+    make_segmented_type_aux (&TYPE_TARGET_TYPE (*sym_type),
+                             is_ptr ? ptr_flags : flags, marked_types);
+}
+
 /* Extract all information from a DW_TAG_array_type DIE and put it in
    the DIE's type field.  For now, this only handles one dimensional
    arrays.  */
@@ -7922,6 +8027,15 @@ dwarf2_attr (struct die_info *die, unsigned int name, struct dwarf2_cu *cu)
 
   for (i = 0; i < die->num_attrs; ++i)
     {
+
+      /* CUDA - DW_AT_abstract_origin */
+      /* The Open64 compiler may incorrectly generate zero
+         DW_AT_abstract_origin attribute, Simply ignore the whole attribute
+         when it happens. */
+      if (die->attrs[i].name == DW_AT_abstract_origin &&
+          dwarf2_get_ref_die_offset (&die->attrs[i]) == 0)
+        continue;
+
       if (die->attrs[i].name == name)
 	return &die->attrs[i];
       if (die->attrs[i].name == DW_AT_specification
@@ -8718,6 +8832,55 @@ var_decode_location (struct attribute *attr, struct symbol *sym,
   SYMBOL_CLASS (sym) = LOC_COMPUTED;
 }
 
+/* CUDA - Memory Segments */
+/* Track the address class for all variables (not just pointers).  This will
+   be used to indicate which memory segment is associated with a given symbol. */
+static void
+cuda_dwarf2_add_address_class (struct symbol *sym, struct attribute *attr,
+                               struct dwarf2_cu *cu)
+{
+  int addr_class = DW_ADDR_none;
+  int flags = 0;
+
+  if (!attr)
+    return;
+
+  addr_class = DW_UNSND (attr);
+  if (!addr_class)
+    return;
+
+  flags = cuda_address_class_type_flags (0 /*bogus*/, addr_class);
+  make_segmented_type (cu->objfile, &SYMBOL_TYPE (sym), flags);
+}
+
+/* CUDA - Runtime Built-in Variables */
+static void
+cuda_decode_builtin_variable (struct symbol *sym)
+{
+  CORE_ADDR offset;
+
+  if (!strcmp (sym->ginfo.name, "threadIdx"))
+    offset = CUDBG_THREADIDX_OFFSET;
+  else if (!strcmp (sym->ginfo.name, "blockIdx"))
+    offset = CUDBG_BLOCKIDX_OFFSET;
+  else if (!strcmp (sym->ginfo.name, "blockDim"))
+    offset = CUDBG_BLOCKDIM_OFFSET;
+  else if (!strcmp (sym->ginfo.name, "gridDim"))
+    offset = CUDBG_GRIDDIM_OFFSET;
+  /* deprecated: use $cuda_num_lanes instead */
+  else if (!strcmp (sym->ginfo.name, "warpSize"))
+    offset = CUDBG_WARPSIZE_OFFSET;
+  else
+    return;
+
+  /* Set the unique address */
+  sym->ginfo.value.address = offset;
+
+  /* Indicate this is a static in the variable domain */
+  sym->domain = VAR_DOMAIN;
+  sym->aclass = LOC_STATIC;
+}
+
 /* Given a pointer to a DWARF information entry, figure out if we need
    to make a symbol table entry for it, and if so, create a new entry
    and return a pointer to it.
@@ -8843,6 +9006,11 @@ new_symbol (struct die_info *die, struct type *type, struct dwarf2_cu *cu)
 	    SYMBOL_TYPE (sym)
 	      = objfile_type (objfile)->nodebug_data_symbol;
 
+          /* CUDA - Memory Segments */
+          attr = dwarf2_attr (die, DW_AT_address_class, cu);
+          if (attr)
+            cuda_dwarf2_add_address_class (sym, attr, cu);
+
 	  attr = dwarf2_attr (die, DW_AT_const_value, cu);
 	  /* In the case of DW_TAG_member, we should only be called for
 	     static const members.  */
@@ -8871,6 +9039,9 @@ new_symbol (struct die_info *die, struct type *type, struct dwarf2_cu *cu)
 	      if (attr2 && (DW_UNSND (attr2) != 0))
 		{
 		  struct pending **list_to_add;
+
+                  /* CUDA - Built-in Variables */
+                  cuda_decode_builtin_variable (sym);
 
 		  /* Workaround gfortran PR debug/40040 - it uses
 		     DW_AT_location for variables in -fPIC libraries which may
@@ -8924,6 +9095,10 @@ new_symbol (struct die_info *die, struct type *type, struct dwarf2_cu *cu)
 		  add_symbol_to_list (sym, cu->list_in_scope);
 		}
 	    }
+
+          /* CUDA - textures */
+          cuda_texture_create_kernel_mapping (sym, objfile);
+
 	  break;
 	case DW_TAG_formal_parameter:
 	  /* If we are inside a function, mark this as an argument.  If
@@ -8952,6 +9127,11 @@ new_symbol (struct die_info *die, struct type *type, struct dwarf2_cu *cu)
 	      ref_type = lookup_reference_type (SYMBOL_TYPE (sym));
 	      SYMBOL_TYPE (sym) = ref_type;
 	    }
+
+          /* CUDA - Memory Segments */
+          attr = dwarf2_attr (die, DW_AT_address_class, cu);
+          if (attr)
+            cuda_dwarf2_add_address_class (sym, attr, cu);
 
 	  add_symbol_to_list (sym, cu->list_in_scope);
 	  break;
@@ -11169,7 +11349,8 @@ decode_locdesc (struct dwarf_block *blk, struct dwarf2_cu *cu)
   gdb_byte *data = blk->data;
   CORE_ADDR stack[64];
   int stacki;
-  unsigned int bytes_read, unsnd;
+  unsigned int bytes_read;
+  unsigned long unsnd;
   gdb_byte op;
 
   i = 0;
@@ -12029,6 +12210,12 @@ dwarf2_symbol_mark_computed (struct attribute *attr, struct symbol *sym,
 	     need to change.  */
 	  baton->size = DW_BLOCK (attr)->size;
 	  baton->data = DW_BLOCK (attr)->data;
+
+          /* CUDA - DW_AT_frame_base is not set. Emulate it */
+          if (baton->size == 0)
+            /* Allocate space now to "build" the location description */
+            baton->data = obstack_alloc (&cu->objfile->objfile_obstack,
+			    1 + sizeof (CORE_ADDR));
 	}
       else
 	{
@@ -12080,6 +12267,27 @@ dwarf2_per_cu_addr_size (struct dwarf2_per_cu_data *per_cu)
       read_comp_unit_head (&cu_header, info_ptr, objfile->obfd);
       return cu_header.addr_size;
     }
+}
+
+/* CUDA - addr_size */
+/* Return the address size of the first compilation unit of the objfile. */
+int
+cuda_dwarf2_addr_size (struct objfile *objfile)
+{
+  int offset = 0; /* the offset of the first CU */
+  struct dwarf2_per_objfile *per_objfile = NULL;
+  gdb_byte *info_ptr = NULL;
+  struct comp_unit_head cu_header;
+
+  gdb_assert (objfile->cuda_objfile);
+
+  per_objfile = objfile_data (objfile, dwarf2_objfile_data_key);
+  info_ptr = per_objfile->info.buffer + offset;
+
+  memset (&cu_header, 0, sizeof cu_header);
+  read_comp_unit_head (&cu_header, info_ptr, objfile->obfd);
+
+  return cu_header.addr_size;
 }
 
 /* Return the offset size given in the compilation unit header for CU.  */

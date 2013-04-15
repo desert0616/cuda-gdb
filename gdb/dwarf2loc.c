@@ -20,6 +20,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "ui-out.h"
 #include "value.h"
@@ -134,16 +152,26 @@ struct dwarf_expr_baton
 /* Using the frame specified in BATON, return the value of register
    REGNUM, treated as a pointer.  */
 static CORE_ADDR
-dwarf_expr_read_reg (void *baton, int dwarf_regnum)
+dwarf_expr_read_reg (void *baton, reg_t dwarf_regnum)
 {
   struct dwarf_expr_baton *debaton = (struct dwarf_expr_baton *) baton;
   struct gdbarch *gdbarch = get_frame_arch (debaton->frame);
   CORE_ADDR result;
   int regnum;
+  struct type *data_ptr_type;
 
   regnum = gdbarch_dwarf2_reg_to_regnum (gdbarch, dwarf_regnum);
-  result = address_from_register (builtin_type (gdbarch)->builtin_data_ptr,
-				  regnum, debaton->frame);
+  data_ptr_type = builtin_type (gdbarch)->builtin_data_ptr;
+
+  /* CUDA - Read correct pointer size from header */
+  /* When debugging 32-bit apps on 64-bit cuda-gdb, the pointer size
+   * is not set correctly. Here we need to reset the size of the builtin
+   * type to make sure cuda-gdb reads the correct size.
+   */
+  if (cuda_is_cuda_gdbarch (gdbarch))
+    data_ptr_type->length = dwarf2_per_cu_addr_size (debaton->per_cu);
+
+  result = address_from_register (data_ptr_type, regnum, debaton->frame);
   return result;
 }
 
@@ -180,6 +208,16 @@ dwarf_expr_frame_base (void *baton, const gdb_byte **start, size_t * length)
   dwarf_expr_frame_base_1 (framefunc,
 			   get_frame_address_in_block (debaton->frame),
 			   start, length);
+
+  /* CUDA - DW_AT_frame_base is not set. Emulate it. */
+  if (*start != NULL && *length == 0)
+    {
+      gdb_byte *data = (gdb_byte*)*start;
+      *length = 1 + dwarf2_per_cu_addr_size (debaton->per_cu);
+      memset (data, 0, *length);
+      data[0] = DW_OP_addr;
+      frame_unwind_register (debaton->frame, 1, data + 1);
+    }
 }
 
 static void
@@ -936,7 +974,11 @@ dwarf2_evaluate_loc_desc (struct type *type, struct frame_info *frame,
 	  {
 	    struct gdbarch *arch = get_frame_arch (frame);
 	    ULONGEST dwarf_regnum = dwarf_expr_fetch (ctx, 0);
-	    int gdb_regnum = gdbarch_dwarf2_reg_to_regnum (arch, dwarf_regnum);
+	    int gdb_regnum;
+
+        cuda_regnum_pc_pre_hack (frame);
+        gdb_regnum = gdbarch_dwarf2_reg_to_regnum (arch, dwarf_regnum);
+        cuda_regnum_pc_post_hack ();
 
 	    if (gdb_regnum != -1)
 	      retval = value_from_register (type, gdb_regnum, frame);
@@ -1014,7 +1056,7 @@ struct needs_frame_baton
 
 /* Reads from registers do require a frame.  */
 static CORE_ADDR
-needs_frame_read_reg (void *baton, int regnum)
+needs_frame_read_reg (void *baton, reg_t regnum)
 {
   struct needs_frame_baton *nf_baton = baton;
 

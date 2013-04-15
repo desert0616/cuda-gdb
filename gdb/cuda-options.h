@@ -1,0 +1,42 @@
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
+ * 
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
+#ifndef _CUDA_OPTIONS_H
+#define _CUDA_OPTIONS_H 1
+
+#include "cudadebugger.h"
+
+void cuda_options_initialize (void);
+
+int  cuda_options_debug_general (void);
+bool cuda_options_debug_notifications (void);
+bool cuda_options_debug_textures (void);
+bool cuda_options_debug_libcudbg (void);
+bool cuda_options_debug_siginfo (void);
+bool cuda_options_memcheck (void);
+bool cuda_options_coalescing (void);
+bool cuda_options_break_on_launch_application(void);
+bool cuda_options_break_on_launch_system (void);
+bool cuda_options_hide_internal_frames (void);
+bool cuda_options_show_kernel_events (void);
+bool cuda_options_show_context_events (void);
+bool cuda_options_launch_blocking (void);
+bool cuda_options_thread_selection_logical (void);
+bool cuda_options_thread_selection_physical (void);
+
+#endif
+

@@ -280,7 +280,7 @@ i386_pseudo_register_name (struct gdbarch *gdbarch, int regnum)
    number used by GDB.  */
 
 static int
-i386_dbx_reg_to_regnum (struct gdbarch *gdbarch, int reg)
+i386_dbx_reg_to_regnum (struct gdbarch *gdbarch, reg_t reg)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
 
@@ -327,7 +327,7 @@ i386_dbx_reg_to_regnum (struct gdbarch *gdbarch, int reg)
    used by GDB.  */
 
 static int
-i386_svr4_reg_to_regnum (struct gdbarch *gdbarch, int reg)
+i386_svr4_reg_to_regnum (struct gdbarch *gdbarch, reg_t reg)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
 

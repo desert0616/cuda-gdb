@@ -47,6 +47,11 @@
 /* Read register values from the inferior process.
    If REGNO is -1, do this for all registers.
    Otherwise, REGNO specifies which register (so we can save time).  */
+/* CUDA - remove verbose warnings */
+/* The first time the application stops thread_get_state will return
+   KERN_INVALID_ARGUMENT. To avoid displaing a worrying warning message about a
+   harmless issue, filter out the warning messages for that error type. The
+   arguments should always be valid, except at the first stop. */
 static void
 i386_darwin_fetch_inferior_registers (struct target_ops *ops,
 				      struct regcache *regcache, int regno)
@@ -67,9 +72,9 @@ i386_darwin_fetch_inferior_registers (struct target_ops *ops,
 	  ret = thread_get_state
             (current_thread, x86_THREAD_STATE, (thread_state_t) & gp_regs,
              &gp_count);
-	  if (ret != KERN_SUCCESS)
+	  if (ret != KERN_SUCCESS && ret != KERN_INVALID_ARGUMENT)
 	    {
-	      printf_unfiltered (_("Error calling thread_get_state for GP registers for thread 0x%ulx"), current_thread);
+	      printf_unfiltered (_("Error calling thread_get_state for GP registers for thread 0x%u\n"), current_thread);
 	      MACH_CHECK_ERROR (ret);
 	    }
 	  amd64_supply_native_gregset (regcache, &gp_regs.uts, -1);
@@ -85,9 +90,9 @@ i386_darwin_fetch_inferior_registers (struct target_ops *ops,
 	  ret = thread_get_state
             (current_thread, x86_FLOAT_STATE, (thread_state_t) & fp_regs,
              &fp_count);
-	  if (ret != KERN_SUCCESS)
+	  if (ret != KERN_SUCCESS && ret != KERN_INVALID_ARGUMENT)
 	    {
-	      printf_unfiltered (_("Error calling thread_get_state for float registers for thread 0x%ulx"), current_thread);
+	      printf_unfiltered (_("Error calling thread_get_state for float registers for thread 0x%u\n"), current_thread);
 	      MACH_CHECK_ERROR (ret);
 	    }
           amd64_supply_fxsave (regcache, -1, &fp_regs.ufs.fs64.__fpu_fcw);
@@ -107,9 +112,9 @@ i386_darwin_fetch_inferior_registers (struct target_ops *ops,
 	  ret = thread_get_state
             (current_thread, i386_THREAD_STATE, (thread_state_t) & gp_regs,
              &gp_count);
-	  if (ret != KERN_SUCCESS)
+	  if (ret != KERN_SUCCESS && ret != KERN_INVALID_ARGUMENT)
 	    {
-	      printf_unfiltered (_("Error calling thread_get_state for GP registers for thread 0x%ulx"), current_thread);
+	      printf_unfiltered (_("Error calling thread_get_state for GP registers for thread 0x%u\n"), current_thread);
 	      MACH_CHECK_ERROR (ret);
 	    }
 	  for (i = 0; i < I386_NUM_GREGS; i++)
@@ -130,9 +135,9 @@ i386_darwin_fetch_inferior_registers (struct target_ops *ops,
 	  ret = thread_get_state
             (current_thread, i386_FLOAT_STATE, (thread_state_t) & fp_regs,
              &fp_count);
-	  if (ret != KERN_SUCCESS)
+	  if (ret != KERN_SUCCESS && ret != KERN_INVALID_ARGUMENT)
 	    {
-	      printf_unfiltered (_("Error calling thread_get_state for float registers for thread 0x%ulx"), current_thread);
+	      printf_unfiltered (_("Error calling thread_get_state for float registers for thread 0x%u\n"), current_thread);
 	      MACH_CHECK_ERROR (ret);
 	    }
           i387_supply_fxsave (regcache, -1, &fp_regs.__fpu_fcw);

@@ -19,6 +19,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "gdbcmd.h"
 #include "call-cmds.h"
@@ -47,6 +65,7 @@
 #include "main.h"
 #include "event-loop.h"
 #include "gdbthread.h"
+#include "cuda-gdb.h"
 
 /* readline include files */
 #include "readline/readline.h"
@@ -1029,6 +1048,9 @@ command_line_input (char *prompt_arg, int repeat, char *annotation_suffix)
 void
 print_gdb_version (struct ui_file *stream)
 {
+  /* CUDA - version information */
+  cuda_print_message_nvidia_version (stream);
+
   /* From GNU coding standards, first line is meant to be easy for a
      program to parse, and is just canonical program name and version
      number, which starts after last space. */

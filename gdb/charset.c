@@ -572,6 +572,10 @@ struct wchar_iterator
   /* The output buffer and its size.  */
   gdb_wchar_t *out;
   size_t out_size;
+
+  /* CUDA - iconv padding */
+  /* The amount of padding to work around the iconv bug */
+  size_t cuda_iconv_padding_bytes;
 };
 
 /* Create a new iterator.  */
@@ -589,7 +593,10 @@ make_wchar_iterator (const gdb_byte *input, size_t bytes, const char *charset,
   result = XNEW (struct wchar_iterator);
   result->desc = desc;
   result->input = (char *) input;
-  result->bytes = bytes;
+  /* CUDA - iconv padding */
+  /* Use 4 bytes of padding */
+  result->cuda_iconv_padding_bytes = 4;
+  result->bytes = bytes + result->cuda_iconv_padding_bytes;
   result->width = width;
 
   result->out = XNEW (gdb_wchar_t);
@@ -629,7 +636,10 @@ wchar_iterate (struct wchar_iterator *iter,
      invalid input sequence -- but we want to reliably report this to
      our caller so it can emit an escape sequence.  */
   out_request = 1;
-  while (iter->bytes > 0)
+
+  /* CUDA - iconv padding */
+  /* Do not try to explictly decode the iconv padding bytes */
+  while (iter->bytes > iter->cuda_iconv_padding_bytes)
     {
       char *outptr = (char *) &iter->out[0];
       char *orig_inptr = iter->input;

@@ -17,6 +17,24 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+#
+# NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+# Modified from the original GDB file referenced above by the CUDA-GDB 
+# team at NVIDIA <cudatools@nvidia.com>.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 3 as
+# published by the Free Software Foundation.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <http://www.gnu.org/licenses/>.
+#
+
 prefix = @prefix@
 exec_prefix = @exec_prefix@
 
@@ -203,14 +221,14 @@ SUBDIR_MI_OBS = \
 	mi-out.o mi-console.o \
 	mi-cmds.o mi-cmd-env.o mi-cmd-var.o mi-cmd-break.o mi-cmd-stack.o \
 	mi-cmd-file.o mi-cmd-disas.o mi-symbol-cmds.o mi-cmd-target.o \
-	mi-interp.o \
+	mi-cuda.o mi-interp.o \
 	mi-main.o mi-parse.o mi-getopt.o
 SUBDIR_MI_SRCS = \
 	mi/mi-out.c mi/mi-console.c \
 	mi/mi-cmds.c mi/mi-cmd-env.c \
 	mi/mi-cmd-var.c mi/mi-cmd-break.c mi/mi-cmd-stack.c \
 	mi/mi-cmd-file.c mi/mi-cmd-disas.c mi/mi-symbol-cmds.c \
-	mi/mi-cmd-target.c mi/mi-interp.c \
+	mi/mi-cmd-target.c mi/mi-cuda.c mi/mi-interp.c \
 	mi/mi-main.c mi/mi-parse.c mi/mi-getopt.c
 SUBDIR_MI_DEPS =
 SUBDIR_MI_LDFLAGS=
@@ -508,6 +526,11 @@ ALL_TARGET_OBS = \
 	arm-tdep.o arm-wince-tdep.o \
 	avr-tdep.o \
 	cris-tdep.o \
+	cuda-api.o cuda-autostep.o cuda-asm.o cuda-commands.o cuda-context.o cuda-coords.o \
+	cuda-elf-image.o cuda-events.o cuda-gdb.o cuda-iterator.o cuda-kernel.o \
+	cuda-linux-nat.o cuda-modules.o cuda-notifications.o cuda-options.o \
+	cuda-regmap.o cuda-state.o cuda-tdep.o cuda-textures.o cuda-utils.o \
+        libcudbg.o libcudbgipc.o \
 	dicos-tdep.o \
 	frv-linux-tdep.o frv-tdep.o \
 	h8300-tdep.o \
@@ -781,7 +804,13 @@ annotate.h sim-regno.h dictionary.h dfp.h main.h frame-unwind.h	\
 remote-fileio.h i386-linux-tdep.h vax-tdep.h objc-lang.h \
 sentinel-frame.h bcache.h symfile.h windows-tdep.h linux-tdep.h \
 gdb_usleep.h jit.h xml-syscall.h ada-operator.inc microblaze-tdep.h \
-psymtab.h psympriv.h
+psymtab.h psympriv.h \
+cuda-api.h  cuda-autostep.h cuda-builtins.h cuda-context.h cuda-defs.h \
+cuda-events.h cuda-gdb.h cuda-kernel.h cuda-notifications.h cuda-parser.h \
+cuda-tdep.h cuda-asm.h cuda-commands.h cuda-coords.h cuda-elf-image.h \
+cuda-iterator.h cuda-modules.h cuda-options.h cuda-regmap.h cuda-state.h \
+cuda-textures.h cuda-utils.h \
+libcudbg.h libcudbgipc.h
 
 # Header files that already have srcdir in them, or which are in objdir.
 
@@ -867,7 +896,8 @@ COMMON_OBS = $(DEPFILES) $(CONFIG_OBS) $(YYOBJ) \
 	prologue-value.o memory-map.o xml-support.o xml-syscall.o \
 	target-descriptions.o target-memory.o xml-tdesc.o xml-builtin.o \
 	inferior.o osdata.o gdb_usleep.o record.o gcore.o \
-	jit.o progspace.o
+	jit.o progspace.o \
+	cuda-parser.lex.o cuda-parser.tab.o
 
 # Definitions for the syscall's XML files and dir
 XML_SYSCALLS_DIR = syscalls/
@@ -1020,6 +1050,15 @@ install-only: $(CONFIG_INSTALL) xml-syscall-install
 		$(INSTALL_DATA) $(srcdir)/gdb.1 \
 			$(DESTDIR)$(man1dir)/$$transformed_name.1
 	@$(MAKE) DO=install "DODIRS=$(SUBDIRS)" $(FLAGS_TO_PASS) subdir_do
+
+# CUDA - cuda-gdb wrapper 
+# cuda-gdb is used with procmod. As a result the environment variables are lost
+# when cuda-gdb is launched. To work around it, we create a wrapper around
+# cuda-gdb that we install here.
+install-cuda-gdb-darwin-wrapper:
+	echo $(INSTALL_PROGRAM) $(srcdir)/cuda-gdb.sh $(DESTDIR)$(bindir)/cuda-gdb
+	$(INSTALL_PROGRAM) $(srcdir)/cuda-gdb.sh $(DESTDIR)$(bindir)/cuda-gdb
+
 .PHONY: install-tui
 install-tui:
 	transformed_name=`t='$(program_transform_name)'; \
@@ -1435,6 +1474,11 @@ ALLDEPFILES = \
 	avr-tdep.c \
 	bsd-uthread.c bsd-kvm.c \
 	core-regset.c corelow.c \
+	cuda-api.c cuda-autostep.c cuda-asm.c cuda-commands.c cuda-context.c cuda-coords.c \
+	cuda-elf-image.c cuda-events.c cuda-gdb.c cuda-iterator.c cuda-kernel.c \
+	cuda-linux-nat.c cuda-modules.c cuda-notifications.c cuda-options.c \
+	cuda-regmap.c cuda-state.c cuda-tdep.c  cuda-textures.c cuda-utils.c \
+        libcudbg.c libcudbgipc.c \
 	dcache.c dicos-tdep.c darwin-nat.c \
 	exec.c \
 	fbsd-nat.c \
@@ -1615,6 +1659,14 @@ po/$(PACKAGE).pot: force
 
 
 #
+# YACC/LEX helper files for the CUDA commands
+#
+cuda-parser.tab.c: $(srcdir)/cuda-parser.exp.y
+	$(YACC) -d -p cuda_parser_ -b cuda-parser $<
+cuda-parser.lex.c: $(srcdir)/cuda-parser.lex.l cuda-parser.tab.c
+	$(FLEX) -ocuda-parser.lex.c -Pcuda_parser_ $<
+
+#
 # YACC/LEX dependencies
 #
 # LANG-exp.c is generated in objdir from LANG-exp.y if it doesn't
@@ -1670,6 +1722,7 @@ po/$(PACKAGE).pot: force
 .PRECIOUS: m2-exp.c
 .PRECIOUS: objc-exp.c
 .PRECIOUS: p-exp.c
+.PRECIOUS: cuda-parser.tab.c cuda-parser.lex.c
 
 # XML rules
 
@@ -1897,6 +1950,10 @@ mi-symbol-cmds.o: $(srcdir)/mi/mi-symbol-cmds.c
 
 mi-common.o: $(srcdir)/mi/mi-common.c
 	$(COMPILE) $(srcdir)/mi/mi-common.c
+	$(POSTCOMPILE)
+
+mi-cuda.o: $(srcdir)/mi/mi-cuda.c
+	$(COMPILE) $(srcdir)/mi/mi-cuda.c
 	$(POSTCOMPILE)
 
 #

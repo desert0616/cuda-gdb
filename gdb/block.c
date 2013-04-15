@@ -17,6 +17,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "block.h"
 #include "symtab.h"
@@ -96,7 +114,7 @@ struct blockvector *
 blockvector_for_pc_sect (CORE_ADDR pc, struct obj_section *section,
 			 struct block **pblock, struct symtab *symtab)
 {
-  struct block *b;
+  struct block *b, *innermost;
   int bot, top, half;
   struct blockvector *bl;
 
@@ -143,19 +161,30 @@ blockvector_for_pc_sect (CORE_ADDR pc, struct obj_section *section,
 	top = bot + half;
     }
 
-  /* Now search backward for a block that ends after PC.  */
-
-  while (bot >= 0)
+  /* CUDA - bug fix */
+  /* Now search backward for the innermost block that starts before PC and ends
+     after PC. The block are sorted by start addr, but not by end addr. The
+     original version was returning one arbitrary block of all the blocks that
+     contain the PC. The CUDA version makes sure we return the innermost one. */
+  innermost = NULL;
+  for (; bot >= 0; --bot)
     {
       b = BLOCKVECTOR_BLOCK (bl, bot);
-      if (BLOCK_END (b) > pc)
-	{
-	  if (pblock)
-	    *pblock = b;
-	  return bl;
-	}
-      bot--;
+      if (BLOCK_END (b) <= pc)
+        continue;
+      if (!innermost)
+        innermost = b;
+      if (BLOCK_END (b) < BLOCK_END (innermost))
+        innermost = b;
     }
+
+  if (innermost)
+    {
+      if (pblock)
+        *pblock = innermost;
+      return bl;
+    }
+
   return 0;
 }
 

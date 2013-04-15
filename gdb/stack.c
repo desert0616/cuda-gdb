@@ -19,6 +19,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "value.h"
 #include "symtab.h"
@@ -54,6 +72,11 @@
 
 #include "psymtab.h"
 #include "symfile.h"
+
+/* CUDA - print_args_frame */
+#include "cuda-state.h"
+#include "cuda-tdep.h"
+#include "cuda-options.h"
 
 void (*deprecated_selected_frame_level_changed_hook) (int);
 
@@ -187,6 +210,27 @@ print_frame_nameless_args (struct frame_info *frame, long start, int num,
       first = 0;
       start += sizeof (int);
     }
+}
+
+/* CUDA - print_args_frame */
+void
+print_args_frame (struct frame_info *frame)
+{
+  struct print_args_args args;
+  struct cleanup *args_list_chain;
+
+  args.frame  = frame;
+  args.func   = find_pc_function (get_frame_address_in_block (frame));;
+  args.stream = gdb_stdout;
+
+  args_list_chain = make_cleanup_ui_out_list_begin_end (uiout, "args");
+  catch_errors (print_args_stub, &args, "", RETURN_MASK_ALL);
+
+  /* FIXME: ARGS must be a list. If one argument is a string it
+     will have " that will not be properly escaped.  */
+  /* Invoke ui_out_tuple_end.  */
+  do_cleanups (args_list_chain);
+  QUIT;
 }
 
 /* Print the arguments of frame FRAME on STREAM, given the function
@@ -790,6 +834,18 @@ print_frame (struct frame_info *frame, int print_level,
   ui_out_wrap_hint (uiout, "   ");
   annotate_frame_args ();
       
+
+  /* CUDA - kernel dimensions */
+  if (cuda_frame_outermost_p (get_next_frame (frame)))
+    {
+      uint32_t dev_id, sm_id, wp_id;
+      kernel_t kernel;
+
+      cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
+      kernel = warp_get_kernel (dev_id, sm_id, wp_id);
+      ui_out_text (uiout, kernel_get_dimensions (kernel));
+    }
+
   ui_out_text (uiout, " (");
   if (print_args)
     {

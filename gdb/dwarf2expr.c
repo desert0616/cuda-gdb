@@ -20,6 +20,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "symtab.h"
 #include "gdbtypes.h"
@@ -102,10 +120,13 @@ dwarf_expr_push (struct dwarf_expr_context *ctx, ULONGEST value,
 {
   struct dwarf_stack_value *v;
 
+/* CUDA - 64-bit register index */
+#if 0
   /* We keep all stack elements within the range defined by the
      DWARF address size.  */
   if (ctx->addr_size < sizeof (ULONGEST))
     value &= ((ULONGEST) 1 << (ctx->addr_size * HOST_CHAR_BIT)) - 1;
+#endif
 
   dwarf_expr_grow_stack (ctx, 1);
   v = &ctx->stack[ctx->stack_len++];
@@ -272,7 +293,8 @@ read_uleb128 (const gdb_byte *buf, const gdb_byte *buf_end, ULONGEST * r)
 	error (_("read_uleb128: Corrupted DWARF expression."));
 
       byte = *buf++;
-      result |= (byte & 0x7f) << shift;
+      /* CUDA - gdb bug */
+      result |= ((ULONGEST)(byte & 0x7f)) << shift;
       if ((byte & 0x80) == 0)
 	break;
       shift += 7;
@@ -298,7 +320,8 @@ read_sleb128 (const gdb_byte *buf, const gdb_byte *buf_end, LONGEST * r)
 	error (_("read_sleb128: Corrupted DWARF expression."));
 
       byte = *buf++;
-      result |= (byte & 0x7f) << shift;
+      /* CUDA - gdb bug */
+      result |= ((LONGEST)(byte & 0x7f)) << shift;
       shift += 7;
       if ((byte & 0x80) == 0)
 	break;

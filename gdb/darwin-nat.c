@@ -19,6 +19,24 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "top.h"
 #include "inferior.h"
@@ -1788,6 +1806,35 @@ darwin_xfer_memory (CORE_ADDR memaddr, gdb_byte *myaddr, int len, int write,
     return darwin_read_write_inferior (task, memaddr, myaddr, NULL, len);
 }
 
+/* CUDA - siginfo */
+/* Uber-simplied xfer_siginfo. If we are on the host side, we assumed that's
+   because a breakpoint was hit. All the other fields are left untouched.
+   Obviously, more work needs to be done there to get the full siginfo. */
+static LONGEST
+darwin_xfer_siginfo (struct target_ops *ops, enum target_object object,
+		     const char *annex, gdb_byte *readbuf,
+		     const gdb_byte *writebuf, ULONGEST offset, LONGEST len)
+{
+  gdb_byte buf[sizeof (siginfo_t) + 24];
+  siginfo_t *siginfo = (siginfo_t *) buf;
+
+  gdb_assert (object == TARGET_OBJECT_SIGNAL_INFO);
+  gdb_assert (readbuf || writebuf);
+
+  memset (buf, 0 , sizeof buf);
+
+  if (readbuf)
+    {
+      siginfo->si_signo = SIGTRAP;
+      memcpy (readbuf, siginfo + offset, len);
+    }
+  else
+    error (_("Setting siginfo not supported."));
+
+  /* always succeeds */
+  return len;
+}
+
 static LONGEST
 darwin_xfer_partial (struct target_ops *ops,
 		     enum target_object object, const char *annex,
@@ -1801,6 +1848,10 @@ darwin_xfer_partial (struct target_ops *ops,
      core_addr_to_string (offset), (int)len,
      host_address_to_string (readbuf), host_address_to_string (writebuf),
      inf->pid);
+
+  /* CUDA - siginfo */
+  if (object == TARGET_OBJECT_SIGNAL_INFO)
+    return darwin_xfer_siginfo (ops, object, annex, readbuf, writebuf, offset, len);
 
   if (object != TARGET_OBJECT_MEMORY)
     return -1;
@@ -1921,6 +1972,9 @@ darwin_supports_multi_process (void)
   return 1;
 }
 
+/* CUDA target */
+void cuda_nat_add_target (struct target_ops *t);
+
 void
 _initialize_darwin_inferior (void)
 {
@@ -1963,6 +2017,9 @@ _initialize_darwin_inferior (void)
   darwin_ops->to_get_ada_task_ptid = darwin_get_ada_task_ptid;
 
   darwin_complete_target (darwin_ops);
+
+  /* CUDA - target */
+  cuda_nat_add_target (darwin_ops);
 
   add_target (darwin_ops);
 

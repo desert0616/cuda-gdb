@@ -29,6 +29,24 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifndef __BFD_H_SEEN__
 #define __BFD_H_SEEN__
 
@@ -2091,6 +2109,7 @@ enum bfd_architecture
   bfd_arch_lm32,      /* Lattice Mico32 */
 #define bfd_mach_lm32      1
   bfd_arch_microblaze,/* Xilinx MicroBlaze. */
+  bfd_arch_cuda, /* NVIDIA CUDA */
   bfd_arch_last
   };
 

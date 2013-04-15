@@ -550,7 +550,7 @@ m68k_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
 /* Convert a dwarf or dwarf2 regnumber to a GDB regnum.  */
 
 static int
-m68k_dwarf_reg_to_regnum (struct gdbarch *gdbarch, int num)
+m68k_dwarf_reg_to_regnum (struct gdbarch *gdbarch, reg_t num)
 {
   if (num < 8)
     /* d0..7 */

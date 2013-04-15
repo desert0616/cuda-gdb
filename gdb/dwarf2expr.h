@@ -83,7 +83,7 @@ struct dwarf_expr_context
   void *baton;
 
   /* Return the value of register number REGNUM.  */
-  CORE_ADDR (*read_reg) (void *baton, int regnum);
+  CORE_ADDR (*read_reg) (void *baton, reg_t regnum);
 
   /* Read LENGTH bytes at ADDR into BUF.  */
   void (*read_mem) (void *baton, gdb_byte *buf, CORE_ADDR addr, size_t length);

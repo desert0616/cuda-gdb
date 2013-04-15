@@ -28,6 +28,13 @@ case $targ in
     ;;
 esac
 
+# CUDA files
+gdb_target_cuda_obs="cuda-api.o  cuda-autostep.o  cuda-asm.o  cuda-commands.o  cuda-context.o \
+   cuda-coords.o cuda-elf-image.o  cuda-events.o  cuda-gdb.o cuda-iterator.o \
+   cuda-kernel.o cuda-linux-nat.o cuda-modules.o  cuda-notifications.o \
+   cuda-options.o cuda-regmap.o cuda-state.o cuda-tdep.o cuda-textures.o cuda-utils.o \
+   libcudbg.o libcudbgipc.o"
+
 # map target info into gdb names.
 
 case "${targ}" in
@@ -162,6 +169,9 @@ i[34567]86-*-darwin*)
 	    # Target: GNU/Linux x86-64
 	    gdb_target_obs="amd64-tdep.o amd64-darwin-tdep.o ${gdb_target_obs}"
 	fi
+	if test "x$enable_cuda" = "xyes"; then
+	    gdb_target_obs="${gdb_target_cuda_obs} ${gdb_target_obs}"
+	fi
 	;;
 i[34567]86-*-dicos*)
 	# Target: DICOS/i386
@@ -210,12 +220,18 @@ i[34567]86-*-linux*)
 	    # Target: GNU/Linux x86-64
 	    gdb_target_obs="amd64-tdep.o amd64-linux-tdep.o ${gdb_target_obs}"
 	fi
+	if test "x$enable_cuda" = "xyes"; then
+	    gdb_target_obs="${gdb_target_cuda_obs} ${gdb_target_obs}"
+	fi
 	build_gdbserver=yes
 	;;
 i[34567]86-*-gnu*)
 	# Target: Intel 386 running the GNU Hurd
 	gdb_target_obs="i386-tdep.o i387-tdep.o i386gnu-tdep.o \
 			solib.o solib-svr4.o"
+	if test "x$enable_cuda" = "xyes"; then
+	    gdb_target_obs="${gdb_target_cuda_obs} ${gdb_target_obs}"
+	fi
 	;;
 i[34567]86-*-cygwin*)
 	# Target: Intel 386 running win32
@@ -562,6 +578,9 @@ x86_64-*-darwin*)
 	gdb_target_obs="amd64-tdep.o i386-tdep.o i387-tdep.o \
 			i386-darwin-tdep.o amd64-darwin-tdep.o \
                         solib.o solib-darwin.o"
+	if test "x$enable_cuda" = "xyes"; then
+	    gdb_target_obs="${gdb_target_cuda_obs} ${gdb_target_obs}"
+	fi
 	;;
 
 x86_64-*-dicos*)
@@ -576,6 +595,9 @@ x86_64-*-linux*)
 			i387-tdep.o i386-linux-tdep.o glibc-tdep.o \
 			solib.o solib-svr4.o corelow.o symfile-mem.o linux-tdep.o \
 			linux-record.o"
+	if test "x$enable_cuda" = "xyes"; then
+	    gdb_target_obs="${gdb_target_cuda_obs} ${gdb_target_obs}"
+	fi
 	build_gdbserver=yes
 	;;
 x86_64-*-freebsd* | x86_64-*-kfreebsd*-gnu)

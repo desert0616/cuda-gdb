@@ -20,6 +20,23 @@
    Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston,
    MA 02110-1301, USA.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
 #include "sysdep.h"
 #include "mach-o.h"
 #include "bfd.h"
@@ -46,6 +63,18 @@ bfd_mach_o_version (bfd *abfd)
   mdata = bfd_mach_o_get_data (abfd);
 
   return mdata->header.version;
+}
+
+/* CUDA - word size */
+unsigned long
+bfd_mach_o_cputype (bfd *abfd)
+{
+  bfd_mach_o_data_struct *mdata = NULL;
+
+  BFD_ASSERT (bfd_mach_o_valid (abfd));
+  mdata = bfd_mach_o_get_data (abfd);
+
+  return mdata->header.cputype;
 }
 
 bfd_boolean
@@ -1754,17 +1783,23 @@ bfd_mach_o_read_symtab_symbol (bfd *abfd,
 	      /* Mach-O uses 0 to mean "no section"; not an error.  */
 	      if (section != 0)
 		{
+                  /* CUDA - Missing BFD Support */
+#if 0
 		  fprintf (stderr, "bfd_mach_o_read_symtab_symbol: "
 			   "symbol \"%s\" specified invalid section %d (max %lu): setting to undefined\n",
 			   s->symbol.name, section, mdata->nsects);
+#endif
 		}
 	      s->symbol.section = bfd_und_section_ptr;
 	    }
 	  break;
 	case BFD_MACH_O_N_INDR:
+          /* CUDA - Missing BFD Support */
+#if 0
 	  fprintf (stderr, "bfd_mach_o_read_symtab_symbol: "
 		   "symbol \"%s\" is unsupported 'indirect' reference: setting to undefined\n",
 		   s->symbol.name);
+#endif
 	  s->symbol.section = bfd_und_section_ptr;
 	  break;
 	default:
@@ -2552,6 +2587,16 @@ bfd_mach_o_read_command (bfd *abfd, bfd_mach_o_load_command *command)
     case BFD_MACH_O_LC_DYLD_INFO:
       if (bfd_mach_o_read_dyld_info (abfd, command) != 0)
 	return -1;
+      break;
+    /* CUDA - missing Mach-o load commands */
+    case BFD_MACH_O_LC_VERSION_MIN_MACOSX:
+    case BFD_MACH_O_LC_VERSION_MIN_IPHONEOS:
+    case BFD_MACH_O_LC_FUNCTION_STARTS:
+    case BFD_MACH_O_LC_LOAD_UPWARD_DYLIB:
+      /* Those commands can be safely ignored. They are included by the static
+         linker, Starting with 10.7, the linker has some options to force not
+         to use those load commands (-no_functions_starts and 
+         -no_version_load_command). */
       break;
     default:
       fprintf (stderr, "unable to read unknown load command 0x%lx\n",

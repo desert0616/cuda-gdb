@@ -20,6 +20,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "dwarf2expr.h"
 #include "dwarf2.h"
@@ -280,7 +298,7 @@ dwarf2_frame_state_free (void *p)
 /* Helper functions for execute_stack_op.  */
 
 static CORE_ADDR
-read_reg (void *baton, int reg)
+read_reg (void *baton, reg_t reg)
 {
   struct frame_info *this_frame = (struct frame_info *) baton;
   struct gdbarch *gdbarch = get_frame_arch (this_frame);
@@ -1222,7 +1240,8 @@ dwarf2_frame_sniffer (const struct frame_unwind *self,
   return self->type != SIGTRAMP_FRAME;
 }
 
-static const struct frame_unwind dwarf2_frame_unwind =
+/* CUDA - frames */
+/*static*/ const struct frame_unwind dwarf2_frame_unwind =
 {
   NORMAL_FRAME,
   dwarf2_frame_this_id,
@@ -1293,11 +1312,19 @@ dwarf2_frame_cfa (struct frame_info *this_frame)
 {
   while (get_frame_type (this_frame) == INLINE_FRAME)
     this_frame = get_prev_frame (this_frame);
+
+  /* CUDA - DW_OP_call_frame_cfa */
+  /* If we want the CUDA unwinder to be used in conjunction with the DWARF
+     unwinder (to process the DW_OP_call_frame_cfa operation used with the
+     DW_AT_frame_base)))))))), this restriction must be lifted. */
+#if 0
   /* This restriction could be lifted if other unwinders are known to
      compute the frame base in a way compatible with the DWARF
      unwinder.  */
   if (! frame_unwinder_is (this_frame, &dwarf2_frame_unwind))
     error (_("can't compute CFA for this frame"));
+#endif
+
   return get_frame_base (this_frame);
 }
 
@@ -1657,14 +1684,18 @@ add_fde (struct dwarf2_fde_table *fde_table, struct dwarf2_fde *fde)
 static gdb_byte *decode_frame_entry (struct comp_unit *unit, gdb_byte *start,
 				     int eh_frame_p,
                                      struct dwarf2_cie_table *cie_table,
-                                     struct dwarf2_fde_table *fde_table);
+                                     struct dwarf2_fde_table *fde_table,
+                                     int cie_expected);
+/* CUDA - addr_size */
+int cuda_dwarf2_addr_size (struct objfile *objfile);
 
 /* Decode the next CIE or FDE.  Return NULL if invalid input, otherwise
    the next byte to be processed.  */
 static gdb_byte *
 decode_frame_entry_1 (struct comp_unit *unit, gdb_byte *start, int eh_frame_p,
                       struct dwarf2_cie_table *cie_table,
-                      struct dwarf2_fde_table *fde_table)
+                      struct dwarf2_fde_table *fde_table,
+                      int cie_expected /* CUDA - bug fix */)
 {
   struct gdbarch *gdbarch = get_objfile_arch (unit->objfile);
   gdb_byte *buf, *end;
@@ -1707,6 +1738,12 @@ decode_frame_entry_1 (struct comp_unit *unit, gdb_byte *start, int eh_frame_p,
       cie_pointer = read_4_bytes (unit->abfd, buf);
       buf += 4;
     }
+
+  /* CUDA - bug fix */
+  /* return NULL instead entering an infinite loop when the CIE id cannot be
+     found. Did not rootcause the issue. */
+  if (cie_expected && cie_pointer != cie_id)
+    return NULL;
 
   if (cie_pointer == cie_id)
     {
@@ -1790,6 +1827,10 @@ decode_frame_entry_1 (struct comp_unit *unit, gdb_byte *start, int eh_frame_p,
       cie->data_alignment_factor =
 	read_signed_leb128 (unit->abfd, buf, &bytes_read);
       buf += bytes_read;
+
+      /* CUDA - addr_size */
+      if (cie->version < 4 && unit->objfile->cuda_objfile)
+        cie->addr_size = cuda_dwarf2_addr_size (unit->objfile);
 
       if (cie_version == 1)
 	{
@@ -1900,11 +1941,14 @@ decode_frame_entry_1 (struct comp_unit *unit, gdb_byte *start, int eh_frame_p,
       if (fde->cie == NULL)
 	{
 	  decode_frame_entry (unit, unit->dwarf_frame_buffer + cie_pointer,
-			      eh_frame_p, cie_table, fde_table);
+			      eh_frame_p, cie_table, fde_table, 1);
 	  fde->cie = find_cie (cie_table, cie_pointer);
 	}
 
-      gdb_assert (fde->cie != NULL);
+      /* CUDA - bug fix */
+      /* return NULL instead of asserting. Did not rootcause the issue. */
+      if (fde->cie == NULL)
+        return NULL;
 
       fde->initial_location =
 	read_encoded_value (unit, fde->cie->encoding, fde->cie->addr_size,
@@ -1945,7 +1989,8 @@ decode_frame_entry_1 (struct comp_unit *unit, gdb_byte *start, int eh_frame_p,
 static gdb_byte *
 decode_frame_entry (struct comp_unit *unit, gdb_byte *start, int eh_frame_p,
                     struct dwarf2_cie_table *cie_table,
-                    struct dwarf2_fde_table *fde_table)
+                    struct dwarf2_fde_table *fde_table,
+                    int cie_expected /* CUDA - bug fix */)
 {
   enum { NONE, ALIGN4, ALIGN8, FAIL } workaround = NONE;
   gdb_byte *ret;
@@ -1954,7 +1999,7 @@ decode_frame_entry (struct comp_unit *unit, gdb_byte *start, int eh_frame_p,
   while (1)
     {
       ret = decode_frame_entry_1 (unit, start, eh_frame_p,
-                                  cie_table, fde_table);
+                                  cie_table, fde_table, cie_expected);
       if (ret != NULL)
 	break;
 
@@ -2109,7 +2154,7 @@ dwarf2_build_frame_info (struct objfile *objfile)
       frame_ptr = unit->dwarf_frame_buffer;
       while (frame_ptr < unit->dwarf_frame_buffer + unit->dwarf_frame_size)
 	frame_ptr = decode_frame_entry (unit, frame_ptr, 1,
-                                        &cie_table, &fde_table);
+                                        &cie_table, &fde_table, 0);
 
       if (cie_table.num_entries != 0)
         {
@@ -2129,7 +2174,7 @@ dwarf2_build_frame_info (struct objfile *objfile)
       frame_ptr = unit->dwarf_frame_buffer;
       while (frame_ptr < unit->dwarf_frame_buffer + unit->dwarf_frame_size)
 	frame_ptr = decode_frame_entry (unit, frame_ptr, 0,
-                                        &cie_table, &fde_table);
+                                        &cie_table, &fde_table, 0);
     }
 
   /* Discard the cie_table, it is no longer needed.  */

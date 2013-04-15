@@ -20,6 +20,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "top.h"
 #include "mi-cmds.h"
@@ -45,6 +63,15 @@ struct mi_cmd mi_cmds[] =
   { "break-list", { "info break", }, NULL },
   { "break-passcount", { NULL, 0 }, mi_cmd_break_passcount},
   { "break-watch", { NULL, 0 }, mi_cmd_break_watch},
+  { "cuda-info-devices", { NULL, 0 }, mi_cmd_cuda_info_devices},
+  { "cuda-info-sms", { NULL, 0 }, mi_cmd_cuda_info_sms},
+  { "cuda-info-warps", { NULL, 0 }, mi_cmd_cuda_info_warps},
+  { "cuda-info-lanes", { NULL, 0 }, mi_cmd_cuda_info_lanes},
+  { "cuda-info-kernels", { NULL, 0 }, mi_cmd_cuda_info_kernels},
+  { "cuda-info-blocks", { NULL, 0 }, mi_cmd_cuda_info_blocks},
+  { "cuda-info-threads", { NULL, 0 }, mi_cmd_cuda_info_threads},
+  { "cuda-focus-query", {NULL, 0 }, mi_cmd_cuda_focus_query},
+  { "cuda-focus-switch", {NULL, 0 }, mi_cmd_cuda_focus_switch},
   { "data-disassemble", { NULL, 0 }, mi_cmd_disassemble},
   { "data-evaluate-expression", { NULL, 0 }, mi_cmd_data_evaluate_expression},
   { "data-list-changed-registers", { NULL, 0 }, mi_cmd_data_list_changed_registers},

@@ -19,6 +19,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "arch-utils.h"
 #include <signal.h>
@@ -105,7 +123,7 @@ static void signal_command (char *, int);
 
 static void jump_command (char *, int);
 
-static void step_1 (int, int, char *);
+void step_1 (int, int, char *);
 static void step_once (int skip_subroutines, int single_inst, int count, int thread);
 
 static void next_command (char *, int);
@@ -466,6 +484,11 @@ kill_if_already_running (int from_tty)
 	  && !query (_("The program being debugged has been started already.\n\
 Start it from the beginning? ")))
 	error (_("Program not restarted."));
+
+      /* CUDA - cleanup CUDA exception state */
+      if (cuda_exception.valid)
+        cuda_exception.valid = false;
+
       target_kill ();
     }
 }
@@ -559,6 +582,9 @@ run_command_1 (char *args, int from_tty, int tbreak_at_main)
       ui_out_text (uiout, "\n");
       ui_out_flush (uiout);
     }
+
+  /* CUDA - environment variables */
+  cuda_set_environment (current_inferior ()->environment);
 
   /* We call get_inferior_args() because we might need to compute
      the value now.  */
@@ -822,14 +848,14 @@ nexti_command (char *count_string, int from_tty)
   step_1 (1, 1, count_string);
 }
 
-static void
+void
 delete_longjmp_breakpoint_cleanup (void *arg)
 {
   int thread = * (int *) arg;
   delete_longjmp_breakpoint (thread);
 }
 
-static void
+void
 step_1 (int skip_subroutines, int single_inst, char *count_string)
 {
   int count = 1;

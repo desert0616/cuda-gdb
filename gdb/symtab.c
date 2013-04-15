@@ -19,6 +19,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "symtab.h"
 #include "gdbtypes.h"
@@ -1655,6 +1673,15 @@ lookup_block_symbol (const struct block *block, const char *name,
 	 last resort.  Note that this only takes up extra computation
 	 time on a match.  */
 
+      /* CUDA - missing DW_AT_abstract_origin */
+      /* When a CUDA device function is inlined, its variables, parameters,...
+         have no DW_AT_abstract_origin tags. Therefore the same attributes from
+         the origin routine are inherited. It is not the issue most of the time
+         because those inherited attributes, and therefore symbols, appear
+         later in the list and are never seen. But, for parameters, that's
+         different, per the comment above. A quick workaround is return the
+         first parameter instead of the last. */
+
       struct symbol *sym_found = NULL;
 
       for (sym = dict_iter_name_first (BLOCK_DICT (block), name, &iter);
@@ -1664,11 +1691,13 @@ lookup_block_symbol (const struct block *block, const char *name,
 	  if (symbol_matches_domain (SYMBOL_LANGUAGE (sym),
 				     SYMBOL_DOMAIN (sym), domain))
 	    {
-	      sym_found = sym;
 	      if (!SYMBOL_IS_ARGUMENT (sym))
 		{
+                  sym_found = sym;
 		  break;
 		}
+              else if (!sym_found)
+                sym_found = sym;
 	    }
 	}
       return (sym_found);	/* Will be NULL if not found. */
@@ -1726,6 +1755,18 @@ find_pc_sect_symtab (CORE_ADDR pc, struct obj_section *section)
     bv = BLOCKVECTOR (s);
     b = BLOCKVECTOR_BLOCK (bv, GLOBAL_BLOCK);
 
+    /* CUDA - overlapping objfiles */
+    /* For reasons yet not fully understood, it sometimes happens that the PC
+       passed as argument appears to belong to the wrong objfile. In other
+       words, two objfiles overlap in memory. Obviously that should not happen.
+       In my case, a CUDA objfile and a host objfile appear as overlapping, and
+       the device PC is seen as belonging to a non-cuda objfile.
+       Until I can dig deeper, here is an easy workaround. When dealing with a
+       CUDA device PC, consider CUDA objfiles. And vice-versa. */
+    if ((!objfile->cuda_objfile && cuda_is_device_code_address (pc)) ||
+        (objfile->cuda_objfile && !cuda_is_device_code_address (pc)))
+      continue;
+
     if (BLOCK_START (b) <= pc
 	&& BLOCK_END (b) > pc
 	&& (distance == 0
@@ -1737,7 +1778,14 @@ find_pc_sect_symtab (CORE_ADDR pc, struct obj_section *section)
 	/* In order to better support objfiles that contain both
 	   stabs and coff debugging info, we continue on if a psymtab
 	   can't be found. */
-	if ((objfile->flags & OBJF_REORDERED) && objfile->sf)
+        /* CUDA - no psymtab-based optimization */
+        /* In CUDA objfiles, the device kernels are not allocated contiguously.
+           Therefore the memory block from BLOCK_START to BLOCK_END contains
+           holes that the objfile does not cover. Because of it, the
+           optimization below returns the wrong symtab. We simply disable it
+           for CUDA objfiles.
+         */
+	if ((objfile->flags & OBJF_REORDERED) && objfile->sf && !objfile->cuda_objfile)
 	  {
 	    struct symtab *result;
 
@@ -4486,6 +4534,7 @@ expand_line_sal (struct symtab_and_line sal)
   int lineno;
   int deleted = 0;
   struct block **blocks = NULL;
+  const struct block *global_block = NULL;
   int *filter;
   struct cleanup *old_chain;
 
@@ -4572,13 +4621,34 @@ expand_line_sal (struct symtab_and_line sal)
 
   for (i = 0; i < ret.nelts; ++i)
     if (blocks[i] != NULL)
-      for (j = i+1; j < ret.nelts; ++j)
-	if (blocks[j] == blocks[i])
-	  {
-	    filter[j] = 0;
-	    ++deleted;
-	    break;
-	  }
+      {
+        /* CUDA - missing debug information */
+        /* When a device function is used by more than one kernel, only the
+           first kernel gets the debug information about the device function.
+           Therefore when setting breakpoints, subsequent copies share the same
+           block (the largest possible block from start address 0 to end
+           address <size of the kernel>) and some breakpoints are missed. Until
+           the compiler generates the debug information for all the device
+           functions in all kernels, let's not filter duplicate blocks under
+           the following conditions:
+             - the objfile is a CUDA objfile
+             - the duplicate blocks are the global block (which happens when the
+               debug information is missing)
+         */
+        global_block = block_global_block (blocks[i]);
+        if (ret.sals->symtab->objfile->cuda_objfile &&
+            blocks[i]->startaddr == global_block->startaddr &&
+            blocks[i]->endaddr == global_block->endaddr)
+          continue;
+
+        for (j = i+1; j < ret.nelts; ++j)
+          if (blocks[j] == blocks[i])
+            {
+              filter[j] = 0;
+              ++deleted;
+              break;
+            }
+      }
 
   {
     struct symtab_and_line *final =

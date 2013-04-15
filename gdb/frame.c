@@ -18,6 +18,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "frame.h"
 #include "target.h"
@@ -44,6 +62,7 @@
 #include "block.h"
 #include "inline-frame.h"
 #include  "tracepoint.h"
+#include "cuda-tdep.h"
 
 static struct frame_info *get_prev_frame_1 (struct frame_info *this_frame);
 static struct frame_info *get_prev_frame_raw (struct frame_info *this_frame);
@@ -127,6 +146,9 @@ struct frame_info
   /* The reason why we could not set PREV, or UNWIND_NO_REASON if we
      could.  Only valid when PREV_P is set.  */
   enum unwind_stop_reason stop_reason;
+
+  /* CUDA - extra frame info */
+  struct cuda_frame_info *cuda_extensions;
 };
 
 /* A frame stash used to speed up frame lookups.  */
@@ -1728,6 +1750,16 @@ get_prev_frame (struct frame_info *this_frame)
       return NULL;
     }
 
+  /* CUDA - frames */
+  /* Stop unwinding if the current frame is the outermost CUDA device frame */
+  if (this_frame->level >= 0
+      && cuda_focus_is_device ()
+      && cuda_frame_outermost_p (this_frame->next))
+    {
+      frame_debug_got_null_frame (this_frame, "outermost CUDA device frame");
+      return NULL;
+    }
+
   /* If the user's backtrace limit has been exceeded, stop.  We must
      add two to the current level; one of those accounts for backtrace_limit
      being 1-based and the level being 0-based, and the other accounts for
@@ -2278,4 +2310,14 @@ When non-zero, frame specific internal debugging is enabled."),
 			    NULL,
 			    show_frame_debug,
 			    &setdebuglist, &showdebuglist);
+}
+
+/* CUDA - extra frame info */
+struct cuda_frame_info *
+cuda_get_frame_info (struct frame_info *fi)
+{
+  if (!fi->cuda_extensions)
+    fi->cuda_extensions = FRAME_OBSTACK_ZALLOC (struct cuda_frame_info);
+
+  return fi->cuda_extensions;
 }

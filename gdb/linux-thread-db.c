@@ -1187,7 +1187,17 @@ check_event (ptid_t ptid)
 	case TD_DEATH:
 
 	  if (!in_thread_list (ptid))
-	    error (_("Spurious thread death event."));
+            {
+              /* CUDA - notifications */
+              /* Do not error out on spurious thread death events, and
+                 instead, treat them as warnings.  This can happen in
+                 conjunction with CUDA notifications, because the two
+                 events can arrive simulataneously, and the thread death
+                 event could go unhandled.  The next time around, the
+                 thread has already exited and we hit this case. */
+                warning (_("Spurious thread death event."));
+                return;
+            }
 
 	  detach_thread (ptid);
 

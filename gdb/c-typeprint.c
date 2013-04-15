@@ -246,13 +246,13 @@ c_type_print_varspec_prefix (struct type *type, struct ui_file *stream,
   switch (TYPE_CODE (type))
     {
     case TYPE_CODE_PTR:
-      c_type_print_varspec_prefix (TYPE_TARGET_TYPE (type), stream, show, 1, 1);
+      c_type_print_varspec_prefix (FIND_TARGET_TYPE (type), stream, show, 1, 1);
       fprintf_filtered (stream, "*");
       c_type_print_modifier (type, stream, 1, need_post_space);
       break;
 
     case TYPE_CODE_MEMBERPTR:
-      c_type_print_varspec_prefix (TYPE_TARGET_TYPE (type), stream, show, 0, 0);
+      c_type_print_varspec_prefix (FIND_TARGET_TYPE (type), stream, show, 0, 0);
       name = type_name_no_tag (TYPE_DOMAIN_TYPE (type));
       if (name)
 	fputs_filtered (name, stream);
@@ -262,7 +262,7 @@ c_type_print_varspec_prefix (struct type *type, struct ui_file *stream,
       break;
 
     case TYPE_CODE_METHODPTR:
-      c_type_print_varspec_prefix (TYPE_TARGET_TYPE (type), stream, show, 0, 0);
+      c_type_print_varspec_prefix (FIND_TARGET_TYPE (type), stream, show, 0, 0);
       fprintf_filtered (stream, "(");
       name = type_name_no_tag (TYPE_DOMAIN_TYPE (type));
       if (name)
@@ -273,26 +273,26 @@ c_type_print_varspec_prefix (struct type *type, struct ui_file *stream,
       break;
 
     case TYPE_CODE_REF:
-      c_type_print_varspec_prefix (TYPE_TARGET_TYPE (type), stream, show, 1, 0);
+      c_type_print_varspec_prefix (FIND_TARGET_TYPE (type), stream, show, 1, 0);
       fprintf_filtered (stream, "&");
       c_type_print_modifier (type, stream, 1, need_post_space);
       break;
 
     case TYPE_CODE_METHOD:
     case TYPE_CODE_FUNC:
-      c_type_print_varspec_prefix (TYPE_TARGET_TYPE (type), stream, show, 0, 0);
+      c_type_print_varspec_prefix (FIND_TARGET_TYPE (type), stream, show, 0, 0);
       if (passed_a_ptr)
 	fprintf_filtered (stream, "(");
       break;
 
     case TYPE_CODE_ARRAY:
-      c_type_print_varspec_prefix (TYPE_TARGET_TYPE (type), stream, show, 0, 0);
+      c_type_print_varspec_prefix (FIND_TARGET_TYPE (type), stream, show, 0, 0);
       if (passed_a_ptr)
 	fprintf_filtered (stream, "(");
       break;
 
     case TYPE_CODE_TYPEDEF:
-      c_type_print_varspec_prefix (TYPE_TARGET_TYPE (type), stream, show, 0, 0);
+      c_type_print_varspec_prefix (FIND_TARGET_TYPE (type), stream, show, 0, 0);
       break;
 
     case TYPE_CODE_UNDEF:

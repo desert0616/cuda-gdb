@@ -19,6 +19,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "symtab.h"
 #include "gdbtypes.h"
@@ -46,6 +64,7 @@
 #include "observer.h"
 #include "objfiles.h"
 #include "symtab.h"
+#include "cuda-textures.h"
 
 extern int overload_debug;
 /* Local functions.  */
@@ -875,7 +894,12 @@ get_value_at (struct type *type, CORE_ADDR addr, int lazy)
   else
     {
       val = allocate_value (type);
-      read_memory (addr, value_contents_all_raw (val), TYPE_LENGTH (type));
+      /* CUDA - memory segments */
+      {
+        struct type *type = check_typedef (value_type (val));
+        int len = TYPE_LENGTH (type);
+        cuda_read_memory (addr, val, type, len);
+      }
     }
 
   VALUE_LVAL (val) = lval_memory;
@@ -960,12 +984,11 @@ value_fetch_lazy (struct value *val)
       int length = TYPE_LENGTH (check_typedef (value_enclosing_type (val)));
 
       if (length)
-	{
-	  if (value_stack (val))
-	    read_stack (addr, value_contents_all_raw (val), length);
-	  else
-	    read_memory (addr, value_contents_all_raw (val), length);
-	}
+        {
+          /* CUDA - memory segments */
+          struct type *type = value_type (val);
+          cuda_read_memory (addr, val, type, length);
+        }
     }
   else if (VALUE_LVAL (val) == lval_register)
     {
@@ -1160,7 +1183,8 @@ value_assign (struct value *toval, struct value *fromval)
 	    dest_buffer = value_contents (fromval);
 	  }
 
-	write_memory (changed_addr, dest_buffer, changed_len);
+        /* CUDA - memory segments */
+        cuda_write_memory (changed_addr, dest_buffer, type);
 	observer_notify_memory_changed (changed_addr, changed_len,
 					dest_buffer);
       }
@@ -1320,9 +1344,13 @@ value_repeat (struct value *arg1, int count)
 
   val = allocate_repeat_value (value_enclosing_type (arg1), count);
 
-  read_memory (value_address (arg1),
-	       value_contents_all_raw (val),
-	       TYPE_LENGTH (value_enclosing_type (val)));
+  /* CUDA - memory segments */
+  {
+    CORE_ADDR addr = value_address (arg1) + value_offset (arg1);
+    struct type *type = TYPE_TARGET_TYPE (value_enclosing_type (val));
+    int len = TYPE_LENGTH (value_enclosing_type (val));
+    cuda_read_memory (addr, val, type, len);
+  }
   VALUE_LVAL (val) = lval_memory;
   set_value_address (val, value_address (arg1));
 
@@ -1443,13 +1471,16 @@ value_coerce_to_target (struct value *val)
 {
   LONGEST length;
   CORE_ADDR addr;
+  struct type *type;
 
   if (!value_must_coerce_to_target (val))
     return val;
 
   length = TYPE_LENGTH (check_typedef (value_type (val)));
   addr = allocate_space_in_inferior (length);
-  write_memory (addr, value_contents (val), length);
+  /* CUDA - memory segments */
+  type = check_typedef (value_type (val));
+  cuda_write_memory (addr, value_contents (val), type);
   return value_at_lazy (value_type (val), addr);
 }
 
@@ -1592,8 +1623,11 @@ value_ind (struct value *arg1)
       enc_type = check_typedef (value_enclosing_type (arg1));
       enc_type = TYPE_TARGET_TYPE (enc_type);
 
-      if (TYPE_CODE (check_typedef (enc_type)) == TYPE_CODE_FUNC
-	  || TYPE_CODE (check_typedef (enc_type)) == TYPE_CODE_METHOD)
+      /* CUDA - textures */
+      if (cuda_texture_is_tex_ptr (base_type))
+        arg2 = cuda_texture_value_ind (enc_type, arg1);
+      else if (TYPE_CODE (check_typedef (enc_type)) == TYPE_CODE_FUNC ||
+               TYPE_CODE (check_typedef (enc_type)) == TYPE_CODE_METHOD)
 	/* For functions, go through find_function_addr, which knows
 	   how to handle function descriptors.  */
 	arg2 = value_at_lazy (enc_type, 

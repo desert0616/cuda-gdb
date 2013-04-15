@@ -19,6 +19,24 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "defs.h"
 #include "symtab.h"
 #include "gdbtypes.h"
@@ -373,8 +391,11 @@ macho_add_oso_symfile (oso_el *oso, bfd *abfd,
       sect = bfd_get_section_by_name (abfd, sectname);
       if (sect == NULL)
         {
+          /* CUDA - Not supported yet */
+#if 0
           warning (_("can't find section '%s' in OSO file %s"),
                    sectname, oso->name);
+#endif
           continue;
         }
       bfd_set_section_vma (abfd, sect, vma);
@@ -389,7 +410,10 @@ macho_add_oso_symfile (oso_el *oso, bfd *abfd,
      is not managed by gdb.  */
   abfd->filename = xstrdup (abfd->filename);
 
-  gdb_assert (current_oso.symbol_table == NULL);
+  /* CUDA - Darwin bug */
+  /* Why asserting here when we free the symbol table if non-NULL few lines
+     below? It's breaking cuda-gdb on reruns. Removing that assertion.
+  gdb_assert (current_oso.symbol_table == NULL); */
   current_oso.main_objfile = main_objfile;
 
   /* We need to clear SYMFILE_MAINLINE to avoid interractive question

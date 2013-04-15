@@ -19,6 +19,24 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifdef GDBSERVER
 #include "server.h"
 #else
@@ -211,6 +229,21 @@ static const struct {
   {"EXC_EMULATION", "Emulation instruction"},
   {"EXC_SOFTWARE", "Software generated exception"},
   {"EXC_BREAKPOINT", "Breakpoint"},
+
+  /* CUDA - extra signals */
+  {"CUDA_EXCEPTION_0",  "Device Unknown Exception"},
+  {"CUDA_EXCEPTION_1",  "Lane Illegal Address"},           /* cuda memcheck */
+  {"CUDA_EXCEPTION_2",  "Lane User Stack Overflow"},
+  {"CUDA_EXCEPTION_3",  "Device Hardware Stack Overflow"},
+  {"CUDA_EXCEPTION_4",  "Warp Illegal Instruction"},
+  {"CUDA_EXCEPTION_5",  "Warp Out-of-range Address"},
+  {"CUDA_EXCEPTION_6",  "Warp Misaligned Address"},
+  {"CUDA_EXCEPTION_7",  "Warp Invalid Address Space"},
+  {"CUDA_EXCEPTION_8",  "Warp Invalid PC"},
+  {"CUDA_EXCEPTION_9",  "Warp Hardware Stack Overflow"},
+  {"CUDA_EXCEPTION_10", "Device Illegal Address"},
+  {"CUDA_EXCEPTION_11", "Lane Misaligned Address"},        /* cuda memcheck (future) */
+  {"CUDA_EXCEPTION_12", "Warp Assert"},                    /* device side assert */
 
   /* Last entry, used to check whether the table is the right size.  */
   {NULL, "TARGET_SIGNAL_MAGIC"}
@@ -748,6 +781,11 @@ do_target_signal_to_host (enum target_signal oursig,
     case TARGET_SIGNAL_INFO:
       return SIGINFO;
 #endif
+
+    /* This should be generic to all recoverable signals from the
+       inferior. For now, behave the same as TARGET_SIGNAL_0 */
+    case TARGET_SIGNAL_CUDA_WARP_ASSERT:
+      return 0;
 
     default:
 #if defined (REALTIME_LO)
