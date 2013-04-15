@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -800,6 +800,7 @@ print_frame (struct frame_info *frame, int print_level,
   struct ui_stream *stb;
   struct cleanup *old_chain, *list_chain;
   struct value_print_options opts;
+  const char *cuda_assert_function = "__assert_fail";
 
   stb = ui_out_stream_new (uiout);
   old_chain = make_cleanup_ui_out_stream_delete (stb);
@@ -827,6 +828,15 @@ print_frame (struct frame_info *frame, int print_level,
 	annotate_frame_address_end ();
 	ui_out_text (uiout, " in ");
       }
+  /* CUDA - special handling for assert */
+  if (funname &&
+      !strncmp(funname, cuda_assert_function, sizeof (cuda_assert_function)) &&
+      cuda_frame_p (get_next_frame (frame)))
+    {
+      print_args = 0;
+      funname = (char*)cuda_assert_function;
+    }
+
   annotate_frame_function_name ();
   fprintf_symbol_filtered (stb->stream, funname ? funname : "??",
 			   funlang, DMGL_ANSI);
@@ -834,7 +844,6 @@ print_frame (struct frame_info *frame, int print_level,
   ui_out_wrap_hint (uiout, "   ");
   annotate_frame_args ();
       
-
   /* CUDA - kernel dimensions */
   if (cuda_frame_outermost_p (get_next_frame (frame)))
     {

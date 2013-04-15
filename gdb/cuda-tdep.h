@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -200,6 +200,8 @@ bool            cuda_find_func_text_vma_from_objfile (struct objfile *objfile, c
 uint64_t        cuda_find_context_id (CORE_ADDR addr);
 context_t       cuda_find_context_by_addr (CORE_ADDR addr);
 bool            cuda_is_device_code_address (CORE_ADDR addr);
+int             cuda_special_regnum (struct gdbarch *);
+int             cuda_pc_regnum (struct gdbarch *);
 
 /*Segmented memory reads/writes */
 int cuda_read_memory_partial (CORE_ADDR address, gdb_byte *buf, int len, struct type *type);

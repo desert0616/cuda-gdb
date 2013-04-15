@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -64,6 +64,8 @@ void cuda_notification_block (void);
 void cuda_notification_analyze (ptid_t ptid, struct target_waitstatus *ws);
 void cuda_notification_mark_consumed (void);
 bool cuda_notification_pending (void);
+bool cuda_notification_aliased_event (void);
+void cuda_notification_reset_aliased_event (void);
 bool cuda_notification_received (void);
 
 /* For debugging purposes */

@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -182,7 +182,7 @@ info_cuda_devices_command (char *arg)
   cuda_info_devices (arg, &devices, &num_devices);
 
   /* output message if the list is empty */
-  if (num_devices == 0)
+  if (num_devices == 0 && !ui_out_is_mi_like_p(uiout))
     {
       ui_out_field_string (uiout, NULL, _("No CUDA devices.\n"));
       return;
@@ -313,7 +313,7 @@ info_cuda_sms_command (char *arg)
   cuda_info_sms (arg, &sms, &num_sms);
 
   /* output message if the list is empty */
-  if (num_sms == 0)
+  if (num_sms == 0 && !ui_out_is_mi_like_p(uiout))
     {
       ui_out_field_string (uiout, NULL, _("No CUDA SMs.\n"));
       return;
@@ -466,7 +466,7 @@ info_cuda_warps_command (char *arg)
   cuda_info_warps (arg, &warps, &num_warps);
 
   /* output message if the list is empty */
-  if (num_warps == 0)
+  if (num_warps == 0 && !ui_out_is_mi_like_p(uiout))
     {
       ui_out_field_string (uiout, NULL, _("No CUDA Warps.\n"));
       return;
@@ -629,7 +629,7 @@ info_cuda_lanes_command (char *arg)
   cuda_info_lanes (arg, &lanes, &num_lanes);
 
   /* output message if the list is empty */
-  if (num_lanes == 0)
+  if (num_lanes == 0 && !ui_out_is_mi_like_p(uiout))
     {
       ui_out_field_string (uiout, NULL, _("No CUDA Lanes.\n"));
       return;
@@ -805,7 +805,7 @@ info_cuda_kernels_command (char *arg)
   cuda_info_kernels_build (arg, &kernels, &num_kernels);
 
   /* output message if the list is empty */
-  if (num_kernels == 0)
+  if (num_kernels == 0 && !ui_out_is_mi_like_p(uiout))
     {
       ui_out_field_string (uiout, NULL, _("No CUDA kernels.\n"));
       return;
@@ -1128,7 +1128,7 @@ info_cuda_blocks_command (char *arg)
 
   cuda_info_blocks_build (arg, &blocks, &num_blocks);
 
-  if (num_blocks == 0)
+  if (num_blocks == 0 && !ui_out_is_mi_like_p(uiout))
     ui_out_field_string (uiout, NULL, _("No CUDA blocks.\n"));
   else if (cuda_options_coalescing ())
     info_cuda_blocks_print_coalesced (blocks, num_blocks);
@@ -1499,7 +1499,7 @@ info_cuda_threads_command (char *filter_string)
 
   cuda_info_threads_build (filter_string, &threads, &num_threads);
 
-  if (num_threads == 0)
+  if (num_threads == 0 && !ui_out_is_mi_like_p(uiout))
     ui_out_field_string (uiout, NULL, _("No CUDA threads.\n"));
   else if (cuda_options_coalescing ())
     info_cuda_threads_print_coalesced (threads, num_threads);

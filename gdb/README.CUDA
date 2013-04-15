@@ -173,3 +173,11 @@ CHANGES TO GDB SOURCE CODE REQUIRED FOR CUDA SUPPORT
   breakpoint resolution may fail.
 
   Also, the fullname should only be used when absolute.
+
+/* CUDA - special handling for assert */
+
+  When a device side assert is hit, the last frame in the user code is a compiler
+  generated function call to an internal syscall. In order to make the output
+  cleaner for end users, this frame is handled specially. When stopped at
+  the __assert_fail frame in device code, GDB will simply print the name of
+  the function and will skip printing any arguments.

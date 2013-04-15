@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -466,17 +466,20 @@ cuda_nat_resume (struct target_ops *ops, ptid_t ptid, int sstep, enum target_sig
   cuda_notification_mark_consumed ();
   cuda_sigtrap_restore_settings ();
 
-  /* A request for an ack by the application can be received after an
-     asynchronous device event is received by cuda-gdb. We need to check
-     if such an event is pending, otherwise the application might wait
-     forever for an ack from cuda-gdb */
-  cuda_api_get_next_event (&event);
-  cuda_event_found = event.kind != CUDBG_EVENT_INVALID;
-
-  if (cuda_event_found)
+  /* Check if a notification was received while a previous event was being
+     serviced. If yes, check the event queue for a pending event, and service
+     the event if one is found. */
+  if (cuda_notification_aliased_event ())
     {
-      cuda_process_events (&event);
-      sendAck = true;
+      cuda_notification_reset_aliased_event ();
+      cuda_api_get_next_event (&event);
+      cuda_event_found = event.kind != CUDBG_EVENT_INVALID;
+
+      if (cuda_event_found)
+        {
+          cuda_process_events (&event);
+          sendAck = true;
+        }
     }
 
   /* Acknowledge the CUDA debugger API */

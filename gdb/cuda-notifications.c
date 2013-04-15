@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -53,6 +53,9 @@
  * pending if no notification has been sent yet. The notification will be then
  * sent later, when notifications become unblocked, and the notification will go
  * from (producer) pending state to (producer) sent state.
+ * Additionally, if a notification is received before a previous event has been
+ * serviced, it is marked as an aliased_event, and an attempt is made to service
+ * it before the inferior is resumed. No new SIGTRAP is sent for an aliased_event.
  */
 
 #include <ctype.h>
@@ -75,6 +78,7 @@ static struct {
   bool initialized;       /* True if the mutex is initialized */
   bool blocked;           /* When blocked, SIGTRAPs will be marked pending and handled later. */
   bool pending_send;      /* True if a SIGTRAP was received while blocked was true. */
+  bool aliased_event;     /* True if a SIGTRAP was received while a previous event was being processed. */
   bool sent;              /* If already sent, do not send duplicates. */
   bool received;          /* True if the SIGTRAP has been received. */
   uint32_t tid;           /* The thread id of the thread to which the SIGTRAP was sent to. */
@@ -230,7 +234,10 @@ cuda_notification_notify (CUDBGEventCallbackData *data)
         }
     }
   else if (cuda_notification_info.sent)
-    cuda_notification_trace ("ignoring: another notification has already been sent");
+    {
+      cuda_notification_trace ("aliased event: will examine before resuming");
+      cuda_notification_info.aliased_event = true;
+    }
   else if (cuda_notification_info.pending_send)
     cuda_notification_trace ("ignoring: another notification is already pending");
   else if (cuda_notification_info.blocked)
@@ -241,6 +248,30 @@ cuda_notification_notify (CUDBGEventCallbackData *data)
     }
   else
     cuda_notification_send (data);
+
+  cuda_notification_release_lock ();
+}
+
+bool
+cuda_notification_aliased_event (void)
+{
+  bool aliased_event;
+
+  cuda_notification_acquire_lock ();
+
+  aliased_event = cuda_notification_info.aliased_event;
+
+  cuda_notification_release_lock ();
+
+  return aliased_event;
+}
+
+void
+cuda_notification_reset_aliased_event (void)
+{
+  cuda_notification_acquire_lock ();
+
+  cuda_notification_info.aliased_event = false;
 
   cuda_notification_release_lock ();
 }

@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -144,6 +144,20 @@ struct gdbarch_tdep
   int invalid_hi_regnum;
 };
 
+
+int
+cuda_special_regnum (struct gdbarch *gdbarch)
+{
+  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
+  return tdep->special_regnum;
+}
+
+int
+cuda_pc_regnum (struct gdbarch *gdbarch)
+{
+  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
+  return tdep->pc_regnum;
+}
 
 /* CUDA - siginfo */
 static int cuda_signo = 0;
@@ -2950,14 +2964,132 @@ cuda_value_of_builtin_frame_phys_pc_reg (struct frame_info *frame)
 static int
 cuda_convert_register_p (struct gdbarch *gdbarch, int regnum, struct type *type)
 {
-  int len = TYPE_LENGTH (type);
-
-  gdb_assert (len <= 4 || len == 8);
-
-  if (len == 8)
+  if (regnum == cuda_pc_regnum (gdbarch))
     return 1;
 
   return 0;
+}
+
+static void
+cuda_special_register_to_value (struct frame_info *frame, int regnum,
+                                struct type *type, gdb_byte *to)
+{
+  int i = 0;
+  bool high = false;
+  regmap_t regmap = NULL;
+  uint32_t *p = (uint32_t *)to;
+  uint32_t dev = 0, sm = 0, wp = 0, ln = 0;
+  uint32_t sp_regnum = 0, offset = 0, stack_addr = 0, val32 = 0;
+  struct value *val = NULL;
+  struct gdbarch *gdbarch = get_frame_arch (frame);
+
+  gdb_assert (regnum == cuda_special_regnum (gdbarch));
+
+  cuda_coords_get_current_physical (&dev, &sm, &wp, &ln);
+  regmap = regmap_get_search_result ();
+
+  for (i = 0; i < regmap_get_num_entries (regmap); ++i)
+    {
+      switch (regmap_get_class (regmap, i))
+        {
+          case REG_CLASS_REG_FULL:
+            regnum = regmap_get_register (regmap, i);
+            get_frame_register (frame, regnum, (gdb_byte*)&p[i]);
+            break;
+
+          case REG_CLASS_MEM_LOCAL:
+            offset = regmap_get_offset (regmap, i);
+            cuda_api_read_local_memory (dev, sm, wp, ln, offset,
+                                        (void*)&p[i], sizeof (p[i]));
+            break;
+
+          case REG_CLASS_LMEM_REG_OFFSET:
+            sp_regnum = regmap_get_sp_register (regmap, i);
+            offset = regmap_get_sp_offset (regmap, i);
+            get_frame_register (frame, sp_regnum, (gdb_byte*)&stack_addr);
+            cuda_api_read_local_memory (dev, sm, wp, ln, stack_addr + offset,
+                                        (void*)&p[i], sizeof (p[i]));
+            break;
+
+          case REG_CLASS_REG_HALF:
+            regnum = regmap_get_half_register (regmap, i, &high);
+            get_frame_register (frame, regnum, (gdb_byte*)&val32);
+            p[i] = high ? val32 >> 16 : val32 & 0xffff;
+            break;
+
+          case REG_CLASS_REG_CC:
+          case REG_CLASS_REG_PRED:
+          case REG_CLASS_REG_ADDR:
+            error (_("CUDA Register Class 0x%x not supported yet.\n"),
+                   regmap_get_class (regmap, i));
+            break;
+
+          default:
+            gdb_assert (0);
+        }
+    }
+}
+
+static void
+cuda_value_to_special_register (struct frame_info *frame, int regnum,
+                                struct type *type, const gdb_byte *from)
+{
+  int i = 0;
+  bool high = false;
+  regmap_t regmap = NULL;
+  uint32_t *p = (uint32_t *)from;
+  uint32_t dev = 0, sm = 0, wp = 0, ln = 0;
+  uint32_t sp_regnum = 0, offset = 0, stack_addr = 0, val32 = 0;
+  struct value *val = NULL;
+  struct gdbarch *gdbarch = get_frame_arch (frame);
+
+  gdb_assert (regnum == cuda_special_regnum (gdbarch));
+
+  cuda_coords_get_current_physical (&dev, &sm, &wp, &ln);
+  regmap = regmap_get_search_result ();
+
+  for (i = 0; i < regmap_get_num_entries (regmap); ++i)
+    {
+      switch (regmap_get_class (regmap, i))
+        {
+          case REG_CLASS_REG_FULL:
+            regnum = regmap_get_register (regmap, i);
+            put_frame_register (frame, regnum, (gdb_byte*)&p[i]);
+            break;
+
+          case REG_CLASS_MEM_LOCAL:
+            offset = regmap_get_offset (regmap, i);
+            cuda_api_write_local_memory (dev, sm, wp, ln, offset,
+                                        (void*)&p[i], sizeof (p[i]));
+            break;
+
+          case REG_CLASS_LMEM_REG_OFFSET:
+            sp_regnum = regmap_get_sp_register (regmap, i);
+            offset = regmap_get_sp_offset (regmap, i);
+            get_frame_register (frame, sp_regnum, (gdb_byte*)&stack_addr);
+            cuda_api_write_local_memory (dev, sm, wp, ln, stack_addr + offset,
+                                         (void*)&p[i], sizeof (p[i]));
+            break;
+
+          case REG_CLASS_REG_HALF:
+            regnum = regmap_get_half_register (regmap, i, &high);
+            get_frame_register (frame, regnum, (gdb_byte*)&val32);
+            val32 = high ? (val32 & 0xffff)     | (p[i] << 16)
+                         : (val32 & 0xffff0000) | (p[i] & 0xffff);
+            put_frame_register (frame, regnum, (gdb_byte*)&val32);
+            break;
+
+          case REG_CLASS_REG_CC:
+          case REG_CLASS_REG_PRED:
+          case REG_CLASS_REG_ADDR:
+            error (_("CUDA Register Class 0x%x not supported yet.\n"),
+                   regmap_get_class (regmap, i));
+            break;
+
+          default:
+            gdb_assert (0);
+        }
+    }
 }
 
 /* Read a value of type TYPE from register REGNUM in frame FRAME, and
@@ -2967,14 +3099,13 @@ cuda_register_to_value (struct frame_info *frame, int regnum,
                         struct type *type, gdb_byte *to)
 {
   struct gdbarch *gdbarch = get_frame_arch (frame);
-  int len = TYPE_LENGTH (type);
 
-  gdb_assert (len <= 4 || len == 8);
-
-  get_frame_register (frame, regnum, to);
-
-  if (len == 8 && register_size (gdbarch, regnum) == 4)
-    get_frame_register (frame, regnum + 1, to + 4);
+  if (regnum == cuda_special_regnum (gdbarch))
+    cuda_special_register_to_value (frame, regnum, type, to);
+  else if (regnum == cuda_pc_regnum (gdbarch))
+    gdb_assert (0); // use cuda_frame_prev_pc
+  else
+    get_frame_register (frame, regnum, to);
 }
 
 /* Write the contents FROM of a value of type TYPE into register
@@ -2984,22 +3115,32 @@ cuda_value_to_register (struct frame_info *frame, int regnum,
                         struct type *type, const gdb_byte *from)
 {
   struct gdbarch *gdbarch = get_frame_arch (frame);
-  int len = TYPE_LENGTH (type);
 
-  gdb_assert (len <= 4 || len == 8);
-
-  put_frame_register (frame, regnum, from);
-
-  if (len == 8 && register_size (gdbarch, regnum) == 4)
-    put_frame_register (frame, regnum + 1, from + 4);
+  if (regnum == cuda_special_regnum (gdbarch))
+    cuda_value_to_special_register (frame, regnum, type, from);
+  else if (regnum == cuda_pc_regnum (gdbarch))
+    gdb_assert (0); // cannot write PC
+  else
+    put_frame_register (frame, regnum, from);
 }
 
 static struct value*
 cuda_value_from_register (struct type *type, int regnum, struct frame_info *frame)
 {
   int level = frame_relative_level (frame);
+  struct gdbarch *gdbarch = get_frame_arch (frame);
   struct frame_info *next_frame = NULL;
   struct value *val = NULL;
+  ULONGEST to = (ULONGEST)0ULL;
+
+  /* Special registers are frame-independent by construction. But they must be
+     evaluated lazily so that we get both value and address if needed. */
+  if (regnum == cuda_special_regnum (gdbarch))
+    {
+      val = default_value_from_register (type, regnum, frame);
+      set_value_lazy (val, 1);
+      return val;
+    }
 
   /* That should not happen. But the DWARF info may encode locations with
      DW_OP_regx, which means that the variable is in a register, no matter the
@@ -3011,6 +3152,8 @@ cuda_value_from_register (struct type *type, int regnum, struct frame_info *fram
     {
       next_frame = get_next_frame (frame);
       val = cuda_frame_prev_register (next_frame, NULL, regnum);
+      if (type && !TYPE_CUDA_REG(type))
+        deprecated_set_value_type (val, type);
       return val;
     }
 
