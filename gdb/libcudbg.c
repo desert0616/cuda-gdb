@@ -22,6 +22,7 @@
 #include <defs.h>
 #include <gdb_assert.h>
 #include <cuda-options.h>
+#include <cuda-tdep.h>
 #include <libcudbg.h>
 #include <libcudbgipc.h>
 #include <cudadebugger.h>
@@ -99,8 +100,13 @@ static CUDBGResult
 cudbgPreInitialize(void)
 {
     CUDBGResult res;
+    int ret;
 
     if (!cudbgPreInitComplete) {
+        ret = cuda_gdb_session_create ();
+        if (ret)
+            return CUDBG_ERROR_COMMUNICATION_FAILURE;
+
         res = cudbgipcInitializeCommIn();
         if (res != CUDBG_SUCCESS)
             return CUDBG_ERROR_COMMUNICATION_FAILURE;
@@ -175,6 +181,8 @@ cudbgPostFinalize(void)
         cudbg_trace ("post finalize error finalizing ipc (res = %d)\n", res);
         return res;
     }
+
+    cuda_gdb_session_destroy ();
 
     cudbgPreInitComplete = false;
     cudbgDebugClientCallback = NULL;
@@ -559,6 +567,37 @@ cudbgReadTextureMemory(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t id, uint
     ipcreq.apiData.request.wp  = wp;
     ipcreq.apiData.request.dim = dim;
     ipcreq.apiData.request.texid = id;
+    ipcreq.apiData.request.sz = sz;
+    memcpy(ipcreq.apiData.request.coords, coords, dim * sizeof(*coords));
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_APPEND(buf, sz);
+    CUDBG_IPC_REQUEST((void *)&d);
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    res = ipcres->result;
+
+    p = d + sizeof ipcreq;
+    memcpy (buf, p, sz);
+
+    return res;
+}
+
+static CUDBGResult
+cudbgReadTextureMemoryBindless(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t texSymtabIndex, uint32_t dim, uint32_t *coords, void *buf, uint32_t sz)
+{
+    char *d, *p;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+    CUDBGResult res;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    memset(buf, 0, sz);
+    ipcreq.kind = CUDBGAPIREQ_readTextureMemoryBindless;
+    ipcreq.apiData.request.dev = dev;
+    ipcreq.apiData.request.sm  = sm;
+    ipcreq.apiData.request.wp  = wp;
+    ipcreq.apiData.request.dim = dim;
+    ipcreq.apiData.request.texid = texSymtabIndex;
     ipcreq.apiData.request.sz = sz;
     memcpy(ipcreq.apiData.request.coords, coords, dim * sizeof(*coords));
 
@@ -1886,6 +1925,9 @@ static const struct CUDBGAPI_st cudbgCurrentApi = {
     cudbgSingleStepWarp,
     cudbgSetNotifyNewEventCallback,
     cudbgReadSyscallCallDepth,
+
+    /* 4.2 Extensions */
+    cudbgReadTextureMemoryBindless,
 };
 
 CUDBGResult

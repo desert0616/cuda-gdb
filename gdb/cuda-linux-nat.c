@@ -904,7 +904,7 @@ cuda_update_cudart_symbols (void)
   if (!cuda_cudart_symbols.created)
     {
       snprintf (tmp_sym_file, sizeof (tmp_sym_file),
-                "%s/builtins.XXXXXX", cuda_gdb_tmpdir_getdir ());
+                "%s/builtins.XXXXXX", cuda_gdb_session_get_dir ());
 
       if (!(fd = mkstemp (tmp_sym_file)))
         error (_("Failed to create the cudart symbol file."));

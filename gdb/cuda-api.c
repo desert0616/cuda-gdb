@@ -438,6 +438,20 @@ cuda_api_read_texture_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t i
 }
 
 void
+cuda_api_read_texture_memory_bindless (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t tex_symtab_index, uint32_t dim, uint32_t *coords, void *buf, uint32_t sz)
+{
+  CUDBGResult res;
+
+  if (!api_initialized)
+    return;
+
+  res = cudbgAPI->readTextureMemoryBindless (dev, sm, wp, tex_symtab_index, dim, coords, buf, sz);
+  if (res != CUDBG_SUCCESS)
+    error (_("Error: Failed to read texture memory of texture %u dim %u coords %u"
+             " on device %u sm %u warp %u (error=%u)."), tex_symtab_index, dim, *coords, dev, sm, wp, res);
+}
+
+void
 cuda_api_read_local_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint64_t addr, void *buf, uint32_t sz)
 {
   CUDBGResult res;

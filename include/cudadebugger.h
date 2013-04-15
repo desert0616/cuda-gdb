@@ -87,8 +87,8 @@ typedef unsigned char bool;
 /*--------------------------------- API Version ------------------------------*/
 
 #define CUDBG_API_VERSION_MAJOR      4  /* Major release version number */
-#define CUDBG_API_VERSION_MINOR      1  /* Minor release version number */
-#define CUDBG_API_VERSION_REVISION  57  /* Revision (build) number */
+#define CUDBG_API_VERSION_MINOR      2  /* Minor release version number */
+#define CUDBG_API_VERSION_REVISION  61  /* Revision (build) number */
 
 /*---------------------------------- Constants -------------------------------*/
 
@@ -131,6 +131,7 @@ typedef enum {
 #define CUDBG_APICLIENT_PID          cudbgApiClientPid
 #define CUDBG_DEBUGGER_INITIALIZED   cudbgDebuggerInitialized
 #define CUDBG_APICLIENT_REVISION     cudbgApiClientRevision
+#define CUDBG_SESSION_ID             cudbgSessionId
 
 /*----------------------------- API Return Types -----------------------------*/
 
@@ -492,6 +493,9 @@ struct CUDBGAPI_st {
     CUDBGResult (*singleStepWarp)(uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warpMask);
     CUDBGResult (*setNotifyNewEventCallback)(CUDBGNotifyNewEventCallback callback);
     CUDBGResult (*readSyscallCallDepth)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32_t *depth);
+
+    /* 4.2 Extensions */
+    CUDBGResult (*readTextureMemoryBindless)(uint32_t devId, uint32_t vsm, uint32_t wp, uint32_t texSymtabIndex, uint32_t dim, uint32_t *coords, void *buf, uint32_t sz);
 };
 
 #ifdef __cplusplus

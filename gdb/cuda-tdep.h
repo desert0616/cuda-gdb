@@ -222,6 +222,12 @@ int  cuda_gdb_get_tid (ptid_t ptid);
 int  cuda_get_signo (void);
 void cuda_set_signo (int signo);
 
+/* Session Management */
+int         cuda_gdb_session_create (void);
+void        cuda_gdb_session_destroy (void);
+const char *cuda_gdb_session_get_dir (void);
+uint32_t    cuda_gdb_session_get_id (void);
+
 
 #endif
 

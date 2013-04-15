@@ -83,6 +83,8 @@ CuDim3 gridDim  = { 0, 0, 0};
 CuDim3 blockDim = { 0, 0, 0};
 bool cuda_initialized = false;
 static bool inferior_in_debug_mode = false;
+static char cuda_gdb_session_dir[CUDA_GDB_TMP_BUF_SIZE] = {0};
+static uint32_t cuda_gdb_session_id = 0;
 
 /* For Mac OS X */
 bool cuda_platform_supports_tid (void)
@@ -1362,8 +1364,10 @@ cuda_initialize_target ()
   CORE_ADDR rpcFlagAddr;
   CORE_ADDR gdbPidAddr;
   CORE_ADDR apiClientRevAddr;
+  CORE_ADDR sessionIdAddr;
   uint32_t pid;
   uint32_t apiClientRev = CUDBG_API_VERSION_REVISION;
+  uint32_t sessionId = cuda_gdb_session_get_id ();
 
   if (!inferior_in_debug_mode)
     {
@@ -1375,11 +1379,13 @@ cuda_initialize_target ()
           pid = getpid ();
           gdbPidAddr = cuda_get_symbol_address (_STRING_(CUDBG_APICLIENT_PID));
           apiClientRevAddr = cuda_get_symbol_address (_STRING_(CUDBG_APICLIENT_REVISION));
-          if (rpcFlagAddr && gdbPidAddr && apiClientRevAddr)
+          sessionIdAddr = cuda_get_symbol_address (_STRING_(CUDBG_SESSION_ID));
+          if (rpcFlagAddr && gdbPidAddr && apiClientRevAddr && sessionIdAddr)
             {
               target_write_memory (gdbPidAddr, (char*)&pid, sizeof (pid));
               target_write_memory (rpcFlagAddr, &one, 1);
               target_write_memory (apiClientRevAddr, (char*)&apiClientRev, sizeof(apiClientRev));
+              target_write_memory (sessionIdAddr, (char*)&sessionId, sizeof(sessionId));
               inferior_in_debug_mode = true;
             }
           else
@@ -1590,6 +1596,7 @@ cuda_read_memory_partial (CORE_ADDR address, gdb_byte *buf, int len, struct type
   uint32_t dev, sm, wp, ln;
   uint32_t tex_id, dim;
   uint32_t *coords;
+  bool is_bindless;
 
   /* No CUDA. Return 1 */
   if (!cuda_debugging_enabled)
@@ -1619,8 +1626,11 @@ cuda_read_memory_partial (CORE_ADDR address, gdb_byte *buf, int len, struct type
         cuda_api_read_shared_memory (dev, sm, wp, address, buf, len);
       else if (TYPE_CUDA_TEX(type))
         {
-          cuda_texture_dereference_tex_contents (address, &tex_id, &dim, &coords);
-          cuda_api_read_texture_memory (dev, sm, wp, tex_id, dim, coords, buf, len);
+          cuda_texture_dereference_tex_contents (address, &tex_id, &dim, &coords, &is_bindless);
+          if (is_bindless)
+            cuda_api_read_texture_memory_bindless (dev, sm, wp, tex_id, dim, coords, buf, len);
+          else
+            cuda_api_read_texture_memory (dev, sm, wp, tex_id, dim, coords, buf, len);
         }
       else if (TYPE_CUDA_LOCAL(type))
         cuda_api_read_local_memory (dev, sm, wp, ln, address, buf, len);
@@ -3338,3 +3348,58 @@ cuda_is_cuda_gdbarch (struct gdbarch *arch)
   else
     return false;
 }
+
+/********* Session Management **********/
+
+int
+cuda_gdb_session_create (void)
+{
+  int ret = 0;
+  bool override_umask = false;
+  bool dir_exists = false;
+
+  /* Check if the previous session was cleaned up */
+  if (cuda_gdb_session_dir[0] != '\0')
+    error (_("The directory for the previous CUDA session was not cleaned up. "
+             "Try deleting %s and retrying."), cuda_gdb_session_dir);
+
+  cuda_gdb_session_id++;
+
+  snprintf (cuda_gdb_session_dir, CUDA_GDB_TMP_BUF_SIZE,
+            "%s/session%d", cuda_gdb_tmpdir_getdir (),
+            cuda_gdb_session_id);
+
+  cuda_trace ("new session %d created", cuda_gdb_session_id);
+
+  ret = cuda_gdb_dir_create (cuda_gdb_session_dir, S_IRWXU | S_IRWXG,
+                             override_umask, &dir_exists);
+
+  if (!ret && dir_exists)
+    error (_("A stale CUDA session directory was found. "
+             "Try deleting %s and retrying."), cuda_gdb_session_dir);
+
+  return ret;
+}
+
+void
+cuda_gdb_session_destroy (void)
+{
+  cuda_gdb_dir_cleanup_files (cuda_gdb_session_dir);
+
+  rmdir (cuda_gdb_session_dir);
+
+  memset (cuda_gdb_session_dir, 0, CUDA_GDB_TMP_BUF_SIZE);
+}
+
+uint32_t
+cuda_gdb_session_get_id (void)
+{
+  return cuda_gdb_session_id;
+}
+
+const char *
+cuda_gdb_session_get_dir (void)
+{
+    return cuda_gdb_session_dir;
+}
+

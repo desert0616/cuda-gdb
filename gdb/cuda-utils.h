@@ -29,6 +29,13 @@ void cuda_utils_initialize (void);
 /* Get the gdb temporary directory path */
 extern const char* cuda_gdb_tmpdir_getdir (void);
 
+/* Create a directory */
+int cuda_gdb_dir_create (const char *dir_name, uint32_t permissions,
+                         bool override_umask, bool *dir_exists);
+
+/* Clean up files in a directory */
+void cuda_gdb_dir_cleanup_files (char* dirpath);
+
 /* cuda debugging clock, incremented at each resume/wait cycle */
 cuda_clock_t cuda_clock (void);
 void         cuda_clock_increment (void);

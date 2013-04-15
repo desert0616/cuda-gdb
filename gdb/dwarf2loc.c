@@ -183,6 +183,52 @@ dwarf_expr_read_mem (void *baton, gdb_byte *buf, CORE_ADDR addr, size_t len)
   read_memory (addr, buf, len);
 }
 
+/* 3-7-12 andrewg@cray.com: Contributed by Cray Inc. */
+/* Read memory at ADDR (length LEN) for address class addr_space into BUF.  */
+static void
+dwarf_expr_read_mem_space (void *baton, gdb_byte *buf, ULONGEST addr_space,
+			 CORE_ADDR addr, size_t len)
+{
+  /* FIXME: andrewg@cray.com: Note that so far we only know about CUDA 
+     architectures that implement the concept of seperate address spaces. This 
+     is probably a flawed way of doing things...  */
+  struct dwarf_expr_baton *debaton = (struct dwarf_expr_baton *) baton;
+  struct gdbarch *gdbarch = get_frame_arch (debaton->frame);
+  
+  if (gdbarch_address_class_type_flags_p (gdbarch))
+    {
+      struct type *data_ptr_type;
+      int instance_flags = 0;
+      
+      data_ptr_type = builtin_type (gdbarch)->builtin_data_ptr;
+      data_ptr_type->length = len;
+      /* We need to set the TYPE_INSTANCE_FLAGS for the requested address
+         class so that the cuda_read_memory_partial function can call the
+         correct cuda_api_read_* function.  */
+      instance_flags = TYPE_INSTANCE_FLAGS (data_ptr_type);
+      instance_flags &= ~TYPE_INSTANCE_FLAG_ADDRESS_CLASS_ALL;
+      /* Assume that the addr_space identifier cooresponds to either byte_size
+         or the addr_class depending on the arch. 
+         FIXME: andrewg@cray.com: This assumes that the target architecture 
+         doesn't use both byte_size and addr_class to define a address class. */
+      instance_flags |= gdbarch_address_class_type_flags (gdbarch, addr_space, 
+      											addr_space);
+      TYPE_INSTANCE_FLAGS (data_ptr_type) = instance_flags;
+      
+      /* FIXME: andrewg@cray.com: At this point things are borked. We should be
+         calling the gdbarch_integer_to_address function to convert the addr to
+         its proper address based on the instance_flags of the type, and then we
+         should be calling the read_memory function for the target after that.
+         Since we do not handle reading memory in the target layer for cuda, we
+         need to call cuda_read_memory_partial here. This breaks other 
+         architectures that might be using this function.  */
+      cuda_read_memory_partial (addr, buf, len, data_ptr_type);
+      return;
+    }
+    
+  read_memory (addr, buf, len);
+}
+
 /* Using the frame specified in BATON, find the location expression
    describing the frame base.  Return a pointer to it in START and
    its length in LENGTH.  */
@@ -950,6 +996,7 @@ dwarf2_evaluate_loc_desc (struct type *type, struct frame_info *frame,
   ctx->baton = &baton;
   ctx->read_reg = dwarf_expr_read_reg;
   ctx->read_mem = dwarf_expr_read_mem;
+  ctx->read_mem_space = dwarf_expr_read_mem_space;
   ctx->get_frame_base = dwarf_expr_frame_base;
   ctx->get_frame_cfa = dwarf_expr_frame_cfa;
   ctx->get_tls_address = dwarf_expr_tls_address;
@@ -1071,6 +1118,15 @@ needs_frame_read_mem (void *baton, gdb_byte *buf, CORE_ADDR addr, size_t len)
   memset (buf, 0, len);
 }
 
+/* 3-7-12 andrewg@cray.com: Contributed by Cray Inc. */
+/* Reads from memory segments do not require a frame.  */
+static void
+needs_frame_read_mem_space (void *baton, gdb_byte *buf, ULONGEST addr_space,
+			     CORE_ADDR addr, size_t len)
+{
+  memset (buf, 0, len);
+}
+
 /* Frame-relative accesses do require a frame.  */
 static void
 needs_frame_frame_base (void *baton, const gdb_byte **start, size_t * length)
@@ -1140,6 +1196,7 @@ dwarf2_loc_desc_needs_frame (const gdb_byte *data, unsigned short size,
   ctx->baton = &baton;
   ctx->read_reg = needs_frame_read_reg;
   ctx->read_mem = needs_frame_read_mem;
+  ctx->read_mem_space = needs_frame_read_mem_space;
   ctx->get_frame_base = needs_frame_frame_base;
   ctx->get_frame_cfa = needs_frame_frame_cfa;
   ctx->get_tls_address = needs_frame_tls_address;

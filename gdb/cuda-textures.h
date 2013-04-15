@@ -41,7 +41,8 @@ void cuda_texture_create_kernel_mapping (struct symbol *symbol,
                                          struct objfile *objfile);
 void cuda_texture_read_tex_contents (CORE_ADDR addr, gdb_byte *buf);
 void cuda_texture_dereference_tex_contents (CORE_ADDR addr, uint32_t *tex_id,
-                                            uint32_t *dim, uint32_t **coords);
+                                            uint32_t *dim, uint32_t **coords,
+                                            bool *is_bindless);
 void cuda_cleanup_tex_maps (void);
 
 #endif

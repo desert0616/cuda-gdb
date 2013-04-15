@@ -146,6 +146,9 @@ typedef enum {
     /* 4.1 Extensions */
     CUDBGAPIREQ_getHostAddrFromDeviceAddr,
     CUDBGAPIREQ_readSyscallCallDepth,
+
+    /* 4.2 Extensions */
+    CUDBGAPIREQ_readTextureMemoryBindless,
 } CUDBGAPIREQ_t;
 
 START_PACKED_ALIGNMENT;

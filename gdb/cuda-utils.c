@@ -43,13 +43,39 @@ static int cuda_gdb_lock_fd;
 static char* cuda_gdb_tmp_dir;
 static uint64_t dev_mask;
 
-static void
-cuda_gdb_tmpdir_create_basedir ()
+int
+cuda_gdb_dir_create (const char *dir_name, uint32_t permissions,
+                     bool override_umask, bool *dir_exists)
 {
   DIR* dir;
   struct stat st;
-  mode_t old_umask;
+  mode_t old_umask = 0;
   int ret = 0;
+
+  if (stat (dir_name, &st) || !(S_ISDIR(st.st_mode)))
+    {
+      /* Save the old umask and reset it */
+      if (override_umask)
+        old_umask = umask (0);
+
+      ret = mkdir (dir_name, permissions);
+
+      /* Restore the old umask */
+      if (override_umask)
+        umask (old_umask);
+    }
+  else
+    *dir_exists = true;
+  
+  return ret;
+}
+
+static void
+cuda_gdb_tmpdir_create_basedir ()
+{
+  int ret = 0;
+  bool dir_exists = false;
+  bool override_umask = true;
 
   if (getenv ("TMPDIR"))
     snprintf (cuda_gdb_tmp_basedir, sizeof (cuda_gdb_tmp_basedir), 
@@ -58,24 +84,16 @@ cuda_gdb_tmpdir_create_basedir ()
     snprintf (cuda_gdb_tmp_basedir, sizeof (cuda_gdb_tmp_basedir),
               "/tmp/cuda-dbg");
 
-  if (stat (cuda_gdb_tmp_basedir, &st) || !(S_ISDIR(st.st_mode)))
-    {
-      /* Save the old umask and reset it */
-      old_umask = umask (0);
-
-      ret = mkdir (cuda_gdb_tmp_basedir, S_IRWXU | S_IRWXG | S_IRWXO);
-
-      /* Restore the old umask */
-      umask (old_umask);
-
-      if (ret)
-        error (_("Error creating temporary directory %s\n"),
-               cuda_gdb_tmp_basedir);
-    }
+  ret = cuda_gdb_dir_create (cuda_gdb_tmp_basedir,
+                             S_IRWXU | S_IRWXG | S_IRWXO,
+                             override_umask, &dir_exists);
+  if (ret)
+    error (_("Error creating temporary directory %s\n"),
+           cuda_gdb_tmp_basedir);
 }
 
-static void
-cuda_gdb_tmpdir_cleanup_files (char* dirpath)
+void
+cuda_gdb_dir_cleanup_files (char* dirpath)
 {
   char path[CUDA_GDB_TMP_BUF_SIZE];
   DIR* dir = opendir (dirpath);
@@ -86,8 +104,16 @@ cuda_gdb_tmpdir_cleanup_files (char* dirpath)
 
   while ((dir_ent = readdir (dir)))
     {
+      if (!strcmp(dir_ent->d_name,".") ||
+          !strcmp(dir_ent->d_name, ".."))
+        continue;
       snprintf (path, sizeof (path), "%s/%s", dirpath, dir_ent->d_name);
-      unlink (path);
+      if (dir_ent->d_type == DT_DIR) {
+        cuda_gdb_dir_cleanup_files (path);
+        rmdir (path);
+      }
+      else
+        unlink (path);
     };
 
   closedir (dir);
@@ -96,7 +122,7 @@ cuda_gdb_tmpdir_cleanup_files (char* dirpath)
 static void
 cuda_gdb_tmpdir_cleanup_dir (char* dirpath)
 {
-  cuda_gdb_tmpdir_cleanup_files (dirpath);
+  cuda_gdb_dir_cleanup_files (dirpath);
   rmdir (dirpath);
 }
 
@@ -311,18 +337,20 @@ static void
 cuda_gdb_tmpdir_setup (void)
 {
   char dirpath [CUDA_GDB_TMP_BUF_SIZE];
-  struct stat st;
+  int ret;
+  bool dir_exists = false;
+  bool override_umask = false;
 
   snprintf (dirpath, sizeof (dirpath), "%s/%u", cuda_gdb_tmp_basedir,
             getpid ());
 
-  if (stat (dirpath, &st) || !(S_ISDIR(st.st_mode)))
-    {
-      if (mkdir (dirpath, S_IRWXU | S_IRWXG))
-        error (_("Error creating temporary directory %s\n"), dirpath);
-    }
-  else
-      cuda_gdb_tmpdir_cleanup_files (dirpath);
+  ret = cuda_gdb_dir_create (dirpath, S_IRWXU | S_IRWXG, override_umask,
+                             &dir_exists); 
+  if (ret)
+    error (_("Error creating temporary directory %s\n"), dirpath);
+
+  if (dir_exists)
+    cuda_gdb_dir_cleanup_files (dirpath);
 
   cuda_gdb_tmp_dir = xmalloc (strlen (dirpath) + 1);
   strncpy (cuda_gdb_tmp_dir, dirpath, strlen (dirpath) + 1);

@@ -87,6 +87,10 @@ struct dwarf_expr_context
 
   /* Read LENGTH bytes at ADDR into BUF.  */
   void (*read_mem) (void *baton, gdb_byte *buf, CORE_ADDR addr, size_t length);
+  
+  /* Read LENGTH bytes at ADDR of the address space ADDR_SPACE into BUF.  */
+  void (*read_mem_space) (void *baton, gdb_byte *buf, ULONGEST addr_space, 
+                  CORE_ADDR addr, size_t length);
 
   /* Return the location expression for the frame base attribute, in
      START and LENGTH.  The result must be live until the current

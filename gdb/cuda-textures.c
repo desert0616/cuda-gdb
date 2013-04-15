@@ -56,6 +56,7 @@ struct {
   uint32_t address;
   uint32_t dim;
   uint32_t coords[TEXTURE_DIM_MAX];
+  bool     is_bindless;
 } texture_address;
 
 typedef struct {
@@ -113,6 +114,20 @@ cuda_create_tex_map (struct objfile *objfile,
 
   gdb_assert (objfile);
 
+  if ((EF_CUDA_SM_MASK & elf_header->e_flags) >= EF_CUDA_SM30)
+    {
+       /* For SM_30 and higher, we only need to store the symindex. */
+       new_map = (cuda_tex_map_t*)malloc (sizeof (*new_map));
+       new_map->kernel_name = 0;
+       new_map->texid = 0;
+       new_map->symindex = symindex;
+       new_map->use_symindex = true;
+       new_map->next = NULL;
+       new_map->next_maps = NULL;
+       rVal = new_map;
+       goto done;
+    }
+
   /* Find all the ".nv.info.*" sections */
   for (i = 0; i < objfile->obfd->tdata.elf_obj_data->num_elf_sections; ++i)
     {
@@ -150,10 +165,7 @@ cuda_create_tex_map (struct objfile *objfile,
                   new_map->kernel_name = section->name + prefixlen;
                   new_map->texid = slot->slot;
                   new_map->symindex = symindex;
-                  if ((EF_CUDA_SM_MASK & elf_header->e_flags) >= EF_CUDA_SM30)
-                    new_map->use_symindex = true;
-                  else
-                    new_map->use_symindex = false;
+                  new_map->use_symindex = false;
                   new_map->next = NULL;
                   new_map->next_maps = NULL;
                   if (prev_map)
@@ -173,6 +185,7 @@ cuda_create_tex_map (struct objfile *objfile,
       objfile->obfd->iovec->bseek (objfile->obfd, prev_location, 0);
     }
 
+done:
   if (buf)
     free (buf);
 
@@ -219,6 +232,12 @@ cuda_find_tex_id (cuda_tex_map_t *mapping,
 
   gdb_assert (texid);
 
+  if (mapping && mapping->use_symindex)
+    {
+      *texid = mapping->symindex;
+      return true;
+    }
+
   /* get the current kernel's name
      NOTE: we want the mangled name, cuda_current_kernel_name gives demangled */
   cuda_coords_get_current_physical (&dev, &sm, &wp, &ln);
@@ -240,10 +259,7 @@ cuda_find_tex_id (cuda_tex_map_t *mapping,
     {
       if (mapping->kernel_name && !strcmp_iw (name, mapping->kernel_name))
         {
-          if (mapping->use_symindex)
-            *texid = mapping->symindex;
-          else
-            *texid = mapping->texid;
+          *texid = mapping->texid;
           return true;
         }
       else
@@ -423,6 +439,7 @@ cuda_texture_read_tex_contents (CORE_ADDR addr, gdb_byte *buf)
       error (_("Texture not found in current kernel."));
 
     *(uint32_t*)buf = tex_id;
+    texture_address.is_bindless = kernel_to_tex_id->use_symindex;
   }
 
   cuda_textures_trace ("read tex contents for address %lx buf %lx",
@@ -431,7 +448,8 @@ cuda_texture_read_tex_contents (CORE_ADDR addr, gdb_byte *buf)
 
 void
 cuda_texture_dereference_tex_contents (CORE_ADDR addr, uint32_t *tex_id,
-                                       uint32_t *dim, uint32_t **coords)
+                                       uint32_t *dim, uint32_t **coords,
+                                       bool *is_bindless)
 {
   if (addr != (CORE_ADDR)(uintptr_t)&texture_address)
     error (_("Error occured whiling reading texture memory."));
@@ -439,6 +457,7 @@ cuda_texture_dereference_tex_contents (CORE_ADDR addr, uint32_t *tex_id,
   *tex_id = texture_address.address;
   *dim    = texture_address.dim;
   *coords = texture_address.coords;
+  *is_bindless = texture_address.is_bindless;
 
   cuda_textures_trace ("dereference tex contents for address %lx "
                        "to tex_id %d dim %d coords (%d,%d,%d,%d)",

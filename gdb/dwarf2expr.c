@@ -688,6 +688,28 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 	    result = extract_unsigned_integer (buf, addr_size, byte_order);
 	    break;
 	  }
+	
+	/* 3-7-12 andrewg@cray.com: Contributed by Cray Inc. */
+	case DW_OP_xderef:
+	case DW_OP_xderef_size:
+	  {
+	    int addr_size = (op == DW_OP_xderef ? ctx->addr_size : *op_ptr++);
+	    gdb_byte *buf = alloca (addr_size);
+	    CORE_ADDR addr;
+	    ULONGEST addr_ident;
+	    
+	    /* Get the address from the stack */
+	    addr = dwarf_expr_fetch_address (ctx, 0);
+	    dwarf_expr_pop (ctx);
+	    
+	    /* Get the address space identifier from the stack */
+	    addr_ident = dwarf_expr_fetch (ctx, 0);
+	    dwarf_expr_pop (ctx);
+	    
+	    (ctx->read_mem_space) (ctx->baton, buf, addr_ident, addr, addr_size);
+	    result = extract_unsigned_integer (buf, addr_size, byte_order);
+	    break;
+	  }
 
 	case DW_OP_abs:
 	case DW_OP_neg:

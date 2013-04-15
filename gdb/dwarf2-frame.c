@@ -324,6 +324,19 @@ read_mem (void *baton, gdb_byte *buf, CORE_ADDR addr, size_t len)
   read_memory (addr, buf, len);
 }
 
+/* 3-7-12 andrewg@cray.com: Contributed by Cray Inc. */
+/* Read memory at ADDR (length LEN) for address class addr_space into BUF.  */
+static void
+no_read_mem_space (void *baton, gdb_byte *buf, ULONGEST addr_space,
+			 CORE_ADDR addr, size_t len)
+{
+  /* FIXME: andrewg@cray.com: This should be possible to implement, however
+     including cuda-tdep.h here redefines some things. If/when the read_memory
+     functionality for cuda is pushed down into the target, implement this.  */
+  internal_error (__FILE__, __LINE__,
+		  _("Support for DW_OP_xderef is unimplemented"));
+}
+
 static void
 no_get_frame_base (void *baton, const gdb_byte **start, size_t *length)
 {
@@ -404,6 +417,7 @@ execute_stack_op (const gdb_byte *exp, ULONGEST len, int addr_size,
   ctx->baton = this_frame;
   ctx->read_reg = read_reg;
   ctx->read_mem = read_mem;
+  ctx->read_mem_space = no_read_mem_space;
   ctx->get_frame_base = no_get_frame_base;
   ctx->get_frame_cfa = no_get_frame_cfa;
   ctx->get_tls_address = no_get_tls_address;

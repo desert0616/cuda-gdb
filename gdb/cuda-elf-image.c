@@ -186,7 +186,7 @@ cuda_elf_image_load (elf_image_t elf_image)
   module_id  = module_get_id (elf_image->module);
   snprintf (object_file_path, sizeof (object_file_path),
             "%s/elf.%"PRIx64".%"PRIx64".o.XXXXXX",
-            cuda_gdb_tmpdir_getdir (), context_id, module_id);
+            cuda_gdb_session_get_dir (), context_id, module_id);
 
   object_file_fd = mkstemp (object_file_path);
   if (object_file_fd == -1)

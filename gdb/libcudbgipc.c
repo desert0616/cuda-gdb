@@ -45,7 +45,7 @@ static CUDBGResult
 cudbgipcCreate(CUDBGIPC_t *ipc, int from, int to, int flags)
 {
     snprintf(ipc->name, sizeof (ipc->name), "%s/pipe.%d.%d", 
-             cuda_gdb_tmpdir_getdir (), from, to);
+             cuda_gdb_session_get_dir (), from, to);
 
     /* If the inferior hasn't been properly set up for cuda
        debugging yet, the fifo should not exist (it is stale).
