@@ -30,6 +30,7 @@
 #include <cuda-options.h>
 #include <cuda-tdep.h>
 #include <cuda-utils.h>
+#include <libcudbg.h>
 #include <libcudbgipc.h>
 #include <cudadebugger.h>
 
@@ -128,7 +129,10 @@ cudbgipcInitializeCommIn(void)
 {
     CUDBGResult res;
 
-    res = cudbgipcCreate(&commIn, 999, 1000, O_RDONLY | O_NONBLOCK);
+    res = cudbgipcCreate(&commIn,
+                         LIBCUDBG_PIPE_ENDPOINT_RPCD,
+                         LIBCUDBG_PIPE_ENDPOINT_DEBUG_CLIENT,
+                         O_RDONLY | O_NONBLOCK);
     if (res != CUDBG_SUCCESS)
         return res;
 
@@ -141,7 +145,10 @@ cudbgipcInitializeCommOut(void)
 {
     CUDBGResult res;
 
-    res = cudbgipcCreate(&commOut, 1000, 999, O_WRONLY);
+    res = cudbgipcCreate(&commOut,
+                         LIBCUDBG_PIPE_ENDPOINT_DEBUG_CLIENT,
+                         LIBCUDBG_PIPE_ENDPOINT_RPCD,
+                         O_WRONLY);
     if (res != CUDBG_SUCCESS)
         return res;
 
@@ -154,7 +161,10 @@ cudbgipcInitializeCommCB(void)
 {
     CUDBGResult res;
 
-    res = cudbgipcCreate(&commCB, 1001, 1002, O_RDONLY | O_NONBLOCK);
+    res = cudbgipcCreate(&commCB,
+                         LIBCUDBG_PIPE_ENDPOINT_RPCD_CB,
+                         LIBCUDBG_PIPE_ENDPOINT_DEBUG_CLIENT_CB,
+                         O_RDONLY | O_NONBLOCK);
     if (res != CUDBG_SUCCESS)
         return res;
 

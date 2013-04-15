@@ -22,6 +22,8 @@
 
 /* Utility functions for cuda-gdb */
 #define CUDA_GDB_TMP_BUF_SIZE 1024
+#define __S__(s)                #s
+#define _STRING_(s)       __S__(s)
 
 /* Initialize everything */
 void cuda_utils_initialize (void);

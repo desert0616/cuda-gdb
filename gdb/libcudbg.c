@@ -1550,14 +1550,14 @@ cudbgSetNotifyNewEventCallback(CUDBGNotifyNewEventCallback callback)
 }
 
 static CUDBGResult
-cudbgAcknowledgeEvents(void)
+cudbgAcknowledgeSyncEvents(void)
 {
     void *d;
     CUDBGAPIMSG_t ipcreq, *ipcres;
     CUDBGResult res;
 
     memset(&ipcreq, 0, sizeof ipcreq);
-    ipcreq.kind = CUDBGAPIREQ_acknowledgeEvents;
+    ipcreq.kind = CUDBGAPIREQ_acknowledgeSyncEvents;
 
     CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
     CUDBG_IPC_REQUEST((void *)&d);
@@ -1569,14 +1569,14 @@ cudbgAcknowledgeEvents(void)
 }
 
 static CUDBGResult
-cudbgGetNextEvent(CUDBGEvent *event)
+cudbgGetNextEventCommon(CUDBGEvent *event, CUDBGAPIREQ_t kind)
 {
     char *d;
     CUDBGAPIMSG_t ipcreq, *ipcres;
     CUDBGResult res;
 
     memset(&ipcreq, 0, sizeof ipcreq);
-    ipcreq.kind = CUDBGAPIREQ_getNextEvent;
+    ipcreq.kind = kind;
 
     CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
     CUDBG_IPC_REQUEST((void *)&d);
@@ -1625,8 +1625,9 @@ cudbgGetNextEvent(CUDBGEvent *event)
             event->cases.kernelFinished.function = ipcres->apiData.result.event.cases.kernelFinished.function;
             event->cases.kernelFinished.functionEntry = ipcres->apiData.result.event.cases.kernelFinished.functionEntry;
             break;
-        case CUDBG_EVENT_ERROR:
-            cudbg_trace ("error event received");
+        case CUDBG_EVENT_INTERNAL_ERROR:
+            cudbg_trace ("internal error event received");
+            event->cases.internalError.errorType = ipcres->apiData.result.event.cases.internalError.errorType;
             break;
         case CUDBG_EVENT_CTX_PUSH:
             cudbg_trace ("ctx push event received");
@@ -1655,6 +1656,12 @@ cudbgGetNextEvent(CUDBGEvent *event)
         case CUDBG_EVENT_TIMEOUT:
             cudbg_trace ("timeout event received");
             break;
+        case CUDBG_EVENT_ATTACH_COMPLETE:
+            cudbg_trace ("Finished collecting CUDA state for attaching to the app");
+            break;
+        case CUDBG_EVENT_DETACH_COMPLETE:
+            cudbg_trace ("Finished detaching from the CUDA app");
+            break;
         case CUDBG_EVENT_INVALID:
             cudbg_trace ("No valid event received");
             break;
@@ -1666,6 +1673,18 @@ cudbgGetNextEvent(CUDBGEvent *event)
     res = ipcres->result;
 
     return res;
+}
+
+static CUDBGResult
+cudbgGetNextSyncEvent(CUDBGEvent *event)
+{
+    return cudbgGetNextEventCommon(event, CUDBGAPIREQ_getNextSyncEvent);
+}
+
+static CUDBGResult
+cudbgGetNextAsyncEvent(CUDBGEvent *event)
+{
+    return cudbgGetNextEventCommon(event, CUDBGAPIREQ_getNextAsyncEvent);
 }
 
 static CUDBGResult
@@ -1691,6 +1710,69 @@ cudbgGetHostAddrFromDeviceAddr(uint32_t dev, uint64_t device_addr, uint64_t *hos
     
     *host_addr = ipcres->apiData.result.ra;
 
+    return res;
+}
+
+static CUDBGResult
+cudbgClearAttachState(void)
+{
+    void *d;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+    CUDBGResult res;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    ipcreq.kind = CUDBGAPIREQ_clearAttachState;
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_REQUEST((void *)&d);
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    res = ipcres->result;
+
+    return res;
+}
+
+static CUDBGResult
+cudbgRequestCleanupOnDetach(void)
+{
+    void *d;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+    CUDBGResult res;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    ipcreq.kind = CUDBGAPIREQ_requestCleanupOnDetach;
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_REQUEST((void *)&d);
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    res = ipcres->result;
+
+    return res;
+}
+
+static CUDBGResult
+cudbgMemcheckReadErrorAddress(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint64_t *address, ptxStorageKind *storage)
+{
+    void *d;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+    CUDBGResult res;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    ipcreq.kind = CUDBGAPIREQ_memcheckReadErrorAddress;
+    ipcreq.apiData.request.dev = dev;
+    ipcreq.apiData.request.sm  = sm;
+    ipcreq.apiData.request.wp  = wp;
+    ipcreq.apiData.request.ln  = ln;
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_REQUEST((void *)&d);
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    res = ipcres->result;
+
+    *address = ipcres->apiData.result.ra;
+    *storage = ipcres->apiData.result.regClass;
     return res;
 }
 
@@ -1822,6 +1904,20 @@ STUB_cudbgGetPhysicalRegister40(uint32_t dev, uint32_t sm, uint32_t wp, uint64_t
     return CUDBG_SUCCESS;
 }
 
+static CUDBGResult
+STUB_cudbgGetNextEvent42(CUDBGEvent42 *event)
+{
+    gdb_assert (0);
+    return CUDBG_SUCCESS;
+}
+
+static CUDBGResult
+STUB_cudbgAcknowledgeEvents42(void)
+{
+    gdb_assert (0);
+    return CUDBG_SUCCESS;
+}
+
 static const struct CUDBGAPI_st cudbgCurrentApi = {
     /* Initialization */
     cudbgInitialize,
@@ -1894,7 +1990,7 @@ static const struct CUDBGAPI_st cudbgCurrentApi = {
     STUB_cudbgGetPhysicalRegister40,
     cudbgReadLaneException,
     STUB_cudbgGetNextEvent32,
-    cudbgAcknowledgeEvents,
+    STUB_cudbgAcknowledgeEvents42,
 
     /* 3.1 - ABI */
     STUB_cudbgReadCallDepth32,
@@ -1911,7 +2007,7 @@ static const struct CUDBGAPI_st cudbgCurrentApi = {
     STUB_cudbgSetNotifyNewEventCallback40,
 
     /* 4.0 Extensions */
-    cudbgGetNextEvent,
+    STUB_cudbgGetNextEvent42,
     cudbgReadTextureMemory,
     cudbgReadBlockIdx,
     cudbgGetGridDim,
@@ -1928,6 +2024,14 @@ static const struct CUDBGAPI_st cudbgCurrentApi = {
 
     /* 4.2 Extensions */
     cudbgReadTextureMemoryBindless,
+
+    /* 5.0 Extensions */
+    cudbgClearAttachState,
+    cudbgGetNextSyncEvent,
+    cudbgMemcheckReadErrorAddress,
+    cudbgAcknowledgeSyncEvents,
+    cudbgGetNextAsyncEvent,
+    cudbgRequestCleanupOnDetach,
 };
 
 CUDBGResult

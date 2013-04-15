@@ -63,6 +63,7 @@
 #include "inline-frame.h"
 #include  "tracepoint.h"
 #include "cuda-tdep.h"
+#include "cuda-frame.h"
 
 static struct frame_info *get_prev_frame_1 (struct frame_info *this_frame);
 static struct frame_info *get_prev_frame_raw (struct frame_info *this_frame);
@@ -146,9 +147,6 @@ struct frame_info
   /* The reason why we could not set PREV, or UNWIND_NO_REASON if we
      could.  Only valid when PREV_P is set.  */
   enum unwind_stop_reason stop_reason;
-
-  /* CUDA - extra frame info */
-  struct cuda_frame_info *cuda_extensions;
 };
 
 /* A frame stash used to speed up frame lookups.  */
@@ -2312,12 +2310,3 @@ When non-zero, frame specific internal debugging is enabled."),
 			    &setdebuglist, &showdebuglist);
 }
 
-/* CUDA - extra frame info */
-struct cuda_frame_info *
-cuda_get_frame_info (struct frame_info *fi)
-{
-  if (!fi->cuda_extensions)
-    fi->cuda_extensions = FRAME_OBSTACK_ZALLOC (struct cuda_frame_info);
-
-  return fi->cuda_extensions;
-}

@@ -24,20 +24,26 @@
 #include "objfiles.h"
 #include "cuda-defs.h"
 
+#define REGMAP_MAX_ENTRIES 32
+#define REGMAP_MAX_LOCATION_INDEX 2
 
-regmap_t      regmap_get_search_result (void);
-void          regmap_print           (regmap_t);
-const char *  regmap_get_func_name   (regmap_t regmap);
-const char *  regmap_get_reg_name    (regmap_t regmap);
-uint64_t      regmap_get_addr        (regmap_t regmap);
-uint32_t      regmap_get_num_entries (regmap_t regmap);
-CUDBGRegClass regmap_get_class       (regmap_t regmap, uint32_t idx);
-uint32_t      regmap_get_register    (regmap_t regmap, uint32_t idx);
-uint32_t      regmap_get_sp_register (regmap_t regmap, uint32_t idx);
-uint32_t      regmap_get_sp_offset   (regmap_t regmap, uint32_t idx);
-uint32_t      regmap_get_offset      (regmap_t regmap, uint32_t idx);
-uint32_t      regmap_get_half_register (regmap_t regmap, uint32_t idx,
-                                        bool *in_higher_16_bits);
+regmap_t      regmap_get_search_result  (void);
+void          regmap_print              (regmap_t);
+const char *  regmap_get_func_name      (regmap_t regmap);
+const char *  regmap_get_reg_name       (regmap_t regmap);
+uint64_t      regmap_get_addr           (regmap_t regmap);
+uint32_t      regmap_get_num_entries    (regmap_t regmap);
+uint32_t      regmap_get_location_index (regmap_t regmap, uint32_t idx);
+CUDBGRegClass regmap_get_class          (regmap_t regmap, uint32_t idx);
+uint32_t      regmap_get_register       (regmap_t regmap, uint32_t idx);
+uint32_t      regmap_get_sp_register    (regmap_t regmap, uint32_t idx);
+uint32_t      regmap_get_sp_offset      (regmap_t regmap, uint32_t idx);
+uint32_t      regmap_get_offset         (regmap_t regmap, uint32_t idx);
+uint32_t      regmap_get_half_register  (regmap_t regmap, uint32_t idx,
+                                         bool *in_higher_16_bits);
+
+bool regmap_is_readable (regmap_t regmap);
+bool regmap_is_writable (regmap_t regmap);
 
 regmap_t regmap_table_search (struct objfile *objfile, const char *func_name,
                               const char *reg_name, uint64_t addr);

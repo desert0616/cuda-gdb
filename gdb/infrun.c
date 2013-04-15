@@ -1832,6 +1832,12 @@ prepare_to_proceed (int step)
   /* Get the last target status returned by target_wait().  */
   get_last_target_status (&wait_ptid, &wait_status);
 
+  /* CUDA - stepping */
+  /* When steppping the device, a step-over of the waiting PID is not
+     required. */
+  if (cuda_focus_is_device ())
+    return 0;
+
   /* Make sure we were stopped at a breakpoint.  */
   if (wait_status.kind != TARGET_WAITKIND_STOPPED
       || (wait_status.value.sig != TARGET_SIGNAL_TRAP

@@ -958,6 +958,14 @@ check_thread_signals (void)
 void
 check_for_thread_db (void)
 {
+  /* CUDA - detach */
+  /* While detaching from a running CUDA application, we may
+     need to resume the application temporarily, which might cause
+     libthread_db to be reinitialized and cause problems. This must
+     be prevented. */
+  if (cuda_api_get_attach_state () == CUDA_ATTACH_STATE_DETACHING)
+    return;
+
   /* Do nothing if we couldn't load libthread_db.so.1.  */
   if (!thread_db_load ())
     return;

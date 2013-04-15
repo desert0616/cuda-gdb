@@ -99,6 +99,10 @@ cuda_event_push_context (uint32_t dev_id, uint64_t context_id, uint32_t tid)
   cuda_trace ("CUDBG_EVENT_CTX_PUSH dev_id=%u context=%"PRIx64" tid=%u",
               dev_id, context_id);
 
+  /* context push/pop events are ignored when attaching */
+  if (cuda_api_get_attach_state () != CUDA_ATTACH_STATE_NOT_STARTED)
+      return;
+
   if (tid == ~0U)
     error (_("A CUDA event reported an invalid thread id."));
 
@@ -120,6 +124,10 @@ cuda_event_pop_context (uint32_t dev_id, uint64_t context_id, uint32_t tid)
 
   cuda_trace ("CUDBG_EVENT_CTX_POP dev_id=%u context=%"PRIx64" tid=%u",
               dev_id, context_id);
+
+  /* context push/pop events are ignored when attaching */
+  if (cuda_api_get_attach_state () != CUDA_ATTACH_STATE_NOT_STARTED)
+      return;
 
   if (tid == ~0U)
     error (_("A CUDA event reported an invalid thread id."));
@@ -247,15 +255,16 @@ cuda_event_kernel_finished (uint32_t dev_id, uint32_t grid_id)
 }
 
 static void
-cuda_event_error (void)
+cuda_event_internal_error (CUDBGResult errorType)
 {
-  cuda_trace ("CUDBG_EVENT_ERROR\n");
+  cuda_trace ("CUDBG_EVENT_INTERNAL_ERROR\n");
 
-  cuda_cleanup ();
-  kill (cuda_gdb_get_tid (inferior_ptid), SIGKILL);
+  // Stop cuda-gdb and show the error message.
+  // We don't kill the app or do the cleanup here. That is done upon
+  // exiting cuda-gdb.
 
-  error (_("Error: Unexpected error reported by the CUDA debugger API. "
-          "Session is now unstable."));
+  error (_("Error: Internal error reported by CUDA debugger API (error=%u). "
+         "The application cannot be further debugged.\n"), errorType);
 }
 
 static void
@@ -265,7 +274,7 @@ cuda_event_timeout (void)
 }
 
 void
-cuda_process_events (CUDBGEvent *event)
+cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind)
 {
   uint32_t dev_id;
   uint32_t grid_id;
@@ -278,10 +287,13 @@ cuda_process_events (CUDBGEvent *event)
   CuDim3   grid_dim;
   CuDim3   block_dim;
   CUDBGKernelType type;
+  CUDBGResult errorType;
 
   gdb_assert (event);
 
-  for (; event->kind != CUDBG_EVENT_INVALID; cuda_api_get_next_event (event))
+  for (; event->kind != CUDBG_EVENT_INVALID;
+       (kind == CUDA_EVENT_SYNC) ? cuda_api_get_next_sync_event (event) :
+                                   cuda_api_get_next_async_event (event))
     {
       switch (event->kind)
         {
@@ -351,14 +363,25 @@ cuda_process_events (CUDBGEvent *event)
             cuda_event_destroy_context (dev_id, context_id, tid);
             break;
           }
-        case CUDBG_EVENT_ERROR:
+        case CUDBG_EVENT_INTERNAL_ERROR:
           {
-            cuda_event_error ();
+            errorType  = event->cases.internalError.errorType;
+            cuda_event_internal_error (errorType);
             break;
           }
         case CUDBG_EVENT_TIMEOUT:
           {
             cuda_event_timeout ();
+            break;
+          }
+        case CUDBG_EVENT_ATTACH_COMPLETE:
+          {
+            cuda_api_set_attach_state (CUDA_ATTACH_STATE_APP_READY);
+            break;
+          }
+        case CUDBG_EVENT_DETACH_COMPLETE:
+          {
+            cuda_api_set_attach_state (CUDA_ATTACH_STATE_DETACH_COMPLETE);
             break;
           }
         default:

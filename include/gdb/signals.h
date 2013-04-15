@@ -258,6 +258,7 @@ enum target_signal
     TARGET_SIGNAL_CUDA_DEVICE_ILLEGAL_ADDRESS,
     TARGET_SIGNAL_CUDA_LANE_MISALIGNED_ADDRESS,
     TARGET_SIGNAL_CUDA_WARP_ASSERT,
+    TARGET_SIGNAL_CUDA_LANE_SYSCALL_ERROR,
 
     /* If you are adding a new signal, add it just above this comment.  */
 

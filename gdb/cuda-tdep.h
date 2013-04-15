@@ -50,7 +50,8 @@ extern bool cuda_producer_is_open64;
 #define CUDA_ELFOSABIV_RELOC         2  /* ELFOSABIV_32BIT + All relocators in DWARF */
 #define CUDA_ELFOSABIV_ABI           3  /* ELFOSABIV_RELOC + Calling Convention */
 #define CUDA_ELFOSABIV_SYSCALL       4  /* ELFOSABIV_ABI + Improved syscall relocation */
-#define CUDA_ELFOSABIV_LATEST        4  /* Latest ABI version*/
+#define CUDA_ELFOSABIV_SEPCOMP       5  /* ELFOSABIV_SYSCALL + new caller-callee save conventions */
+#define CUDA_ELFOSABIV_LATEST        CUDA_ELFOSABIV_SEPCOMP
 #define CUDA_ELF_TEXT_PREFIX  ".text."  /* CUDA ELF text section format: ".text.KERNEL" */
 
 /*Return values that exceed 384-bits in size are returned in memory.
@@ -77,29 +78,6 @@ typedef enum {
 #define CUDA_MAX_NUM_RESIDENT_BLOCKS_PER_GRID 256
 #define CUDA_MAX_NUM_RESIDENT_THREADS_PER_BLOCK 1024
 #define CUDA_MAX_NUM_RESIDENT_THREADS (CUDA_MAX_NUM_RESIDENT_BLOCKS_PER_GRID * CUDA_MAX_NUM_RESIDENT_THREADS_PER_BLOCK)
-
-struct cuda_frame_info
-{
-  /* Is it a cuda internal frame? */
-  bool cuda_internal_p;
-  bool cuda_internal;
-
-  /* Is it a cuda global kernel (entrypoint) frame? */
-  bool cuda_device_p;
-  bool cuda_device;
-
-  /* Is it a cuda runtime entry point frame? */
-  bool cuda_runtime_entrypoint_p;
-  bool cuda_runtime_entrypoint;
-
-  /* Is it a cuda device syscall frame? */
-  bool cuda_device_syscall_p;
-  bool cuda_device_syscall;
-
-  /* Frame level when hiding cuda runtime frames */
-  bool cuda_level_p;
-  int  cuda_level;
-};
 
 typedef enum return_value_convention rvc_t;
 
@@ -145,6 +123,7 @@ void cuda_cleanup (void);
 void cuda_final_cleanup (void *unused);
 void cuda_initialize_target (void);
 bool cuda_inferior_in_debug_mode (void);
+void cuda_inferior_update_suspended_devices_mask (void);
 void cuda_load_device_info (char *, struct partial_symtab *);
 
 char *   cuda_find_kernel_name_from_pc (CORE_ADDR pc, bool demangle);
@@ -152,16 +131,9 @@ bool     cuda_breakpoint_hit_p (cuda_clock_t clock);
 bool     cuda_exception_hit_p (cuda_exception_t *exception);
 const char * cuda_exception_type_to_name (CUDBGException_t exception_type);
 
-/*Frame Management */
-const struct frame_unwind * cuda_frame_sniffer (struct frame_info *next_frame);
-const struct frame_base * cuda_frame_base_sniffer (struct frame_info *next_frame);
-bool cuda_frame_p (struct frame_info *next_frame);
-bool cuda_frame_outermost_p (struct frame_info *next_frame);
-int  cuda_frame_relative_level (struct frame_info *frame);
-int  cuda_frame_is_internal (struct frame_info *fi);
-int  cuda_frame_is_device (struct frame_info *fi);
-int  cuda_frame_is_runtime_entrypoint (struct frame_info *fi);
-int  cuda_frame_is_device_syscall (struct frame_info *fi);
+uint64_t cuda_get_last_driver_api_error_code (void);
+void     cuda_get_last_driver_api_error_func_name (char **name);
+uint64_t cuda_get_last_driver_internal_error_code (void);
 
 /*Debugging */
 void cuda_trace (char *fmt, ...);
@@ -169,19 +141,18 @@ void cuda_trace (char *fmt, ...);
 /*----------------------------------------------------------------------------*/
 
 /*Single-Stepping */
-bool   cuda_sstep_is_active (void);
-ptid_t cuda_sstep_ptid (void);
-void   cuda_sstep_set_ptid (ptid_t ptid);
-void   cuda_sstep_initialize (bool stepping);
-void   cuda_sstep_execute (ptid_t ptid);
-void   cuda_sstep_reset (bool sstep);
-bool   cuda_sstep_kernel_has_terminated (void);
+bool     cuda_sstep_is_active (void);
+uint32_t cuda_sstep_dev_id (void);
+uint32_t cuda_sstep_grid_id (void);
+ptid_t   cuda_sstep_ptid (void);
+void     cuda_sstep_set_ptid (ptid_t ptid);
+void     cuda_sstep_initialize (bool stepping);
+void     cuda_sstep_execute (ptid_t ptid);
+void     cuda_sstep_reset (bool sstep);
+bool     cuda_sstep_kernel_has_terminated (void);
 
 /*Registers */
 bool          cuda_get_dwarf_register_string (reg_t reg, char *deviceReg, size_t sz);
-void          cuda_regnum_pc_pre_hack (struct frame_info *fi);
-void          cuda_regnum_pc_post_hack (void);
-struct value *cuda_value_of_builtin_frame_phys_pc_reg (struct frame_info *frame);
 
 /*Storage addresses and names */
 void        cuda_print_lmem_address_type (void);
@@ -200,8 +171,10 @@ bool            cuda_find_func_text_vma_from_objfile (struct objfile *objfile, c
 uint64_t        cuda_find_context_id (CORE_ADDR addr);
 context_t       cuda_find_context_by_addr (CORE_ADDR addr);
 bool            cuda_is_device_code_address (CORE_ADDR addr);
+int             cuda_abi_sp_regnum (struct gdbarch *);
 int             cuda_special_regnum (struct gdbarch *);
 int             cuda_pc_regnum (struct gdbarch *);
+CORE_ADDR       cuda_get_symbol_address (char *name);
 
 /*Segmented memory reads/writes */
 int cuda_read_memory_partial (CORE_ADDR address, gdb_byte *buf, int len, struct type *type);
@@ -228,6 +201,8 @@ void        cuda_gdb_session_destroy (void);
 const char *cuda_gdb_session_get_dir (void);
 uint32_t    cuda_gdb_session_get_id (void);
 
-
+/* Attach support */
+void cuda_nat_attach (void);
+ 
 #endif
 

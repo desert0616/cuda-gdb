@@ -164,6 +164,8 @@ cuda_elf_image_uses_abi (elf_image_t elf_image)
   return elf_image->uses_abi;
 }
 
+void cuda_decode_line_table (struct objfile *objfile);
+
 void
 cuda_elf_image_load (elf_image_t elf_image)
 {
@@ -220,6 +222,10 @@ cuda_elf_image_load (elf_image_t elf_image)
   objfile->gdbarch        = cuda_get_gdbarch ();
   /* CUDA - skip prologue - temporary */
   objfile->cuda_producer_is_open64 = cuda_producer_is_open64;
+
+  /* CUDA - line info */
+  if (!objfile->symtabs)
+    cuda_decode_line_table (objfile);
 
   /* Initialize the elf_image object */
   elf_image->objfile  = objfile;

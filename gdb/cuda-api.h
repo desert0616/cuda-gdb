@@ -20,10 +20,24 @@
 
 #include "cudadebugger.h"
 
+typedef enum {
+  CUDA_ATTACH_STATE_NOT_STARTED,
+  CUDA_ATTACH_STATE_IN_PROGRESS,
+  CUDA_ATTACH_STATE_APP_READY,
+  CUDA_ATTACH_STATE_COMPLETE,
+  CUDA_ATTACH_STATE_DETACHING,
+  CUDA_ATTACH_STATE_DETACH_COMPLETE
+} cuda_attach_state_t;
+
 /* Initialization */
 int  cuda_api_get_api (void);
 int  cuda_api_initialize (void);
 void cuda_api_finalize (void);
+
+/* Attach support */
+void cuda_api_set_attach_state (cuda_attach_state_t state);
+cuda_attach_state_t cuda_api_get_attach_state (void);
+void cuda_api_request_cleanup_on_detach (void);
 
 /* Device Execution Control */
 void cuda_api_suspend_device (uint32_t dev);
@@ -90,8 +104,11 @@ bool cuda_api_lookup_device_code_symbol (char *name, uint64_t *addr);
 
 /* Events */
 void cuda_api_set_notify_new_event_callback (CUDBGNotifyNewEventCallback callback);
-void cuda_api_acknowledge_events (void);
-void cuda_api_get_next_event (CUDBGEvent *event);
+void cuda_api_acknowledge_sync_events (void);
+void cuda_api_get_next_sync_event (CUDBGEvent *event);
+void cuda_api_get_next_async_event (CUDBGEvent *event);
 
+/* Memcheck related */
+void cuda_api_memcheck_read_error_address(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint64_t *address, ptxStorageKind *storage);
 #endif
 

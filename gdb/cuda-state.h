@@ -25,11 +25,13 @@
 void     cuda_system_initialize                   (void);
 void     cuda_system_finalize                     (void);
 uint32_t cuda_system_get_num_devices              (void);
+uint32_t cuda_system_get_num_kernels              (void);
 void     cuda_system_resolve_breakpoints          (void);
 void     cuda_system_update_kernels               (void);
 void     cuda_system_cleanup_breakpoints          (void);
 void     cuda_system_cleanup_contexts             (void);
 bool     cuda_system_is_broken                    (cuda_clock_t);
+uint32_t cuda_system_get_suspended_devices_mask   (void);
 
 /* Device State */
 const char* device_get_device_type         (uint32_t dev_id);
@@ -49,9 +51,11 @@ context_t   device_find_context_by_id      (uint32_t dev_id, uint64_t context_id
 context_t   device_find_context_by_addr    (uint32_t dev_id, CORE_ADDR addr);
 kernel_t    device_find_kernel_by_grid_id  (uint32_t dev_id, uint32_t grid_id);
 
-void        device_print   (uint32_t dev_id);
-void        device_resume  (uint32_t dev_id);
-void        device_suspend (uint32_t dev_id);
+void        device_print      (uint32_t dev_id);
+void        device_resume     (uint32_t dev_id);
+void        device_suspend    (uint32_t dev_id);
+void        device_invalidate (uint32_t dev_id);
+
 
 /* SM State */
 bool        sm_is_valid                    (uint32_t dev_id, uint32_t sm_id);
@@ -63,6 +67,7 @@ bool     warp_is_valid                 (uint32_t dev_id, uint32_t sm_id, uint32_
 bool     warp_is_broken                (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 kernel_t warp_get_kernel               (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 CuDim3   warp_get_block_idx            (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
+uint32_t warp_get_grid_id              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 uint32_t warp_get_valid_lanes_mask     (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 uint32_t warp_get_active_lanes_mask    (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 uint32_t warp_get_divergent_lanes_mask (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
@@ -86,5 +91,6 @@ int32_t          lane_get_call_depth (uint32_t dev_id, uint32_t sm_id, uint32_t 
 int32_t          lane_get_syscall_call_depth (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t ln_id);
 uint64_t         lane_get_virtual_return_address (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t ln_id, int32_t level);
 cuda_clock_t     lane_get_timestamp (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,uint32_t ln_id);
-
+uint64_t         lane_get_memcheck_error_address (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t ln_id);
+ptxStorageKind   lane_get_memcheck_error_address_segment (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t ln_id);
 #endif

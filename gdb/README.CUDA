@@ -65,10 +65,6 @@ CHANGES TO GDB SOURCE CODE REQUIRED FOR CUDA SUPPORT
 
   New raw and cooked registers added to support CUDA functions.
 
-/* CUDA - extra frame info */
-
-  Extra per-frame information required by CUDA infrastructure.
-
 /* CUDA - frames */
 
   Necessary changes to make the CUDA frame unwinder functions work properly.
@@ -181,3 +177,17 @@ CHANGES TO GDB SOURCE CODE REQUIRED FOR CUDA SUPPORT
   cleaner for end users, this frame is handled specially. When stopped at
   the __assert_fail frame in device code, GDB will simply print the name of
   the function and will skip printing any arguments.
+
+/* CUDA - breakpoint for error reporting */
+
+  cuda-gdb sets internal breakpoints on function names specified in cudadebugger.h.
+  Upon hitting the breakpoint, cuda-gdb looks up the corresponding error code from
+  one of the application variables specified in cudadebugger.h and informs the user
+  about the error (through a warning or an error, depending on the setting).
+
+/* CUDA - DW_OP_regx */
+
+  The compiler may generate DW_OP_regx operands for PTX registers. We must add
+  code to handle the concept of frame (spilled registers) and the concept of
+  liveness (the PTX register may be live but the underlying SASS register may
+  not).

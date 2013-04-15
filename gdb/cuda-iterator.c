@@ -24,6 +24,9 @@
 #include "cuda-iterator.h"
 #include "cuda-state.h"
 
+#define CUDA_ITERATOR_TYPE_MASK_PHYSICAL  0x0f
+#define CUDA_ITERATOR_TYPE_MASK_LOGICAL   0xf0
+
 struct cuda_iterator_t
 {
   cuda_iterator_type type;
@@ -67,15 +70,30 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
   itr->list         = (cuda_coords_t*) xmalloc (itr->list_size * sizeof (*itr->list));
 
   /* only store information that can be uniquely identified given an object of the iterator type */
-  store_dev    = (type & 0x0f) >= CUDA_ITERATOR_TYPE_DEVICES || (type & 0xf0) >= CUDA_ITERATOR_TYPE_KERNELS;
-  store_sm     = (type & 0x0f) >= CUDA_ITERATOR_TYPE_SMS     || (type & 0xf0) >= CUDA_ITERATOR_TYPE_BLOCKS;
-  store_warp   = (type & 0x0f) >= CUDA_ITERATOR_TYPE_WARPS   || (type & 0xf0) >= CUDA_ITERATOR_TYPE_THREADS;
-  store_lane   = (type & 0x0f) >= CUDA_ITERATOR_TYPE_LANES   || (type & 0xf0) >= CUDA_ITERATOR_TYPE_THREADS;
-
-  store_kernel = (type & 0x0f) >= CUDA_ITERATOR_TYPE_SMS     || (type & 0xf0) >= CUDA_ITERATOR_TYPE_KERNELS;
-  store_grid   = (type & 0x0f) >= CUDA_ITERATOR_TYPE_SMS     || (type & 0xf0) >= CUDA_ITERATOR_TYPE_KERNELS;
-  store_block  = (type & 0x0f) >= CUDA_ITERATOR_TYPE_WARPS   || (type & 0xf0) >= CUDA_ITERATOR_TYPE_BLOCKS;
-  store_thread = (type & 0x0f) >= CUDA_ITERATOR_TYPE_LANES   || (type & 0xf0) >= CUDA_ITERATOR_TYPE_THREADS;
+  store_dev =
+    (type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) >= CUDA_ITERATOR_TYPE_DEVICES ||
+    (type & CUDA_ITERATOR_TYPE_MASK_LOGICAL) >= CUDA_ITERATOR_TYPE_KERNELS;
+  store_sm =
+    (type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) >= CUDA_ITERATOR_TYPE_SMS ||
+    (type & CUDA_ITERATOR_TYPE_MASK_LOGICAL) >= CUDA_ITERATOR_TYPE_BLOCKS;
+  store_warp =
+    (type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) >= CUDA_ITERATOR_TYPE_WARPS ||
+    (type & CUDA_ITERATOR_TYPE_MASK_LOGICAL) >= CUDA_ITERATOR_TYPE_THREADS;
+  store_lane =
+    (type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) >= CUDA_ITERATOR_TYPE_LANES ||
+    (type & CUDA_ITERATOR_TYPE_MASK_LOGICAL) >= CUDA_ITERATOR_TYPE_THREADS;
+  store_kernel =
+    (type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) >= CUDA_ITERATOR_TYPE_SMS ||
+    (type & CUDA_ITERATOR_TYPE_MASK_LOGICAL) >= CUDA_ITERATOR_TYPE_KERNELS;
+  store_grid =
+    (type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) >= CUDA_ITERATOR_TYPE_SMS ||
+    (type & CUDA_ITERATOR_TYPE_MASK_LOGICAL) >= CUDA_ITERATOR_TYPE_KERNELS;
+  store_block =
+    (type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) >= CUDA_ITERATOR_TYPE_WARPS ||
+    (type & CUDA_ITERATOR_TYPE_MASK_LOGICAL) >= CUDA_ITERATOR_TYPE_BLOCKS;
+  store_thread =
+    (type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) >= CUDA_ITERATOR_TYPE_LANES ||
+    (type & CUDA_ITERATOR_TYPE_MASK_LOGICAL) >= CUDA_ITERATOR_TYPE_THREADS;
 
   /* populate the list with valid kernels meeting the specifications of the
      filter. Duplicates are dealt with later. */
@@ -101,8 +119,8 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
               if (warp_is_valid (dev, sm, wp))
                 {
                   kernel   = warp_get_kernel (dev, sm, wp);
-                  kernelId = kernel_get_id (kernel);
-                  gridId   = kernel_get_grid_id (kernel);
+                  kernelId = kernel ? kernel_get_id (kernel) : CUDA_INVALID;
+                  gridId   = warp_get_grid_id (dev, sm, wp);
                   blockIdx = warp_get_block_idx (dev, sm, wp);
                 }
               else
@@ -141,16 +159,18 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
 
                   /* if looking for breakpoints, skip non-broken kernels */
                   if (at_breakpoint &&
-                      warp_is_valid (dev, sm, wp) &&
-                      lane_is_valid (dev, sm, wp, ln) &&
-                      !breakpoint_here_p (aspace, lane_get_virtual_pc (dev, sm, wp, ln)))
+                      (!warp_is_valid (dev, sm, wp) ||
+                       !lane_is_valid (dev, sm, wp, ln) ||
+                       !lane_is_active (dev, sm, wp, ln) ||
+                       !breakpoint_here_p (aspace, lane_get_virtual_pc (dev, sm, wp, ln))))
                     continue;
 
                   /* if looking for exceptions, skip healthy kernels */
                   if (at_exception &&
-                      warp_is_valid (dev, sm, wp) &&
-                      lane_is_valid (dev, sm, wp, ln) &&
-                      !lane_get_exception (dev, sm, wp, ln))
+                      (!warp_is_valid (dev, sm, wp) ||
+                       !lane_is_valid (dev, sm, wp, ln)  ||
+                       !lane_is_active (dev, sm, wp, ln) ||
+                       !lane_get_exception (dev, sm, wp, ln)))
                     continue;
 
                   /* allocate more memory if needed */
@@ -193,8 +213,15 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
     {
       itr->num_unique_elements = 1;
       for (i = 1; i < itr->num_elements; ++i)
-        if (!cuda_coords_equal (&itr->list[i], &itr->list[i-1]))
-            ++itr->num_unique_elements;
+        {
+          if ((itr->type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) &&
+              !cuda_coords_compare_physical (&itr->list[i], &itr->list[i-1]))
+            continue;
+          if ((itr->type & CUDA_ITERATOR_TYPE_MASK_LOGICAL) &&
+              !cuda_coords_compare_logical (&itr->list[i], &itr->list[i-1]))
+            continue;
+          ++itr->num_unique_elements;
+        }
     }
 
   return itr;
@@ -239,10 +266,19 @@ cuda_iterator_next (cuda_iterator itr)
   ++itr->next_index;
 
   /* hop over the duplicate elements */
-  while (itr->next_index < itr->num_elements &&
-         cuda_coords_equal (&itr->list[itr->next_index],
-                            &itr->list[itr->next_index-1]))
-    ++itr->next_index;
+  while (itr->next_index < itr->num_elements)
+    {
+      if ((itr->type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) &&
+          cuda_coords_compare_physical (&itr->list[itr->next_index],
+                                        &itr->list[itr->next_index-1]))
+        break;
+      if ((itr->type & CUDA_ITERATOR_TYPE_MASK_LOGICAL) &&
+          cuda_coords_compare_logical (&itr->list[itr->next_index],
+                                       &itr->list[itr->next_index-1]))
+        break;
+
+      ++itr->next_index;
+    }
 
   return itr;
 }

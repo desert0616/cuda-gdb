@@ -45,6 +45,7 @@ typedef struct {
   bool broken_p;
   bool block_idx_p;
   bool kernel_p;
+  bool grid_id_p;
   bool valid_lanes_mask_p;
   bool active_lanes_mask_p;
   bool timestamp_p;
@@ -52,6 +53,7 @@ typedef struct {
   bool     broken;
   CuDim3   block_idx;
   kernel_t kernel;
+  uint32_t grid_id;
   uint32_t valid_lanes_mask;
   uint32_t active_lanes_mask;
   cuda_clock_t     timestamp;
@@ -92,6 +94,7 @@ typedef struct {
   bool num_devices_p;
   uint32_t num_devices;
   device_state_t dev[CUDBG_MAX_DEVICES];
+  uint32_t suspended_devices_mask;
 } cuda_system_t;
 
 #define CACHED true // set to 0 to disable caching
@@ -100,7 +103,6 @@ typedef enum { RECURSIVE, NON_RECURSIVE } recursion_t;
 static void device_initialize          (uint32_t dev_id);
 static void device_finalize            (uint32_t dev_id);
 static void device_update_kernels      (uint32_t dev_id);
-static void device_invalidate          (uint32_t dev_id);
 static void device_cleanup_contexts    (uint32_t dev_id);
 static void device_cleanup_breakpoints (uint32_t dev_id);
 static void device_resolve_breakpoints (uint32_t dev_id);
@@ -160,6 +162,21 @@ cuda_system_get_num_devices (void)
   cuda_system_info.num_devices_p = CACHED;
 
   return cuda_system_info.num_devices;
+}
+
+uint32_t
+cuda_system_get_num_kernels (void)
+{
+  uint32_t dev_id;
+  uint32_t kernel_count = 0;
+
+  if (!cuda_initialized)
+    return 0;
+
+  for (dev_id = 0; dev_id < cuda_system_get_num_devices (); ++dev_id)
+    kernel_count += kernels_get_num_present_kernels (device_get_kernels (dev_id));
+
+  return kernel_count;
 }
 
 void
@@ -259,6 +276,12 @@ cuda_system_is_broken (cuda_clock_t clock)
   return broken;
 }
 
+uint32_t
+cuda_system_get_suspended_devices_mask (void)
+{
+  return cuda_system_info.suspended_devices_mask;
+}
+
 /******************************************************************************
  *
  *                                  Device
@@ -306,7 +329,7 @@ device_update_kernels (uint32_t dev_id)
   kernels_update_kernels (dev->kernels);
 }
 
-static void
+void
 device_invalidate (uint32_t dev_id)
 {
   device_state_t *dev;
@@ -654,6 +677,8 @@ device_resume (uint32_t dev_id)
   cuda_api_resume_device (dev_id);
 
   dev->suspended = false;
+
+  cuda_system_info.suspended_devices_mask &= ~(1 << dev_id);
 }
 
 void
@@ -672,6 +697,8 @@ device_suspend (uint32_t dev_id)
   dev = &cuda_system_info.dev[dev_id];
 
   dev->suspended = true;
+
+  cuda_system_info.suspended_devices_mask |= (1 << dev_id);
 }
 
 /******************************************************************************
@@ -786,6 +813,7 @@ warp_invalidate (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
   wp->broken_p            = false;
   wp->block_idx_p         = false;
   wp->kernel_p            = false;
+  wp->grid_id_p           = false;
   wp->valid_lanes_mask_p  = false;
   wp->active_lanes_mask_p = false;
   wp->timestamp_p         = false;
@@ -853,6 +881,26 @@ warp_is_broken (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
   return broken;
 }
 
+uint32_t
+warp_get_grid_id (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
+{
+  warp_state_t *wp;
+  uint32_t grid_id;
+
+  wp = &cuda_system_info.dev[dev_id].sm[sm_id].wp[wp_id];
+
+  gdb_assert (dev_id < cuda_system_get_num_devices ());
+  gdb_assert (sm_id < device_get_num_sms (dev_id));
+  gdb_assert (wp_id < device_get_num_warps (dev_id));
+
+  cuda_api_read_grid_id (dev_id, sm_id, wp_id, &grid_id);
+
+  wp->grid_id   = grid_id;
+  wp->grid_id_p = CACHED;
+
+  return wp->grid_id;
+}
+
 kernel_t
 warp_get_kernel (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
 {
@@ -870,7 +918,7 @@ warp_get_kernel (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
   if (wp->kernel_p)
     return wp->kernel;
 
-  cuda_api_read_grid_id (dev_id, sm_id, wp_id, &grid_id);
+  grid_id = warp_get_grid_id (dev_id, sm_id, wp_id);
   kernels = device_get_kernels (dev_id);
   kernel  = kernels_find_kernel_by_grid_id (kernels, grid_id);
 
@@ -1338,4 +1386,48 @@ lane_get_timestamp (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,uint32_t ln_
   gdb_assert (ln->timestamp_p);
 
   return ln->timestamp;
+}
+
+uint64_t
+lane_get_memcheck_error_address (uint32_t dev_id, uint32_t sm_id,
+                                 uint32_t wp_id, uint32_t ln_id)
+{
+  CUDBGException_t exception;
+  uint64_t address = 0;
+  ptxStorageKind segment = ptxUNSPECIFIEDStorage;
+
+  gdb_assert (dev_id < cuda_system_get_num_devices ());
+  gdb_assert (sm_id < device_get_num_sms (dev_id));
+  gdb_assert (wp_id < device_get_num_warps (dev_id));
+  gdb_assert (ln_id < device_get_num_lanes (dev_id));
+  gdb_assert (lane_is_valid (dev_id, sm_id, wp_id, ln_id));
+
+  exception = lane_get_exception (dev_id, sm_id, wp_id, ln_id);
+
+  if (exception == CUDBG_EXCEPTION_LANE_ILLEGAL_ADDRESS)
+    cuda_api_memcheck_read_error_address (dev_id, sm_id, wp_id, ln_id,
+                                          &address, &segment);
+  return address;
+}
+
+ptxStorageKind
+lane_get_memcheck_error_address_segment (uint32_t dev_id, uint32_t sm_id,
+                                         uint32_t wp_id, uint32_t ln_id)
+{
+  CUDBGException_t exception;
+  uint64_t address = 0;
+  ptxStorageKind segment = ptxUNSPECIFIEDStorage;
+
+  gdb_assert (dev_id < cuda_system_get_num_devices ());
+  gdb_assert (sm_id < device_get_num_sms (dev_id));
+  gdb_assert (wp_id < device_get_num_warps (dev_id));
+  gdb_assert (ln_id < device_get_num_lanes (dev_id));
+  gdb_assert (lane_is_valid (dev_id, sm_id, wp_id, ln_id));
+
+  exception = lane_get_exception (dev_id, sm_id, wp_id, ln_id);
+
+  if (exception == CUDBG_EXCEPTION_LANE_ILLEGAL_ADDRESS)
+    cuda_api_memcheck_read_error_address (dev_id, sm_id, wp_id, ln_id,
+                                          &address, &segment);
+  return segment;
 }

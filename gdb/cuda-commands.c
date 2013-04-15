@@ -182,11 +182,12 @@ info_cuda_devices_command (char *arg)
   cuda_info_devices (arg, &devices, &num_devices);
 
   /* output message if the list is empty */
-  if (num_devices == 0 && !ui_out_is_mi_like_p(uiout))
+  if (num_devices == 0 && !ui_out_is_mi_like_p (uiout))
     {
       ui_out_field_string (uiout, NULL, _("No CUDA devices.\n"));
       return;
     }
+
   /* column widths */
   width.current         = strlen (header_current);
   width.device          = strlen (header_device);
@@ -313,7 +314,7 @@ info_cuda_sms_command (char *arg)
   cuda_info_sms (arg, &sms, &num_sms);
 
   /* output message if the list is empty */
-  if (num_sms == 0 && !ui_out_is_mi_like_p(uiout))
+  if (num_sms == 0 && !ui_out_is_mi_like_p (uiout))
     {
       ui_out_field_string (uiout, NULL, _("No CUDA SMs.\n"));
       return;
@@ -466,7 +467,7 @@ info_cuda_warps_command (char *arg)
   cuda_info_warps (arg, &warps, &num_warps);
 
   /* output message if the list is empty */
-  if (num_warps == 0 && !ui_out_is_mi_like_p(uiout))
+  if (num_warps == 0 && !ui_out_is_mi_like_p (uiout))
     {
       ui_out_field_string (uiout, NULL, _("No CUDA Warps.\n"));
       return;
@@ -629,7 +630,7 @@ info_cuda_lanes_command (char *arg)
   cuda_info_lanes (arg, &lanes, &num_lanes);
 
   /* output message if the list is empty */
-  if (num_lanes == 0 && !ui_out_is_mi_like_p(uiout))
+  if (num_lanes == 0 && !ui_out_is_mi_like_p (uiout))
     {
       ui_out_field_string (uiout, NULL, _("No CUDA Lanes.\n"));
       return;
@@ -805,7 +806,7 @@ info_cuda_kernels_command (char *arg)
   cuda_info_kernels_build (arg, &kernels, &num_kernels);
 
   /* output message if the list is empty */
-  if (num_kernels == 0 && !ui_out_is_mi_like_p(uiout))
+  if (num_kernels == 0 && !ui_out_is_mi_like_p (uiout))
     {
       ui_out_field_string (uiout, NULL, _("No CUDA kernels.\n"));
       return;
@@ -993,9 +994,14 @@ info_cuda_blocks_print_uncoalesced (cuda_info_block_t *blocks, uint32_t num_bloc
   const char *header_sm        = "SM";
 
   /* sanity checks */
-  gdb_assert (blocks);
-  gdb_assert (num_blocks > 0);
   gdb_assert (!cuda_options_coalescing ());
+
+  /* output message if the list is empty */
+  if (num_blocks == 0 && !ui_out_is_mi_like_p (uiout))
+    {
+      ui_out_field_string (uiout, NULL, _("No CUDA blocks.\n"));
+      return;
+    }
 
   /* column widths */
   width.current   = strlen (header_current);
@@ -1064,9 +1070,14 @@ info_cuda_blocks_print_coalesced (cuda_info_block_t *blocks, uint32_t num_blocks
   const char *header_state     = "State";
 
   /* sanity checks */
-  gdb_assert (blocks);
-  gdb_assert (num_blocks > 0);
   gdb_assert (cuda_options_coalescing ());
+
+  /* output message if the list is empty */
+  if (num_blocks == 0 && !ui_out_is_mi_like_p (uiout))
+    {
+      ui_out_field_string (uiout, NULL, _("No CUDA blocks.\n"));
+      return;
+    }
 
   /* column widths */
   width.current   = strlen (header_current);
@@ -1128,9 +1139,7 @@ info_cuda_blocks_command (char *arg)
 
   cuda_info_blocks_build (arg, &blocks, &num_blocks);
 
-  if (num_blocks == 0 && !ui_out_is_mi_like_p(uiout))
-    ui_out_field_string (uiout, NULL, _("No CUDA blocks.\n"));
-  else if (cuda_options_coalescing ())
+  if (cuda_options_coalescing ())
     info_cuda_blocks_print_coalesced (blocks, num_blocks);
   else
     info_cuda_blocks_print_uncoalesced (blocks, num_blocks);
@@ -1323,9 +1332,14 @@ info_cuda_threads_print_uncoalesced (cuda_info_thread_t *threads, uint32_t num_t
   const char *header_line       = "Line";
 
   /* sanity checks */
-  gdb_assert (threads);
-  gdb_assert (num_threads > 0);
   gdb_assert (!cuda_options_coalescing ());
+
+  /* output message if the list is empty */
+  if (num_threads == 0 && !ui_out_is_mi_like_p (uiout))
+    {
+      ui_out_field_string (uiout, NULL, _("No CUDA threads.\n"));
+      return;
+    }
 
   /* column widths */
   width.current    = strlen (header_current);
@@ -1419,9 +1433,14 @@ info_cuda_threads_print_coalesced (cuda_info_thread_t *threads, uint32_t num_thr
   const char *header_line             = "Line";
 
   /* sanity checks */
-  gdb_assert (threads);
-  gdb_assert (num_threads > 0);
   gdb_assert (cuda_options_coalescing ());
+
+  /* output message if the list is empty */
+  if (num_threads == 0 && !ui_out_is_mi_like_p (uiout))
+    {
+      ui_out_field_string (uiout, NULL, _("No CUDA threads.\n"));
+      return;
+    }
 
   /* column widths */
   width.current          = strlen (header_current);
@@ -1499,9 +1518,7 @@ info_cuda_threads_command (char *filter_string)
 
   cuda_info_threads_build (filter_string, &threads, &num_threads);
 
-  if (num_threads == 0 && !ui_out_is_mi_like_p(uiout))
-    ui_out_field_string (uiout, NULL, _("No CUDA threads.\n"));
-  else if (cuda_options_coalescing ())
+  if (cuda_options_coalescing ())
     info_cuda_threads_print_coalesced (threads, num_threads);
   else
     info_cuda_threads_print_uncoalesced (threads, num_threads);

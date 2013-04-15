@@ -23,6 +23,7 @@
 
 disasm_cache_t disasm_cache_create           (void);
 void           disasm_cache_destroy          (disasm_cache_t disasm_cache);
+void           disasm_cache_flush            (disasm_cache_t disasm_cache);
 const char *   disasm_cache_find_instruction (disasm_cache_t disasm_cache,
                                               uint64_t pc, uint32_t
                                               *inst_size);

@@ -137,6 +137,15 @@ enum bptype
     /* This is for single-step points (autostep). */
     bp_cuda_autostep,
 
+    /* CUDA - breakpoint for error reporting */
+    /* This is an internal breakpoint that is hit when a driver API
+     * returns an error. */
+    bp_cuda_driver_api_error,
+
+    /* This is an internal breakpoint that is hit when there's a driver
+     * internal error. */
+    bp_cuda_driver_internal_error,
+
     /* On the same principal, an overlay manager can arrange to call a
        magic location in the inferior whenever there is an interesting
        change in overlay status.  GDB can update its overlay tables
@@ -1041,6 +1050,12 @@ extern struct breakpoint *create_thread_event_breakpoint (struct gdbarch *,
 
 /* CUDA - auto breakpoints */
 extern struct breakpoint *cuda_create_auto_breakpoint (CORE_ADDR, uint64_t);
+
+/* CUDA - breakpoint for error reporting */
+extern void create_cuda_driver_api_error_breakpoint (struct gdbarch *,
+                                                     CORE_ADDR);
+extern void create_cuda_driver_internal_error_breakpoint (struct gdbarch *,
+                                                          CORE_ADDR);
 
 extern void remove_solib_event_breakpoints (void);
 

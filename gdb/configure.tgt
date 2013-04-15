@@ -30,9 +30,10 @@ esac
 
 # CUDA files
 gdb_target_cuda_obs="cuda-api.o  cuda-autostep.o  cuda-asm.o  cuda-commands.o  cuda-context.o \
-   cuda-coords.o cuda-elf-image.o  cuda-events.o  cuda-gdb.o cuda-iterator.o \
-   cuda-kernel.o cuda-linux-nat.o cuda-modules.o  cuda-notifications.o \
-   cuda-options.o cuda-regmap.o cuda-state.o cuda-tdep.o cuda-textures.o cuda-utils.o \
+   cuda-coords.o cuda-elf-image.o  cuda-events.o  cuda-frame.o cuda-gdb.o \
+   cuda-iterator.o  cuda-kernel.o cuda-linux-nat.o cuda-modules.o \
+   cuda-notifications.o cuda-options.o cuda-regmap.o cuda-special-register.o \
+   cuda-state.o cuda-tdep.o cuda-textures.o cuda-utils.o \
    libcudbg.o libcudbgipc.o"
 
 # map target info into gdb names.
@@ -86,6 +87,9 @@ arm*-*-linux*)
 	# Target: ARM based machine running GNU/Linux
 	gdb_target_obs="arm-tdep.o arm-linux-tdep.o glibc-tdep.o \
 			solib.o solib-svr4.o symfile-mem.o corelow.o linux-tdep.o"
+	if test "x$enable_cuda" = "xyes"; then
+	    gdb_target_obs="${gdb_target_cuda_obs} ${gdb_target_obs}"
+	fi
 	build_gdbserver=yes
 	;;
 arm*-*-netbsd* | arm*-*-knetbsd*-gnu)

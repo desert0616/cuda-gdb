@@ -64,6 +64,8 @@ static struct target_ops host_target_ops;
 
 cuda_exception_t cuda_exception;
 
+static void cuda_nat_detach (struct target_ops *ops, char *args, int from_tty);
+
 /* The whole Linux siginfo structure is presented to the user, but, internally,
    only the si_signo matters. We do not save the siginfo object. Instead we
    save only the signo. Therefore any read/write to any other field of the
@@ -197,6 +199,66 @@ cuda_nat_mourn_inferior (struct target_ops *ops)
   }
 }
 
+/* This is a helper function to print a message on a memcheck error
+*/
+static void
+cuda_print_memcheck_message (void)
+{
+  cuda_coords_t c;
+  uint64_t phys_addr, virt_addr;
+  kernel_t kernel;
+  uint64_t start_pc;
+  struct symbol *symbol;
+  const char *func_name;
+  uint64_t address = 0;
+  ptxStorageKind storage;
+  const char *addr_space = NULL;
+  CUDBGException_t exception = 0;
+
+  if (!cuda_focus_is_device ())
+    return;
+
+  cuda_coords_get_current (&c);
+
+  virt_addr = lane_get_virtual_pc (c.dev, c.sm, c.wp, c.ln);
+  kernel = warp_get_kernel (c.dev, c.sm, c.wp);
+  start_pc = kernel_get_virt_code_base (kernel);
+  symbol = find_pc_function ((CORE_ADDR) virt_addr);
+  func_name = cuda_find_kernel_name_from_pc (start_pc, false);
+
+  address = lane_get_memcheck_error_address (c.dev, c.sm, c.wp, c.ln);
+  storage = lane_get_memcheck_error_address_segment (c.dev, c.sm, c.wp, c.ln);
+
+  if (!address)
+    return;
+
+  ui_out_text (uiout, "Memcheck detected an illegal access to address ");
+  switch (storage)
+    {
+      case ptxGlobalStorage:
+        addr_space = "@global";
+        break;
+      case ptxSharedStorage:
+        addr_space = "@shared";
+        break;
+      case ptxLocalStorage:
+        addr_space = "@local";
+        break;
+      default:
+        addr_space = NULL;
+        break;
+    };
+
+  if (addr_space)
+    {
+      ui_out_text (uiout, "(");
+      ui_out_field_string (uiout, "error-address-space", addr_space);
+      ui_out_text (uiout, ")");
+    }
+  ui_out_field_fmt (uiout, "address", "0x%"PRIx64,  address);
+  ui_out_text (uiout, "\n");
+}
+
 /* This is a helper function to print a cleanly formatted assertion
    message to the ui output. This message takes the form :
    <FILE_NAME>:<LINE_NUMBER>: <KERNEL_NAME>: Assertion failed at
@@ -321,6 +383,7 @@ static bool sendAck = false;
 extern struct breakpoint *step_resume_breakpoint;
 
 #ifdef __linux__
+#ifndef __arm__
 static void
 cuda_clear_pending_sigint (pid_t pid)
 {
@@ -330,11 +393,13 @@ cuda_clear_pending_sigint (pid_t pid)
   gdb_assert (WIFSTOPPED (status) && WSTOPSIG (status) == SIGINT);
 }
 #endif
+#endif
 
 static int
 cuda_check_pending_sigint (pid_t pid)
 {
 #ifdef __linux__
+#ifndef __arm__
   sigset_t pending, blocked, ignored;
 
   linux_proc_pending_signals (pid, &pending, &blocked, &ignored);
@@ -343,6 +408,7 @@ cuda_check_pending_sigint (pid_t pid)
       cuda_clear_pending_sigint (pid);
       return 1;
     }
+#endif
 #endif
 
    /* No pending SIGINT */
@@ -472,20 +538,20 @@ cuda_nat_resume (struct target_ops *ops, ptid_t ptid, int sstep, enum target_sig
   if (cuda_notification_aliased_event ())
     {
       cuda_notification_reset_aliased_event ();
-      cuda_api_get_next_event (&event);
+      cuda_api_get_next_sync_event (&event);
       cuda_event_found = event.kind != CUDBG_EVENT_INVALID;
 
       if (cuda_event_found)
         {
-          cuda_process_events (&event);
+          cuda_process_events (&event, CUDA_EVENT_SYNC);
           sendAck = true;
         }
     }
 
-  /* Acknowledge the CUDA debugger API */
+  /* Acknowledge the CUDA debugger API (for synchronous events) */
   if (sendAck)
     {
-      cuda_api_acknowledge_events ();
+      cuda_api_acknowledge_sync_events ();
       sendAck = false;
     }
 
@@ -540,10 +606,12 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
                int target_options)
 {
   ptid_t r;
-  uint32_t dev;
+  uint32_t dev, dev_id, grid_id;
   bool cuda_event_found = false;
-  CUDBGEvent event;
+  CUDBGEvent event, asyncEvent;
   struct thread_info *tp;
+  kernels_t kernels;
+  kernel_t kernel;
 
   cuda_trace ("cuda_wait");
 
@@ -585,8 +653,28 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
              terminated and switching to the remaining host thread. */
           if (cuda_sstep_kernel_has_terminated ())
             {
-              cuda_system_update_kernels ();
+              /* Only destroy the kernel that has been stepped to its exit */
+              dev_id  = cuda_sstep_dev_id ();
+              grid_id = cuda_sstep_grid_id ();
+              kernels = device_get_kernels (dev_id);
+              kernel  = kernels_find_kernel_by_grid_id (kernels, grid_id);
+              kernels_terminate_kernel (kernels, kernel);
+
+              /* Invalidate current coordinates and device state */
               cuda_coords_invalidate_current ();
+              device_invalidate (dev_id);
+
+              /* Consume any asynchronous events, if necessary.  We need to do
+                 this explicitly here, since we're taking the quick path out of
+                 this routine (and bypassing the normal check for API events). */
+              cuda_api_get_next_async_event (&asyncEvent);
+              if (asyncEvent.kind != CUDBG_EVENT_INVALID)
+                cuda_process_events (&asyncEvent, CUDA_EVENT_ASYNC);
+
+              /* Update device state/kernels */
+              cuda_system_update_kernels ();
+              cuda_update_convenience_variables ();
+
               switch_to_thread (r);
               tp = inferior_thread ();
               tp->step_range_end = 1;
@@ -607,11 +695,22 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
   for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
     device_suspend (dev);
 
+  /* Check for ansynchronous events.  These events do not require
+     acknowledgement to the debug API, and may arrive at any time
+     without an explicit notification. */
+  cuda_api_get_next_async_event (&asyncEvent);
+  if (asyncEvent.kind != CUDBG_EVENT_INVALID)
+    cuda_process_events (&asyncEvent, CUDA_EVENT_ASYNC);
+
+  /* Analyze notifications.  Only check for new events if we've
+     we've received a notification, or if we're single stepping
+     the device (since if we're stepping we wouldn't receive an
+     explicit notification). */
   cuda_notification_analyze (r, ws);
   if (cuda_notification_received ())
     {
       /* Check if there is any CUDA event to be processed */
-      cuda_api_get_next_event (&event);
+      cuda_api_get_next_sync_event (&event);
       cuda_event_found = event.kind != CUDBG_EVENT_INVALID;
     }
 
@@ -621,7 +720,7 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
      alongside of them, so we need to process the API event first. */
   if (cuda_event_found)
     {
-      cuda_process_events (&event);
+      cuda_process_events (&event, CUDA_EVENT_SYNC);
       sendAck = true;
     }
 
@@ -638,6 +737,8 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
       cuda_coords_update_current (false, true);
       if (cuda_exception.value == TARGET_SIGNAL_CUDA_WARP_ASSERT)
         cuda_print_assert_message ();
+      else if (cuda_exception.value == TARGET_SIGNAL_CUDA_LANE_ILLEGAL_ADDRESS)
+        cuda_print_memcheck_message ();
     }
   else if (cuda_sstep_is_active ())
     {
@@ -654,6 +755,21 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
     {
       cuda_trace ("cuda_wait: stopped because there are broken warps (induced trap?)");
       cuda_coords_update_current (false, false);
+    }
+  else if (cuda_api_get_attach_state () == CUDA_ATTACH_STATE_APP_READY)
+    {
+      /* Finished attaching to the CUDA app.
+         Preferably switch focus to a device if possible */
+      cuda_trace ("cuda_wait: stopped because we attached to the CUDA app");
+      cuda_api_set_attach_state (CUDA_ATTACH_STATE_COMPLETE);
+      cuda_set_signo (TARGET_SIGNAL_INT);
+      cuda_coords_update_current (false, false);
+    }
+  else if (cuda_api_get_attach_state () == CUDA_ATTACH_STATE_DETACH_COMPLETE)
+    {
+      /* Finished detaching from the CUDA app. */
+      cuda_trace ("cuda_wait: stopped because we detached from the CUDA app");
+      cuda_set_signo (TARGET_SIGNAL_INT);
     }
   else if (cuda_event_found)
     {
@@ -1079,6 +1195,7 @@ cuda_nat_add_target (struct target_ops *t)
   t->to_remove_breakpoint     = cuda_nat_remove_breakpoint;
   t->to_xfer_partial          = cuda_nat_xfer_partial;
   t->to_thread_architecture   = cuda_nat_thread_architecture;
+  t->to_detach                = cuda_nat_detach;
 }
 
 bool cuda_debugging_enabled = false;
@@ -1107,3 +1224,137 @@ _initialize_cuda_nat (void)
 
   cuda_debugging_enabled = true;
 }
+
+void
+cuda_nat_attach (void)
+{
+  struct cmd_list_element *alias = NULL;
+  struct cmd_list_element *prefix_cmd = NULL;
+  struct cmd_list_element *cmd = NULL;
+  char *cudbgApiInitForAttach = "cudbgApiInit(1)";
+  CORE_ADDR debugFlagAddr;
+  CORE_ADDR attachDataAvailableFlagAddr;
+  const unsigned char zero = 0;
+  const unsigned char one = 1;
+  unsigned char attachDataAvailable;
+  unsigned int timeOut = 5000000; /* 5 seconds */
+  unsigned int timeElapsed = 0;
+  const unsigned int sleepTime = 1000;
+
+  debugFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_IPC_FLAG_NAME));
+
+  /* Return early if CUDA driver isn't available. Attaching to the host
+     process has already been completed at this point. */
+  if (!debugFlagAddr)
+    return;
+
+  cuda_api_set_attach_state (CUDA_ATTACH_STATE_IN_PROGRESS);
+
+  cuda_initialize_target ();
+
+  if (!lookup_cmd_composition ("call", &alias, &prefix_cmd, &cmd))
+    error (_("Failed to initiate attach."));
+
+  /* Fork off the CUDA debugger process from the inferior */
+  cmd_func (cmd, cudbgApiInitForAttach, 0);
+
+  attachDataAvailableFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_ATTACH_HANDLER_AVAILABLE));
+
+  /* If this is not available, the CUDA driver doesn't support attaching.  */
+  if (!attachDataAvailableFlagAddr)
+    error (_("This CUDA driver does not support attaching to a running CUDA process."));
+
+  /* Wait till the backend has started up and is ready to service API calls */
+  while (cuda_api_initialize () != CUDBG_SUCCESS)
+    {
+      if (timeElapsed < timeOut)
+        usleep(sleepTime);
+      else
+        error (_("Timed out waiting for the CUDA API to initialize."));
+      
+      timeElapsed += sleepTime;
+    }
+
+  /* Check if more data is available from the inferior */
+  target_read_memory (attachDataAvailableFlagAddr, &attachDataAvailable, 1);
+
+  if (attachDataAvailable)
+    /* Resume the inferior to collect more data. CUDA_ATTACH_STATE_COMPLETE will
+       be set once this completes. */
+    continue_command (0, 0);
+  else
+    /* No data to collect, attach complete. */
+    cuda_api_set_attach_state (CUDA_ATTACH_STATE_COMPLETE);
+
+  /* Enable debugger callbacks from the CUDA driver */
+  target_write_memory (debugFlagAddr, &one, 1);
+}
+
+static void
+cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
+{
+  CORE_ADDR debugFlagAddr;
+  CORE_ADDR rpcFlagAddr;
+  CORE_ADDR needCleanupOnDetachFlagAddr;
+  unsigned char needCleanupOnDetach;
+  const unsigned char zero = 0;
+
+  debugFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_IPC_FLAG_NAME));
+
+  /* If the CUDA driver isn't available, tread the inferior as a host-only
+     process */
+  if (!debugFlagAddr)
+    {
+      host_target_ops.to_detach (ops, args, from_tty);
+      return;
+    }
+
+  /* Update the suspended devices mask in the inferior */
+  cuda_inferior_update_suspended_devices_mask ();
+
+  cuda_api_set_attach_state (CUDA_ATTACH_STATE_DETACHING);
+
+  /* Figure out if we need to clean up driver state before detaching */
+  needCleanupOnDetachFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_ATTACH_HANDLER_AVAILABLE));
+
+  if (!needCleanupOnDetachFlagAddr)
+    error (_("Failed to detach cleanly from the inferior."));
+
+  target_read_memory (needCleanupOnDetachFlagAddr, &needCleanupOnDetach, 1);
+
+  /* Request cleanup from the debugger backend if needed */
+  if (needCleanupOnDetach)
+    cuda_api_request_cleanup_on_detach ();
+
+  /* Make sure the debugger is reinitialized from scratch on reattaching
+     to the inferior */
+  rpcFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_DEBUGGER_INITIALIZED));
+
+  if (!rpcFlagAddr)
+    error (_("Failed to detach cleanly from the inferior."));
+
+  target_write_memory (rpcFlagAddr, &zero, 1);
+
+  /* If a cleanup is needed, resume the app to allow the cleanup to complete.
+     The debugger backend will send a cleanup event to stop the app when the
+     cleanup finishes. */
+  if (needCleanupOnDetach)
+    {
+      /* Clear all breakpoints */
+      delete_command(NULL, 0);
+
+      /* Now resume the app. */
+      continue_command (0, 0);
+    }
+
+  target_write_memory (debugFlagAddr, &zero, 1);
+
+  /* Finalize the API to cleanup state before the app is resumed below */
+  cuda_api_finalize ();
+
+  /* Call the host detach routine. */
+  host_target_ops.to_detach (ops, args, from_tty);
+
+  cuda_cleanup ();
+}
+

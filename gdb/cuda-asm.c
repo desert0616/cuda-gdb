@@ -28,6 +28,7 @@
 #include "cuda-modules.h"
 #include "cuda-state.h"
 #include "cuda-tdep.h"
+#include "cuda-options.h"
 
 /******************************************************************************
  *
@@ -98,7 +99,7 @@ disasm_cache_create (void)
   return disasm_cache;
 }
 
-static void
+void
 disasm_cache_flush (disasm_cache_t disasm_cache)
 {
   inst_t inst = disasm_cache->head;
@@ -128,7 +129,7 @@ const char *
 disasm_cache_find_instruction (disasm_cache_t disasm_cache,
                                uint64_t pc, uint32_t *inst_size)
 {
-  inst_t inst, prev_inst;
+  inst_t inst = NULL, prev_inst = NULL;
   kernel_t kernel;
   module_t module;
   elf_image_t elf_img;
@@ -144,14 +145,16 @@ disasm_cache_find_instruction (disasm_cache_t disasm_cache,
   CORE_ADDR pc1, pc2;
   char buf[512];
   uint32_t dev_id, sm_id, wp_id;
+  int len = 0;
 
   if (!cuda_focus_is_device ())
     return NULL;
 
-  /* update the cache if needed */
-  if (pc < disasm_cache->start_addr ||
-      pc > disasm_cache->end_addr ||
-      !disasm_cache->head)
+  /* update the cache using the ELF image if needed */
+  if (cuda_options_disassemble_from_elf_image () &&
+      (pc < disasm_cache->start_addr ||
+       pc > disasm_cache->end_addr ||
+       !disasm_cache->head))
   {
     /* flush the cache and free the associated memory */
     disasm_cache_flush (disasm_cache);
@@ -191,15 +194,16 @@ disasm_cache_find_instruction (disasm_cache_t disasm_cache,
         prev_inst = disasm_cache->head;
 
         /* read the offset and stop reading if cannot find it */
-        if (sscanf (line, "\t/*%"PRIx64"*/\t", &ofst) == 0)
+        if (sscanf (line, "\t/*%"PRIx64"*/", &ofst) == 0)
           break;
 
         /* find the location of the instruction (after the second \t) */
         for (text = line + 1; *text!= '\t'; ++text);
         ++text;
 
-        /* discard the ";\n" at the end of the line */
-        text[strlen (text) - 2] = 0;
+        /* discard the "\n" and possible ";" at the end of the line */
+        for (len = strlen (text); len && strchr("\n ;", text[len - 1]); --len);
+        text[len] = 0;
 
         /* add the instruction to the cache at the found offset */
         disasm_cache->head = inst_create (entry_pc + ofst, text, disasm_cache->head);
@@ -227,10 +231,12 @@ disasm_cache_find_instruction (disasm_cache_t disasm_cache,
     pclose (sass);
   }
 
-  /* find the cached disassembled instruction */
-  for (inst = disasm_cache->head; inst; inst = inst->next)
-    if (inst->pc == pc)
-      break;
+  /* find the cached disassembled instruction. Force re-reading if
+     disassembling from the device memory.  */
+  if (cuda_options_disassemble_from_elf_image ())
+    for (inst = disasm_cache->head; inst; inst = inst->next)
+      if (inst->pc == pc)
+        break;
 
   /* Query the API if the disassembly failed */
   if (!inst && cuda_initialized)

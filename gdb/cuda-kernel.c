@@ -30,14 +30,20 @@
 #include "cuda-state.h"
 #include "cuda-tdep.h"
 
+/* counter for the CUDA kernel ids */
+static uint64_t next_kernel_id = 0;
+
+uint64_t
+cuda_latest_launched_kernel_id (void)
+{
+  return next_kernel_id - 1;
+}
+
 /******************************************************************************
  *
  *                                   Kernel
  *
  *****************************************************************************/
-
-/* counter for the CUDA kernel ids */
-static uint64_t next_kernel_id = 0;
 
 struct kernel_st {
   uint64_t        id;              /* unique kernel id per GDB session */
@@ -476,7 +482,6 @@ kernels_update_kernels (kernels_t kernels)
       gdb_assert (kernel);
       kernel->launched = true;
       kernel->present  = true;
-      ++kernels->num_present_kernels;
     }
 
   cuda_iterator_destroy(itr);
@@ -489,6 +494,8 @@ kernels_update_kernels (kernels_t kernels)
       next_kernel = kernel->next;
       if (kernel->launched && !kernel->present)
         kernels_terminate_kernel (kernels, kernel);
+      if (kernel->launched && kernel->present)
+        ++kernels->num_present_kernels;
       kernel = next_kernel;
     }
 }

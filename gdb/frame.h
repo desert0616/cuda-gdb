@@ -738,7 +738,4 @@ extern struct frame_info *create_new_frame (CORE_ADDR base, CORE_ADDR pc);
 extern int frame_unwinder_is (struct frame_info *fi,
 			      const struct frame_unwind *unwinder);
 
-/* CUDA - extra frame info */
-struct cuda_frame_info * cuda_get_frame_info (struct frame_info *fi);
-
 #endif /* !defined (FRAME_H)  */

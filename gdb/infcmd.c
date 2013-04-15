@@ -2494,6 +2494,10 @@ attach_command (char *args, int from_tty)
     }
 
   attach_command_post_wait (args, from_tty, async_exec);
+
+  /* CUDA - attach */
+  cuda_nat_attach ();
+
   discard_cleanups (back_to);
 }
 

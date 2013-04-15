@@ -1313,6 +1313,30 @@ lookup_symbol_aux_symtabs (int block_index, const char *name,
   const struct block *block;
   struct symtab *s;
 
+  /* CUDA - duplicate extern symbols */
+  /* When the CUDA application is compiled in separate compilation mode, the
+     same device extern global appears in both the host and device code. The
+     device variable symbol should have priority.
+    
+     It is safe to do so because if there was an actual host global variable
+     with the same name, the host linker would have complained about it. */
+  if (domain == VAR_DOMAIN)
+    {
+      ALL_PRIMARY_SYMTABS (objfile, s)
+        {
+          if (!objfile->cuda_objfile)
+            continue;
+          bv = BLOCKVECTOR (s);
+          block = BLOCKVECTOR_BLOCK (bv, block_index);
+          sym = lookup_block_symbol (block, name, domain);
+          if (sym)
+            {
+              block_found = block;
+              return fixup_symbol_section (sym, objfile);
+            }
+        }
+    }
+
   ALL_PRIMARY_SYMTABS (objfile, s)
   {
     bv = BLOCKVECTOR (s);
@@ -1749,11 +1773,21 @@ find_pc_sect_symtab (CORE_ADDR pc, struct obj_section *section)
 
      It also happens for objfiles that have their functions reordered.
      For these, the symtab we are looking for is not necessarily read in.  */
-
   ALL_PRIMARY_SYMTABS (objfile, s)
   {
     bv = BLOCKVECTOR (s);
     b = BLOCKVECTOR_BLOCK (bv, GLOBAL_BLOCK);
+
+    /* CUDA - interleaving */
+    /* CUDA objfiles are not allocated as a single block of memory. Instead of
+       erroneously getting the GLOBAL_BLOCK for those objfiles, we find the
+       innermost block containing the PC for that symtab. */
+    if (objfile->cuda_objfile)
+      {
+        struct blockvector *found = blockvector_for_pc_sect (pc, section, &b, s);
+        if (!found)
+          continue;
+      }
 
     /* CUDA - overlapping objfiles */
     /* For reasons yet not fully understood, it sometimes happens that the PC
@@ -1825,10 +1859,16 @@ find_pc_sect_symtab (CORE_ADDR pc, struct obj_section *section)
 
     if (!objfile->sf)
       continue;
+
+    /* CUDA - no psymtab-based optimization */
+    /* Because the optimization above has been turned off for CUDA objfiles,
+       it is now possible to call this function when the partial symbol table
+       has already been read in. We must take it into account when deciding to
+       emit a warning about it. */
     result = objfile->sf->qf->find_pc_sect_symtab (objfile,
 						   msymbol,
 						   pc, section,
-						   1);
+						   !objfile->cuda_objfile);
     if (result)
       return result;
   }
@@ -2002,8 +2042,19 @@ find_pc_sect_line (CORE_ADDR pc, struct obj_section *section, int notcurrent)
      They all have the same apriori range, that we found was right;
      but they have different line tables.  */
 
+  /* CUDA - symtabs */
+  /* The for loop below is wrong. We have to iterate over all the symtabs, not
+     just the symtabs after 's' in the list of symtabs. Otherwise, we may miss
+     some entries. */
+#if 0
   for (; s && BLOCKVECTOR (s) == bv; s = s->next)
     {
+#else
+  ALL_OBJFILE_SYMTABS (s->objfile, s)
+    {
+      if (BLOCKVECTOR (s) != bv)
+        continue;
+#endif
       /* Find the best line in this symtab.  */
       l = LINETABLE (s);
       if (!l)
@@ -2179,8 +2230,6 @@ find_line_symtab (struct symtab *symtab, int line,
 	  continue;
 	if (symtab->fullname != NULL
 	    && symtab_to_fullname (s) != NULL
-            && IS_ABSOLUTE_PATH (symtab->fullname) /* CUDA - filenames */
-            && IS_ABSOLUTE_PATH (s->fullname) /* CUDA - filenames */
 	    && FILENAME_CMP (symtab->fullname, s->fullname) != 0)
 	  continue;	
 	l = LINETABLE (s);
@@ -4638,6 +4687,16 @@ expand_line_sal (struct symtab_and_line sal)
                debug information is missing)
          */
         global_block = block_global_block (blocks[i]);
+
+        /* CUDA - line info */
+        /* If the global block has not start/end address, we are debugging a
+         * binary that has no debug information. In that situation, we do not
+         * want to eliminate the duplicate sals. */
+        if (ret.sals->symtab->objfile->cuda_objfile &&
+            global_block->startaddr == 0 &&
+            global_block->endaddr == 0)
+          continue;
+
         if (ret.sals->symtab->objfile->cuda_objfile &&
             blocks[i]->startaddr == global_block->startaddr &&
             blocks[i]->endaddr == global_block->endaddr)

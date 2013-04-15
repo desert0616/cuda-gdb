@@ -62,4 +62,6 @@ void      kernels_start_kernel     (kernels_t kernels, uint64_t grid_id,
                                     CuDim3 grid_dim, CuDim3 block_dim,
                                     CUDBGKernelType type);
 
+uint64_t  cuda_latest_launched_kernel_id (void);
+
 #endif

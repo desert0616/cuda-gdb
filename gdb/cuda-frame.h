@@ -15,18 +15,26 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _CUDA_EVENTS_H
-#define _CUDA_EVENTS_H 1
+#ifndef _CUDA_FRAME_H
+#define _CUDA_FRAME_H 1
 
-#include "cudadebugger.h"
+#include "defs.h"
+#include "cuda-defs.h"
+#include "frame.h"
+#include "frame-unwind.h"
+#include "frame-base.h"
 
-typedef enum {
-    CUDA_EVENT_INVALID,
-    CUDA_EVENT_SYNC,
-    CUDA_EVENT_ASYNC,
-    CUDA_EVENT_MAX,
-} cuda_event_kind_t;
 
-void cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind);
+extern const struct frame_unwind cuda_frame_unwind;
+extern const struct frame_base   cuda_frame_base;
+
+const struct frame_unwind * cuda_frame_sniffer (struct frame_info *next_frame);
+const struct frame_base *   cuda_frame_base_sniffer (struct frame_info *next_frame);
+
+bool cuda_frame_p (struct frame_info *next_frame);
+bool cuda_frame_outermost_p (struct frame_info *next_frame);
+
+CORE_ADDR cuda_unwind_pc (struct gdbarch *gdbarch, struct frame_info *next_frame);
 
 #endif
+

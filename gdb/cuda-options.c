@@ -169,9 +169,9 @@ cuda_options_initialize_debug_textures ()
   cuda_debug_textures = false;
 
   add_setshow_zinteger_cmd ("textures", class_maintenance, &cuda_debug_textures,
-                            _("Set debug trace of the CUDA notification functions"),
-                            _("Show debug trace of the CUDA notification functions."),
-                            _("When non-zero, internal debugging of the CUDA notification functions is enabled."),
+                            _("Set debug trace of CUDA texture accesses"),
+                            _("Show debug trace of CUDA texture accesses."),
+                            _("When non-zero, internal debugging of CUDA texture accesses is enabled."),
                             NULL, cuda_show_debug_textures,
                             &setdebugcudalist, &showdebugcudalist);
 }
@@ -244,6 +244,37 @@ bool
 cuda_options_debug_siginfo ()
 {
   return cuda_debug_siginfo;
+}
+
+/*
+ * set debug cuda api
+ */
+static int cuda_debug_api;
+
+static void
+cuda_show_debug_api (struct ui_file *file, int from_tty,
+                               struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("CUDA api debug trace is %s.\n"), value);
+}
+
+static void
+cuda_options_initialize_debug_api ()
+{
+  cuda_debug_api = false;
+
+  add_setshow_zinteger_cmd ("api", class_maintenance, &cuda_debug_api,
+                            _("Set debug trace of the CUDA api functions"),
+                            _("Show debug trace of the CUDA api functions."),
+                            _("When non-zero, internal debugging of the CUDA api functions is enabled."),
+                            NULL, cuda_show_debug_api,
+                            &setdebugcudalist, &showdebugcudalist);
+}
+
+bool
+cuda_options_debug_api ()
+{
+  return cuda_debug_api;
 }
 
 /*
@@ -390,6 +421,61 @@ cuda_options_break_on_launch_application (void)
 {
   return (cuda_break_on_launch == cuda_break_on_launch_application ||
           cuda_break_on_launch == cuda_break_on_launch_all);
+}
+
+/*
+ * set cuda disassemble_from
+ */
+const char  cuda_disassemble_from_device_memory [] = "device_memory";
+const char  cuda_disassemble_from_elf_image[]      = "elf_image";
+
+const char *cuda_disassemble_from_enums[] = {
+  cuda_disassemble_from_device_memory,
+  cuda_disassemble_from_elf_image,
+  NULL
+};
+
+const char *cuda_disassemble_from;
+
+static void
+cuda_show_disassemble_from (struct ui_file *file, int from_tty,
+                            struct cmd_list_element *c, const char *value)
+{
+  printf_filtered ("CUDA code is dissassembled from %s.\n", value);
+}
+
+static void
+cuda_set_disassemble_from (char *args, int from_tty, struct cmd_list_element *c)
+{
+  // XXX: flush all the disassembly caches
+}
+static void
+cuda_options_initialize_disassemble_from (void)
+{
+  cuda_disassemble_from = cuda_disassemble_from_elf_image;
+
+  add_setshow_enum_cmd ("disassemble_from", class_cuda,
+                        cuda_disassemble_from_enums, &cuda_disassemble_from,
+                        _("Choose whether to disassemble from the device memory "
+                          "(slow) or the ELF image (fast)."),
+                        _("Show where the device code is disassembled from."),
+                        _("Choose where the device code is disassembled from:\n"
+                          "  device_memory : the device code memory (slow)\n"
+                          "  elf_image     : the device ELF image on the host (fast)\n"),
+                        cuda_set_disassemble_from, cuda_show_disassemble_from,
+                        &setcudalist, &showcudalist);
+}
+
+bool
+cuda_options_disassemble_from_device_memory (void)
+{
+  return cuda_disassemble_from == cuda_disassemble_from_device_memory;
+}
+
+bool
+cuda_options_disassemble_from_elf_image (void)
+{
+  return cuda_disassemble_from == cuda_disassemble_from_elf_image;
 }
 
 /*
@@ -599,6 +685,63 @@ cuda_options_initialize_copyright (void)
            &showcudalist);
 }
 
+/*
+ * set cuda api_failures
+ */
+const char  cuda_api_failures_option_ignore[]   = "ignore";
+const char  cuda_api_failures_option_stop[]     = "stop";
+const char  cuda_api_failures_option_hide[]     = "hide";
+
+const char *cuda_api_failures_options_enums[] = {
+    cuda_api_failures_option_ignore,
+    cuda_api_failures_option_stop,
+    cuda_api_failures_option_hide,
+    NULL
+};
+
+const char *cuda_api_failures_option;
+
+static void
+cuda_show_api_failures (struct ui_file *file, int from_tty,
+                          struct cmd_list_element *c, const char *value)
+{
+  printf_filtered ("api_failures is set to '%s'.\n", value);
+}
+
+static void
+cuda_options_initialize_api_failures (void)
+{
+  cuda_api_failures_option = cuda_api_failures_option_ignore;
+
+  add_setshow_enum_cmd ("api_failures", class_cuda,
+                        cuda_api_failures_options_enums, &cuda_api_failures_option,
+                        _("Set the api_failures to ignore/stop/hide on CUDA driver API call errors."), 
+                        _("Show if cuda-gdb ignores/stops/hides on CUDA driver API call errors."),
+                        _("  ignore : no breakpoint is hit, only warning message is printed for every CUDA driver API call failure\n"
+                          "  stop   : a breakpoint is hit when a CUDA driver API call returns an error\n"
+                          "  hide   : no breakpoint is hit, no warning message is printed"),
+                        NULL, cuda_show_api_failures,
+                        &setcudalist, &showcudalist);
+}
+
+bool
+cuda_options_api_failures_ignore(void)
+{
+  return (cuda_api_failures_option == cuda_api_failures_option_ignore);
+}
+
+bool
+cuda_options_api_failures_stop(void)
+{
+  return (cuda_api_failures_option == cuda_api_failures_option_stop);
+}
+
+bool
+cuda_options_api_failures_hide(void)
+{
+  return (cuda_api_failures_option == cuda_api_failures_option_hide);
+}
+
 /*Initialization */
 void
 cuda_options_initialize ()
@@ -610,9 +753,12 @@ cuda_options_initialize ()
   cuda_options_initialize_debug_libcudbg ();
   cuda_options_initialize_debug_siginfo ();
   cuda_options_initialize_debug_textures ();
+  cuda_options_initialize_debug_api ();
   cuda_options_initialize_memcheck ();
   cuda_options_initialize_coalescing ();
   cuda_options_initialize_break_on_launch ();
+  cuda_options_initialize_api_failures ();
+  cuda_options_initialize_disassemble_from ();
   cuda_options_initialize_hide_internal_frames ();
   cuda_options_initialize_show_kernel_events ();
   cuda_options_initialize_show_context_events ();

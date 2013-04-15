@@ -49,8 +49,6 @@
    memory, or the stack pointer register index and the offset.
  */
 
-#define REGMAP_MAX_ELEMENTS 2
-
 /* Raw value decoding */
 #define REGMAP_CLASS(x)   (x >> 24)
 #define REGMAP_REG(x)     (x & 0xffffff)
@@ -65,9 +63,10 @@ struct regmap_st {
     uint64_t      addr;        /* the kernel-relative PC address */
   } input;
   struct {
-    uint32_t      num_entries;                     /* # entries in the other fields */
-    bool          valid[REGMAP_MAX_ELEMENTS];      /* self-explanatory */
-    uint32_t      raw_value[REGMAP_MAX_ELEMENTS];  /* see REGMAP_* macros above */
+    uint32_t      num_entries;                        /* # entries in the other fields */
+    uint32_t      max_location_index;                 /* max loc index across all addrs */
+    uint32_t      location_index[REGMAP_MAX_ENTRIES]; /* location index for raw value */
+    uint32_t      raw_value[REGMAP_MAX_ENTRIES];      /* see REGMAP_* macros above */
   } output;
 };
 
@@ -153,13 +152,22 @@ regmap_get_num_entries (regmap_t regmap)
   return regmap->output.num_entries;
 }
 
+uint32_t
+regmap_get_location_index (regmap_t regmap, uint32_t idx)
+{
+  gdb_assert (regmap);
+  gdb_assert (idx < REGMAP_MAX_ENTRIES);
+  gdb_assert (idx < regmap->output.num_entries);
+
+  return regmap->output.location_index[idx];
+}
+
 CUDBGRegClass
 regmap_get_class (regmap_t regmap, uint32_t idx)
 {
   gdb_assert (regmap);
-  gdb_assert (idx < REGMAP_MAX_ELEMENTS);
+  gdb_assert (idx < REGMAP_MAX_ENTRIES);
   gdb_assert (idx < regmap->output.num_entries);
-  gdb_assert (regmap->output.valid[idx]);
 
   return REGMAP_CLASS (regmap->output.raw_value[idx]);
 }
@@ -171,9 +179,8 @@ regmap_get_half_register (regmap_t regmap, uint32_t idx, bool *in_higher_16_bits
 
   gdb_assert (in_higher_16_bits);
   gdb_assert (regmap);
-  gdb_assert (idx < REGMAP_MAX_ELEMENTS);
+  gdb_assert (idx < REGMAP_MAX_ENTRIES);
   gdb_assert (idx < regmap->output.num_entries);
-  gdb_assert (regmap->output.valid[idx]);
   gdb_assert (REGMAP_CLASS (regmap->output.raw_value[idx]) == REG_CLASS_REG_HALF);
 
   raw_register = REGMAP_REG (regmap->output.raw_value[idx]);
@@ -185,9 +192,8 @@ uint32_t
 regmap_get_register (regmap_t regmap, uint32_t idx)
 {
   gdb_assert (regmap);
-  gdb_assert (idx < REGMAP_MAX_ELEMENTS);
+  gdb_assert (idx < REGMAP_MAX_ENTRIES);
   gdb_assert (idx < regmap->output.num_entries);
-  gdb_assert (regmap->output.valid[idx]);
   gdb_assert (REGMAP_CLASS (regmap->output.raw_value[idx]) == REG_CLASS_REG_FULL);
 
   return REGMAP_REG (regmap->output.raw_value[idx]);
@@ -197,9 +203,8 @@ uint32_t
 regmap_get_sp_register (regmap_t regmap, uint32_t idx)
 {
   gdb_assert (regmap);
-  gdb_assert (idx < REGMAP_MAX_ELEMENTS);
+  gdb_assert (idx < REGMAP_MAX_ENTRIES);
   gdb_assert (idx < regmap->output.num_entries);
-  gdb_assert (regmap->output.valid[idx]);
   gdb_assert (REGMAP_CLASS (regmap->output.raw_value[idx]) == REG_CLASS_LMEM_REG_OFFSET);
 
   return REGMAP_SP_REG (regmap->output.raw_value[idx]);
@@ -209,9 +214,8 @@ uint32_t
 regmap_get_sp_offset (regmap_t regmap, uint32_t idx)
 {
   gdb_assert (regmap);
-  gdb_assert (idx < REGMAP_MAX_ELEMENTS);
+  gdb_assert (idx < REGMAP_MAX_ENTRIES);
   gdb_assert (idx < regmap->output.num_entries);
-  gdb_assert (regmap->output.valid[idx]);
   gdb_assert (REGMAP_CLASS (regmap->output.raw_value[idx]) == REG_CLASS_LMEM_REG_OFFSET);
 
   return REGMAP_SP_OFST (regmap->output.raw_value[idx]);
@@ -221,14 +225,97 @@ uint32_t
 regmap_get_offset (regmap_t regmap, uint32_t idx)
 {
   gdb_assert (regmap);
-  gdb_assert (idx < REGMAP_MAX_ELEMENTS);
+  gdb_assert (idx < REGMAP_MAX_ENTRIES);
   gdb_assert (idx < regmap->output.num_entries);
-  gdb_assert (regmap->output.valid[idx]);
   gdb_assert (REGMAP_CLASS (regmap->output.raw_value[idx]) == REG_CLASS_MEM_LOCAL);
 
   return REGMAP_OFST (regmap->output.raw_value[idx]);
 }
 
+
+/****************************************************************************
+
+                              PROPERTY ROUTINES
+
+ ****************************************************************************/
+
+/* Determine if the value indicated by this register map is readable and
+   writable.
+ */
+static void
+regmap_find_access_permissions (regmap_t regmap, bool* read, bool *write)
+{
+  uint32_t num_chunks, chunk;
+  uint32_t num_entries, i;
+  uint32_t num_instances, expected_num_instances;
+
+  gdb_assert (regmap);
+  gdb_assert (write);
+  gdb_assert (read);
+
+  /* No entry means nothing to read or write */
+  num_entries = regmap_get_num_entries (regmap);
+  if (num_entries == 0)
+    {
+      *read = false;
+      *write = false;
+      return;
+    }
+
+  /* Compute the number of chunks */
+  num_chunks = regmap->output.max_location_index + 1;
+  gdb_assert (num_chunks <= REGMAP_MAX_LOCATION_INDEX + 1);
+
+  /* Iterate over each chunk to determine the permissions. */
+  *read = true;
+  *write = true;
+  expected_num_instances = ~0U;
+  for (chunk = 0; chunk < num_chunks; ++chunk)
+    {
+      /* Count the number of instances for this chunk */
+      num_instances = 0;
+      for (i = 0; i < num_entries; ++i)
+        if (regmap_get_location_index (regmap, i) == chunk)
+          ++num_instances;
+
+      /* Chunk 0, which always exists, is used as the reference */
+      if (chunk == 0)
+        expected_num_instances = num_instances;
+
+      /* Not readable or writable if one chunk is missing */
+      if (num_instances == 0)
+        {
+          *read = false;
+          *write = false;
+        }
+
+      /* Writeable if same number of instances for all the chunks */
+      if (num_instances != expected_num_instances)
+        *write = false;
+    }
+}
+
+bool
+regmap_is_readable (regmap_t regmap)
+{
+  bool read = false;
+  bool write = false;
+
+  regmap_find_access_permissions (regmap, &read, &write);
+
+  return read;
+}
+
+bool
+regmap_is_writable (regmap_t regmap)
+{
+  bool read = false;
+  bool write = false;
+
+  regmap_find_access_permissions (regmap, &read, &write);
+
+  return write;
+}
 
 /****************************************************************************
 
@@ -373,8 +460,7 @@ regmap_print (regmap_t regmap)
            regmap->input.func_name, regmap->input.reg_name, regmap->input.addr);
 
   for (i = 0; i < regmap->output.num_entries; ++i)
-    if (regmap->output.valid[i])
-      fprintf (stderr, "idx %d raw 0x%x ", i, regmap->output.raw_value[i]);
+    fprintf (stderr, "idx %d raw 0x%x ", i, regmap->output.raw_value[i]);
 
   fprintf (stderr, ")\n");
 }
@@ -397,18 +483,25 @@ regmap_reg_search (regmap_ptr_t *p, regmap_t regmap)
   /* Read the register reg */
   regmap_read_reg (p, &reg);
   gdb_assert (p->byte == reg.next);
+  gdb_assert (reg.idx <= REGMAP_MAX_LOCATION_INDEX);
 
   /* Discard this register reg if the register name does not match */
   if (strcmp (reg.ptx_reg, regmap->input.reg_name) != 0)
     return;
+
+  /* Save the maximum location index encountered for this register name */
+  if (regmap->output.max_location_index == ~0U ||
+      reg.idx > regmap->output.max_location_index)
+    regmap->output.max_location_index = reg.idx;
 
   /* Discard this register reg if the address if out of range */
   if (regmap->input.addr < reg.start_addr || regmap->input.addr > reg.end_addr)
     return;
 
   /* Save the found element in the regmap object */
-  regmap->output.valid[reg.idx]= true;
-  regmap->output.raw_value[reg.idx]= reg.value;
+  regmap->output.location_index[regmap->output.num_entries] = reg.idx;
+  regmap->output.raw_value[regmap->output.num_entries] = reg.value;
+  regmap->output.num_entries++;
 }
 
 /* Find register in the func entry pointed by p */
@@ -464,19 +557,13 @@ regmap_table_search (struct objfile *objfile, const char *func_name,
   cuda_regmap->input.func_name = func_name_copy;
   cuda_regmap->input.reg_name  = reg_name;
   cuda_regmap->input.addr      = addr;
+  cuda_regmap->output.max_location_index = ~0U;
 
   /* Search in each function */
   regmap_read_table (objfile, &table);
   p.byte = table.start;
   while (p.byte < table.start + table.size)
     regmap_func_search (&p, cuda_regmap);
-
-  /* Post-processing: compute the number of *contiguous* entries starting from
-     index 0 */
-  cuda_regmap->output.num_entries = 0;
-  for (i = 0; i < REGMAP_MAX_ELEMENTS; i++)
-    if (cuda_regmap->output.valid[i])
-      cuda_regmap->output.num_entries++;
 
   /* Free the table */
   obstack_free (&objfile->objfile_obstack, table.start);

@@ -543,6 +543,6 @@ distclean: clean
 maintainer-clean realclean: distclean
 	rm -f GDBvn.texi *.info* *.dvi *.ps *.html *.pdf
 
-install: install-info
+install:
 
-uninstall: uninstall-info
+uninstall:

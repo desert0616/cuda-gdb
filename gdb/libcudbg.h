@@ -64,6 +64,10 @@ typedef unsigned char bool;
 #define END_PACKED_ALIGNMENT
 #endif
 
+/* NOTE:  The following structure is *very similar* to that in cudadebugger.h,
+          however, it is not identical.  This must be treated as its own entity
+          when it comes to backwards compatibility (only debug clients using RPCD
+          and libcudbg will hit this). */
 typedef enum {
     /* API Version Query */
     CUDBGAPIREQ_getAPI,
@@ -140,8 +144,8 @@ typedef enum {
 
     /* Events */
     CUDBGAPIREQ_setNotifyNewEventCallback,
-    CUDBGAPIREQ_acknowledgeEvents,
-    CUDBGAPIREQ_getNextEvent,
+    CUDBGAPIREQ_acknowledgeEvents42,
+    CUDBGAPIREQ_getNextEvent42,
 
     /* 4.1 Extensions */
     CUDBGAPIREQ_getHostAddrFromDeviceAddr,
@@ -149,7 +153,22 @@ typedef enum {
 
     /* 4.2 Extensions */
     CUDBGAPIREQ_readTextureMemoryBindless,
+
+    /* 5.0 Extensions */
+    CUDBGAPIREQ_clearAttachState,
+    CUDBGAPIREQ_memcheckReadErrorAddress,
+    CUDBGAPIREQ_getNextSyncEvent,
+    CUDBGAPIREQ_getNextAsyncEvent,
+    CUDBGAPIREQ_acknowledgeSyncEvents,
+    CUDBGAPIREQ_requestCleanupOnDetach,
 } CUDBGAPIREQ_t;
+
+typedef enum {
+    LIBCUDBG_PIPE_ENDPOINT_RPCD = 999,
+    LIBCUDBG_PIPE_ENDPOINT_DEBUG_CLIENT,
+    LIBCUDBG_PIPE_ENDPOINT_RPCD_CB,
+    LIBCUDBG_PIPE_ENDPOINT_DEBUG_CLIENT_CB,
+} libcudbg_pipe_endpoint_t;
 
 START_PACKED_ALIGNMENT;
 
@@ -272,6 +291,11 @@ typedef struct PACKED_ALIGNMENT CUDBGAPI_message_st {
                         uint32_t tid;
                         uint64_t context;
                     } contextDestroy;
+                    struct PACKED_ALIGNMENT {
+                        CUDBGResult errorType;
+                    } internalError;
+                    /* WARNING: We need to version CUDBGAPIMSG_t if the change impacts
+                     * the size of the union */
                 } cases;
             } event;
         } result;

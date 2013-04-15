@@ -244,6 +244,7 @@ static const struct {
   {"CUDA_EXCEPTION_10", "Device Illegal Address"},
   {"CUDA_EXCEPTION_11", "Lane Misaligned Address"},        /* cuda memcheck (future) */
   {"CUDA_EXCEPTION_12", "Warp Assert"},                    /* device side assert */
+  {"CUDA_EXCEPTION_13", "Lane Syscall Error"},
 
   /* Last entry, used to check whether the table is the right size.  */
   {NULL, "TARGET_SIGNAL_MAGIC"}

@@ -27,16 +27,22 @@ bool cuda_options_debug_notifications (void);
 bool cuda_options_debug_textures (void);
 bool cuda_options_debug_libcudbg (void);
 bool cuda_options_debug_siginfo (void);
+bool cuda_options_debug_api (void);
 bool cuda_options_memcheck (void);
 bool cuda_options_coalescing (void);
 bool cuda_options_break_on_launch_application(void);
 bool cuda_options_break_on_launch_system (void);
+bool cuda_options_disassemble_from_device_memory (void);
+bool cuda_options_disassemble_from_elf_image (void);
 bool cuda_options_hide_internal_frames (void);
 bool cuda_options_show_kernel_events (void);
 bool cuda_options_show_context_events (void);
 bool cuda_options_launch_blocking (void);
 bool cuda_options_thread_selection_logical (void);
 bool cuda_options_thread_selection_physical (void);
+bool cuda_options_api_failures_ignore (void);
+bool cuda_options_api_failures_stop (void);
+bool cuda_options_api_failures_hide (void);
 
 #endif
 

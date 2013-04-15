@@ -60,6 +60,8 @@
 #include "gdb_string.h"
 #include "gdb_assert.h"
 
+#include "cuda-frame.h"
+
 extern int dwarf2_always_disassemble;
 
 static void
@@ -254,16 +256,6 @@ dwarf_expr_frame_base (void *baton, const gdb_byte **start, size_t * length)
   dwarf_expr_frame_base_1 (framefunc,
 			   get_frame_address_in_block (debaton->frame),
 			   start, length);
-
-  /* CUDA - DW_AT_frame_base is not set. Emulate it. */
-  if (*start != NULL && *length == 0)
-    {
-      gdb_byte *data = (gdb_byte*)*start;
-      *length = 1 + dwarf2_per_cu_addr_size (debaton->per_cu);
-      memset (data, 0, *length);
-      data[0] = DW_OP_addr;
-      frame_unwind_register (debaton->frame, 1, data + 1);
-    }
 }
 
 static void
@@ -1023,11 +1015,19 @@ dwarf2_evaluate_loc_desc (struct type *type, struct frame_info *frame,
 	    ULONGEST dwarf_regnum = dwarf_expr_fetch (ctx, 0);
 	    int gdb_regnum;
 
-        cuda_regnum_pc_pre_hack (frame);
         gdb_regnum = gdbarch_dwarf2_reg_to_regnum (arch, dwarf_regnum);
-        cuda_regnum_pc_post_hack ();
 
-	    if (gdb_regnum != -1)
+        /* CUDA - DW_OP_regx */
+        /* Locations may be hard-coded with DW_OP_regx as PTX registers. The
+           liveness informations is done at a lower level (see cuda-regmap.h).
+           Therefore, it is possible and legal that gdb_regnum == -1. */
+        if (cuda_frame_p (get_next_frame (frame)) && gdb_regnum == -1)
+          {
+            retval = allocate_value (type);
+            VALUE_LVAL (retval) = not_lval;
+            set_value_optimized_out (retval, 1);
+          }
+        else if (gdb_regnum != -1)
 	      retval = value_from_register (type, gdb_regnum, frame);
 	    else
 	      error (_("Unable to access DWARF register number %s"),

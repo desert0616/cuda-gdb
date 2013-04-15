@@ -29,8 +29,8 @@
 #include "cuda-iterator.h"
 #include "cuda-state.h"
 
-static uint32_t cuda_coords_distance_logical (cuda_coords_t *c1, cuda_coords_t *c2, CuDim3 gridDim, CuDim3 blockDim);
-static uint32_t cuda_coords_distance_physical (cuda_coords_t *c1, cuda_coords_t *c2);
+static uint64_t cuda_coords_distance_logical (cuda_coords_t *c1, cuda_coords_t *c2, CuDim3 gridDim, CuDim3 blockDim);
+static uint64_t cuda_coords_distance_physical (cuda_coords_t *c1, cuda_coords_t *c2);
 
 // set of current coordinates to which to apply the debugger api commands
 static cuda_coords_t current_coords = CUDA_INVALID_COORDS;
@@ -770,10 +770,10 @@ cuda_coords_find_valid (cuda_coords_t wished, cuda_coords_t found[CK_MAX], cuda_
   cuda_coords_t origin = { true, 0, 0, { 0, 0 }, { 0, 0, 0 }, 0, 0, 0, 0 };
   cuda_coords_kind_t kind;
   uint32_t relative_distance_logical, relative_distance_physical;
-  uint32_t absolute_distance_logical, absolute_distance_physical;
-  uint32_t best_relative_distance_logical = 0, best_relative_distance_physical = 0;
-  uint32_t best_absolute_distance_logical = 0, best_absolute_distance_physical = 0;
-  uint32_t best_next_distance_logical = 0, best_next_distance_physical = 0;
+  uint64_t absolute_distance_logical, absolute_distance_physical;
+  uint64_t best_relative_distance_logical = 0ULL, best_relative_distance_physical = 0ULL;
+  uint64_t best_absolute_distance_logical = 0ULL, best_absolute_distance_physical = 0ULL;
+  uint64_t best_next_distance_logical = 0ULL, best_next_distance_physical = 0ULL;
   CuDim3 grid_dim;
   CuDim3 block_dim;
   cuda_coords_t temp, filter = CUDA_WILDCARD_COORDS;
@@ -1026,7 +1026,7 @@ cuda_coords_flat_physical (cuda_coords_t *c)
   if (coords1.coord == CUDA_WILDCARD || coords2.coord== CUDA_WILDCARD) \
     coords1.coord = coords2.coord = CUDA_WILDCARD;
 
-static uint32_t
+static uint64_t
 cuda_coords_distance_logical (cuda_coords_t *c1, cuda_coords_t *c2,
                               CuDim3 gridDim, CuDim3 blockDim)
 {
@@ -1048,7 +1048,7 @@ cuda_coords_distance_logical (cuda_coords_t *c1, cuda_coords_t *c2,
   return dist (dist1, dist2);
 }
 
-static uint32_t
+static uint64_t
 cuda_coords_distance_physical (cuda_coords_t *c1, cuda_coords_t *c2)
 {
   cuda_coords_t coords1 = *c1;

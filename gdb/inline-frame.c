@@ -233,11 +233,6 @@ inline_frame_sniffer (const struct frame_unwind *self,
   if (frame_block == NULL)
     return 0;
 
-  /* CUDA - inline frame */
-  /* XXX Inline frame are currently not supported */
-  if (cuda_is_device_code_address (this_pc))
-    return 0;
-
   /* Calculate DEPTH, the number of inlined functions at this
      location.  */
   depth = 0;
@@ -335,7 +330,9 @@ skip_inline_frames (ptid_t ptid)
   this_pc = get_frame_pc (get_current_frame ());
   frame_block = block_for_pc (this_pc);
 
-  if (frame_block != NULL)
+  /* CUDA - inline frame support */
+  /* For the CUDA frames, we want to always expose the inlined frames */
+  if (frame_block != NULL && !cuda_is_device_code_address (this_pc))
     {
       cur_block = frame_block;
       while (BLOCK_SUPERBLOCK (cur_block))

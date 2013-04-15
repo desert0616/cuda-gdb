@@ -1082,11 +1082,28 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
 	  symtab->block_line_section = section;
 	  if (subfile->dirname)
 	    {
-	      /* Reallocate the dirname on the symbol obstack */
-	      symtab->dirname = (char *)
-		obstack_alloc (&objfile->objfile_obstack,
-			       strlen (subfile->dirname) + 1);
-	      strcpy (symtab->dirname, subfile->dirname);
+              /* Reallocate the dirname on the symbol obstack */
+
+              /* CUDA - filenames */
+              /* The subfile encodes the full path in 2 parts: the absolute
+                 compilation directory and the directory/basename (relative to
+                 the compilation directory). The symtab encodes the full path
+                 in 2 different parts: the absolute directory path, and the
+                 basename.
+                 Therefore, when building the symtabl dirname, we need to
+                 include the compilation directory and the relative directory.
+               */
+              char *fullname = concat (subfile->dirname, SLASH_STRING,
+                                       subfile->name, (char *)NULL);
+              char *dirname = ldirname (fullname);
+
+              symtab->dirname = (char *)
+                obstack_alloc (&objfile->objfile_obstack,
+                               strlen (dirname) + 1);
+              strcpy (symtab->dirname, dirname);
+
+              xfree (dirname);
+              xfree (fullname);
 	    }
 	  else
 	    {

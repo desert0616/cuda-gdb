@@ -77,6 +77,7 @@
 #include "cuda-state.h"
 #include "cuda-tdep.h"
 #include "cuda-options.h"
+#include "cuda-frame.h"
 
 void (*deprecated_selected_frame_level_changed_hook) (int);
 

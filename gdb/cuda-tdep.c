@@ -64,10 +64,12 @@
 #include "cuda-asm.h"
 #include "cuda-context.h"
 #include "cuda-elf-image.h"
+#include "cuda-frame.h"
 #include "cuda-iterator.h"
 #include "cuda-modules.h"
 #include "cuda-notifications.h"
 #include "cuda-options.h"
+#include "cuda-special-register.h"
 #include "cuda-state.h"
 #include "cuda-tdep.h"
 #include "cuda-utils.h"
@@ -146,6 +148,12 @@ struct gdbarch_tdep
   int invalid_hi_regnum;
 };
 
+int
+cuda_abi_sp_regnum (struct gdbarch *gdbarch)
+{
+  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
+  return tdep->sp_regnum;
+}
 
 int
 cuda_special_regnum (struct gdbarch *gdbarch)
@@ -381,6 +389,11 @@ cuda_exception_hit_p (cuda_exception_t *exception)
       exception->valid = true;
       exception->recoverable = true;
       break;
+    case CUDBG_EXCEPTION_LANE_SYSCALL_ERROR:
+      exception->value = TARGET_SIGNAL_CUDA_LANE_SYSCALL_ERROR;
+      exception->valid = true;
+      exception->recoverable = false;
+      break;
     case CUDBG_EXCEPTION_NONE:
       break;
     case CUDBG_EXCEPTION_UNKNOWN:
@@ -426,6 +439,8 @@ cuda_exception_type_to_name (CUDBGException_t exception_type)
       return target_signal_to_string (TARGET_SIGNAL_CUDA_DEVICE_ILLEGAL_ADDRESS);
     case CUDBG_EXCEPTION_WARP_ASSERT:
       return target_signal_to_string (TARGET_SIGNAL_CUDA_WARP_ASSERT);
+    case CUDBG_EXCEPTION_LANE_SYSCALL_ERROR:
+      return target_signal_to_string (TARGET_SIGNAL_CUDA_LANE_SYSCALL_ERROR);
     default:
       return target_signal_to_string (TARGET_SIGNAL_CUDA_UNKNOWN_EXCEPTION);
     }
@@ -435,7 +450,7 @@ void
 cuda_update_convenience_variables (void)
 {
   uint32_t num_dev, num_sm, num_wp, num_ln, num_reg, num_present_kernels, call_depth;
-  uint32_t syscall_call_depth;
+  uint32_t syscall_call_depth, num_present_kernels_all;
   uint64_t kernel_id;
   CuDim3 grid_dim;
   CuDim3 block_dim;
@@ -444,8 +459,14 @@ cuda_update_convenience_variables (void)
   kernel_t kernel;
   struct gdbarch *gdbarch = get_current_arch ();
   struct type *type_uint32 = builtin_type (gdbarch)->builtin_uint32;
-  struct type *type_uint64 = builtin_type (gdbarch)->builtin_uint32;
+  struct type *type_uint64 = builtin_type (gdbarch)->builtin_uint64;
   struct value *mark = NULL;
+  bool valid = false;
+  bool active = false;
+  uint64_t pc = 0ULL;
+  uint32_t lineno = 0;
+  uint64_t memcheck_error_address = 0;
+  ptxStorageKind memcheck_error_address_segment = ptxUNSPECIFIEDStorage;
 
   if (cuda_focus_is_device ())
     {
@@ -462,8 +483,17 @@ cuda_update_convenience_variables (void)
       block_dim = kernel_get_block_dim (kernel);
       kernel_id = kernel_get_id (kernel);
       num_present_kernels = kernels_get_num_present_kernels (kernels);
+      num_present_kernels_all = cuda_system_get_num_kernels ();
       call_depth = lane_get_call_depth (current.dev, current.sm, current.wp, current.ln);
       syscall_call_depth = lane_get_syscall_call_depth(current.dev, current.sm, current.wp, current.ln);
+      valid     = lane_is_valid (current.dev, current.sm, current.wp, current.ln);
+      active    = valid && lane_is_active (current.dev, current.sm, current.wp, current.ln);
+      pc        = lane_get_virtual_pc (current.dev, current.sm, current.wp, current.ln);
+      lineno    = find_pc_line (pc, 0).line;
+      memcheck_error_address = lane_get_memcheck_error_address (current.dev,
+                                       current.sm, current.wp, current.ln);
+      memcheck_error_address_segment = lane_get_memcheck_error_address_segment (current.dev,
+                                       current.sm, current.wp, current.ln);
     }
   else
     {
@@ -477,8 +507,15 @@ cuda_update_convenience_variables (void)
       kernel_id = CUDA_INVALID;
       current   = CUDA_INVALID_COORDS;
       num_present_kernels = CUDA_INVALID;
+      num_present_kernels_all = cuda_system_get_num_kernels ();
       call_depth = CUDA_INVALID;
       syscall_call_depth = CUDA_INVALID;
+      valid     = false;
+      active    = false;
+      pc        = 0ULL;
+      lineno    = 0;
+      memcheck_error_address = 0;
+      memcheck_error_address_segment = ptxUNSPECIFIEDStorage;
     }
 
   mark = value_mark ();
@@ -531,11 +568,23 @@ cuda_update_convenience_variables (void)
                    value_from_longest (type_uint32, (LONGEST) current.threadIdx.z));
   set_internalvar (lookup_internalvar ("cuda_num_present_kernels"),
                    value_from_longest (type_uint32, (LONGEST) num_present_kernels));
+  set_internalvar (lookup_internalvar ("cuda_num_total_kernels"),
+                   value_from_longest (type_uint32, (LONGEST) num_present_kernels_all));
   set_internalvar (lookup_internalvar ("cuda_call_depth"),
                    value_from_longest (type_uint32, (LONGEST) call_depth));
   set_internalvar (lookup_internalvar ("cuda_syscall_call_depth"),
                    value_from_longest (type_uint32, (LONGEST) syscall_call_depth));
-
+  set_internalvar (lookup_internalvar ("cuda_thread_active"),
+                   value_from_longest (type_uint32, (LONGEST) active));
+  set_internalvar (lookup_internalvar ("cuda_thread_lineno"),
+                   value_from_longest (type_uint32, (LONGEST) lineno));
+  set_internalvar (lookup_internalvar ("cuda_latest_launched_kernel_id"),
+                   value_from_longest (type_uint32,
+                                       (LONGEST) cuda_latest_launched_kernel_id ()));
+  set_internalvar (lookup_internalvar ("cuda_memcheck_error_address"),
+                   value_from_longest (type_uint64, (LONGEST) memcheck_error_address));
+  set_internalvar (lookup_internalvar ("cuda_memcheck_error_address_segment"),
+                   value_from_longest (type_uint32, (LONGEST) memcheck_error_address_segment));
   /* Free the temporary values */
   value_free_to_mark (mark);
 }
@@ -576,55 +625,16 @@ cuda_register_name (struct gdbarch *gdbarch, int regnum)
       return buf;
     }
 
-  /* Not a special register (everything else) */
-  if (regnum != tdep->special_regnum)
-    return NULL;
-
   /* The special CUDA register: stored in the regmap. */
-  regmap = regmap_get_search_result ();
-  d = 0;
-  for (i = 0; i < regmap_get_num_entries (regmap); ++i)
+  if (regnum == tdep->special_regnum)
     {
-      if (i > 0)
-        d += snprintf (buf + d, size - 1 - d, "/$");
-
-      switch (regmap_get_class (regmap, i))
-        {
-          case REG_CLASS_REG_FULL:
-            regnum = regmap_get_register (regmap, i);
-            d += snprintf (buf + d, size - 1 - d, "R%d", regnum);
-            break;
-
-          case REG_CLASS_MEM_LOCAL:
-            offset = regmap_get_offset (regmap, i);
-            d += snprintf (buf + d, size - 1 - d, "(spilled @ 0x%x)", offset);
-            break;
-
-          case REG_CLASS_LMEM_REG_OFFSET:
-            sp_regnum = regmap_get_sp_register (regmap, i);
-            offset = regmap_get_sp_offset (regmap, i);
-            d += snprintf (buf + d, size - 1 - d, "(spilled @ [R%d]+0x%x)",
-                           sp_regnum,  offset);
-            break;
-
-          case REG_CLASS_REG_HALF:
-            regnum = regmap_get_half_register (regmap, i, &high);
-            d += snprintf (buf + d, size - 1 - d, "R%d.%s", regnum, high ? "hi" : "lo");
-            break;
-
-          case REG_CLASS_REG_CC:
-          case REG_CLASS_REG_PRED:
-          case REG_CLASS_REG_ADDR:
-            error (_("CUDA Register Class 0x%x not supported yet.\n"),
-                   regmap_get_class (regmap, i));
-            break;
-
-          default:
-            gdb_assert (0);
-        }
+      regmap = regmap_get_search_result ();
+      cuda_special_register_name (regmap, buf, size);
+      return buf;
     }
 
-  return buf;
+  /* Not a special register (everything else) */
+  return NULL;
 }
 
 
@@ -693,141 +703,41 @@ cuda_get_dwarf_register_string (reg_t reg, char *deviceReg, size_t sz)
   return !isDeviceReg;
 }
 
-/* Turns a virtual device PC to a physical one (currently only used
-   when mapping a virtual PTX register to a physical device register).
-   This is because the register map requires a physical PC that is
-   an offset from the kernel entry function.
-
-   NOTE:  For the ABI, this assumes that subroutine cloning is in place,
-   and that each subroutine is offset from a kernel entry point.  This
-   will need adjustment (which will be an improvement) if/when the
-   compiler changes this. */
-static CORE_ADDR
-cuda_pc_virt_to_phys (CORE_ADDR pc)
-{
-  CORE_ADDR device_entry_frame_pc;  /* PC of outermost device frame (kernel) */
-  CORE_ADDR device_entry_frame_base; /* Base address of device_entry_frame */
-  cuda_coords_t c;
-
-  if (cuda_current_active_elf_image_uses_abi ())
-    /* ABI Compilation - need to unwind to the entry frame */
-    {
-      int call_depth = 0;
-
-      /* Read the call depth on the device */
-      cuda_coords_get_current (&c);
-
-      call_depth = lane_get_call_depth (c.dev, c.sm, c.wp, c.ln);
-
-      if (!call_depth)
-        /* If there isn't a call depth, just set the entry pc to the input */
-        device_entry_frame_pc = pc;
-      else
-        /* Find the entry frame's PC from the stack */
-        device_entry_frame_pc =
-            (CORE_ADDR) lane_get_virtual_return_address
-              (c.dev, c.sm, c.wp, c.ln, call_depth - 1);
-    }
-  else
-    /* No ABI - there is only one frame */
-    device_entry_frame_pc = pc;
-
-  /* Get the base VA for the kernel. */
-  device_entry_frame_base = get_pc_function_start (device_entry_frame_pc);
-
-  gdb_assert (pc >= device_entry_frame_base);
-  return pc - device_entry_frame_base;
-}
-
-/* The following globals/functions are used to work around
-   an issue with variable locations when they are stored
-   in a device register.  For ABI compilations, each DIE
-   still indicates a regx op, rather than a location list
-   or an fbreg op, and it is up to us to tie the register
-   map to this operation.  Unfortunately, this breaks the
-   framework in dwarf2loc.c (see the use of these functions
-   there). */
-static bool cuda_regnum_hack_pc_valid = false;
-static CORE_ADDR cuda_regnum_hack_pc;
-static CORE_ADDR cuda_regnum_hack_virt_pc;
-
-void
-cuda_regnum_pc_pre_hack (struct frame_info *fi)
-{
-  uint64_t pc;
-  struct gdbarch *gdbarch = get_frame_arch (fi);
-  struct regcache *regcache = get_current_regcache ();
-  uint32_t pc_regnum = gdbarch_pc_regnum (gdbarch);
-
-  gdb_assert (!cuda_regnum_hack_pc_valid);
-
-  if (!cuda_focus_is_device ())
-    return;
-
-  if (fi)
-    /* If we have frame information, pull the PC from the frame */
-    pc = get_frame_pc (fi);
-  else
-    /* No frame information - just read the current PC */
-    regcache_cooked_read_unsigned (regcache, pc_regnum, (ULONGEST*)&pc);
-
-  cuda_regnum_hack_virt_pc = pc;
-  cuda_regnum_hack_pc = cuda_pc_virt_to_phys (pc);
-  cuda_regnum_hack_pc_valid = true;
-}
-
-void
-cuda_regnum_pc_post_hack (void)
-{
-  if (cuda_regnum_hack_pc_valid)
-    cuda_regnum_hack_pc_valid = false;
-}
-
 static regmap_t
 cuda_get_physical_register (char *reg_name)
 {
-  uint32_t dev_id, sm_id, wp_id, ln_id;
+  uint32_t dev_id, sm_id, wp_id;
   uint64_t start_pc, addr, virt_addr;
   kernel_t kernel;
   const char *func_name = NULL;
   module_t module;
   elf_image_t elf_image;
   struct objfile *objfile;
-  regmap_t regmap;
+  regmap_t regmap = NULL;
   struct symbol *symbol = NULL;
+  CORE_ADDR func_start;
+  struct frame_info *frame = NULL;
 
   gdb_assert (cuda_focus_is_device ());
-  cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, &ln_id);
 
-  /* Get the search parameters */
-  addr      = lane_get_pc (dev_id, sm_id, wp_id, ln_id);
-  addr      = cuda_regnum_hack_pc_valid ? cuda_regnum_hack_pc : addr;
-  virt_addr = lane_get_virtual_pc (dev_id, sm_id, wp_id, ln_id);
-  virt_addr = cuda_regnum_hack_pc_valid ? cuda_regnum_hack_virt_pc : virt_addr;
-  kernel    = warp_get_kernel (dev_id, sm_id, wp_id);
-  start_pc  = kernel_get_virt_code_base (kernel);
-  symbol    = find_pc_function ((CORE_ADDR) virt_addr);
-  if (symbol)
-    func_name = SYMBOL_LINKAGE_NAME (symbol);
-  else
-    func_name = cuda_find_kernel_name_from_pc (start_pc, false);
-  module    = kernel_get_module (kernel);
+  cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
+  frame = get_selected_frame (NULL);
+  virt_addr = get_frame_pc (frame);
+
+  kernel = warp_get_kernel (dev_id, sm_id, wp_id);
+  module = kernel_get_module (kernel);
   elf_image = module_get_elf_image (module);
-  objfile   = cuda_elf_image_get_objfile (elf_image);
+  objfile = cuda_elf_image_get_objfile (elf_image);
+  symbol = find_pc_function ((CORE_ADDR) virt_addr);
 
-  /* Do the search */
-  regmap = regmap_table_search (objfile, func_name, reg_name, addr);
-  
-  /* This is a fallback for the cloning=yes case.
-     It can be removed once cloning=no is the default. */
-  if (regmap_get_num_entries (regmap) == 0)
+  if (symbol)
     {
-      func_name = cuda_find_kernel_name_from_pc (start_pc, false);
-
-      /* Do the search */
+      find_pc_partial_function (virt_addr, NULL, &func_start, NULL);
+      func_name = SYMBOL_LINKAGE_NAME (symbol);
+      addr = virt_addr - func_start;
       regmap = regmap_table_search (objfile, func_name, reg_name, addr);
     }
-  
+
   return regmap;
 }
 
@@ -860,15 +770,6 @@ cuda_reg_to_regnum (struct gdbarch *gdbarch, reg_t reg)
   regmap = cuda_get_physical_register (reg_name);
   num_regs = regmap_get_num_entries (regmap);
 
-  /* If no physical register was found. That means the variable being queried
-     is not live at this point. Returns a random register index (R0). */
-  if (num_regs == 0)
-    {
-      warning (("Variable is not live at this point. Value is undetermined."));
-      regno = tdep->invalid_lo_regnum;
-      return regno;
-    }
-
   /* If we found a single SASS register, then we let cuda-gdb handle it
      normally. */
   if (num_regs == 1 && regmap_get_class (regmap, 0) == REG_CLASS_REG_FULL)
@@ -877,11 +778,18 @@ cuda_reg_to_regnum (struct gdbarch *gdbarch, reg_t reg)
       return regno;
     }
 
-  /* Every other situation requires us to store data that cannot be represented
+  /* Every situation that requires us to store data that cannot be represented
      as a single register index (regno). We keep hold of the data until the
      value is to be fetched. */
-  regno = tdep->special_regnum;
-  return regno;
+  if (cuda_special_register_p (regmap))
+    {
+      regno = tdep->special_regnum;
+      return regno;
+    }
+
+  /* If no physical register was found or the register mapping is not useable,
+     returns an invalid regnum to indicate it has been optimized out. */
+  return -1;
 }
 
 
@@ -893,9 +801,6 @@ cuda_pseudo_register_read (struct gdbarch *gdbarch,
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
   uint32_t dev, sm, wp, ln;
-  uint32_t stack_addr, offset, *p, sz;
-  int i, sp_regnum, tmp;
-  bool high;
   regmap_t regmap;
 
   cuda_coords_get_current_physical (&dev, &sm, &wp, &ln);
@@ -908,58 +813,16 @@ cuda_pseudo_register_read (struct gdbarch *gdbarch,
       return;
     }
 
-  /* single SASS register */
-  if (regnum != tdep->special_regnum)
+  /* Any combination of SASS register, SP + offset, LMEM offset locations */
+  if (regnum == tdep->special_regnum)
     {
-      cuda_api_read_register (dev, sm, wp, ln, regnum, (uint32_t*)buf);
+      regmap = regmap_get_search_result ();
+      cuda_special_register_read (regmap, buf);
       return;
     }
 
-  /* Any combination of SASS register, SP + offset, LMEM offset locations */
-  regmap = regmap_get_search_result ();
-  for (i = 0; i < regmap_get_num_entries (regmap); ++i)
-    {
-      p = &((uint32_t*)buf)[i];
-      sz = sizeof *p;
-
-      switch (regmap_get_class (regmap, i))
-        {
-          case REG_CLASS_REG_FULL:
-            regnum = regmap_get_register (regmap, i);
-            cuda_api_read_register (dev, sm, wp, ln, regnum, p);
-            break;
-
-          case REG_CLASS_MEM_LOCAL:
-            gdb_assert (!cuda_current_active_elf_image_uses_abi ());
-            offset = regmap_get_offset (regmap, i);
-            cuda_api_read_local_memory (dev, sm, wp, ln, offset, p, sz);
-            break;
-
-          case REG_CLASS_LMEM_REG_OFFSET:
-            gdb_assert (cuda_current_active_elf_image_uses_abi ());
-            sp_regnum = regmap_get_sp_register (regmap, i);
-            offset = regmap_get_sp_offset (regmap, i);
-            cuda_api_read_register (dev, sm, wp, ln, sp_regnum, &stack_addr);
-            cuda_api_read_local_memory (dev, sm, wp, ln, stack_addr + offset, p, sz);
-            break;
-
-          case REG_CLASS_REG_HALF:
-            regnum = regmap_get_half_register (regmap, i, &high);
-            cuda_api_read_register (dev, sm, wp, ln, regnum, &tmp);
-            *p = high ? tmp >> 16 : tmp & 0xffff;
-            break;
-
-          case REG_CLASS_REG_CC:
-          case REG_CLASS_REG_PRED:
-          case REG_CLASS_REG_ADDR:
-            error (_("CUDA Register Class 0x%x not supported yet.\n"),
-                   regmap_get_class (regmap, i));
-            break;
-
-          default:
-            gdb_assert (0);
-        }
-    }
+  /* single SASS register */
+  cuda_api_read_register (dev, sm, wp, ln, regnum, (uint32_t*)buf);
 }
 
 
@@ -970,11 +833,7 @@ cuda_pseudo_register_write (struct gdbarch *gdbarch,
                             const gdb_byte *buf)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
-  uint32_t dev, sm, wp, ln;
-  uint32_t stack_addr, offset, val, sz, old_val, new_val;
-  void *ptr;
-  int i, sp_regnum;
-  bool high;
+  uint32_t dev, sm, wp, ln, val;
   regmap_t regmap;
 
   cuda_coords_get_current_physical (&dev, &sm, &wp, &ln);
@@ -987,64 +846,17 @@ cuda_pseudo_register_write (struct gdbarch *gdbarch,
       return;
     }
 
-  /* single SASS register */
-  if (regnum != tdep->special_regnum)
+  /* Any combination of SASS register, SP + offset, LMEM offset locations */
+  if (regnum == tdep->special_regnum)
     {
-      val = *(uint32_t*)buf;
-      cuda_api_write_register (dev, sm, wp, ln, regnum, val);
+      regmap = regmap_get_search_result ();
+      cuda_special_register_write (regmap, buf);
       return;
     }
 
-  /* Any combination of SASS register, SP + offset, LMEM offset locations */
-  regmap = regmap_get_search_result ();
-  for (i = 0; i < regmap_get_num_entries (regmap); ++i)
-    {
-      val = ((uint32_t*)buf)[i];
-      ptr = (void*)&((uint32_t*)buf)[i];
-      sz = sizeof val;
-
-      switch (regmap_get_class (regmap, i))
-        {
-          case REG_CLASS_REG_FULL:
-            regnum = regmap_get_register (regmap, i);
-            cuda_api_write_register (dev, sm, wp, ln, regnum, val);
-            break;
-
-          case REG_CLASS_MEM_LOCAL:
-            gdb_assert (!cuda_current_active_elf_image_uses_abi ());
-            offset = regmap_get_offset (regmap, i);
-            cuda_api_write_local_memory (dev, sm, wp, ln, offset, ptr, sz);
-            break;
-
-          case REG_CLASS_LMEM_REG_OFFSET:
-            gdb_assert (cuda_current_active_elf_image_uses_abi ());
-            sp_regnum = regmap_get_sp_register (regmap, i);
-            offset = regmap_get_sp_offset (regmap, i);
-            cuda_api_read_register (dev, sm, wp, ln, sp_regnum, &stack_addr);
-            cuda_api_write_local_memory (dev, sm, wp, ln, stack_addr + offset, ptr, sz);
-            break;
-
-          case REG_CLASS_REG_HALF:
-            regnum = regmap_get_half_register (regmap, i, &high);
-            cuda_api_read_register (dev, sm, wp, ln, regnum, &old_val);
-            if (high)
-              new_val = (val << 16) | (old_val & 0x0000ffff);
-            else
-              new_val = (old_val & 0xffff0000) | (val);
-            cuda_api_write_register (dev, sm, wp, ln, regnum, new_val);
-            break;
-
-          case REG_CLASS_REG_CC:
-          case REG_CLASS_REG_PRED:
-          case REG_CLASS_REG_ADDR:
-            error (_("CUDA Register Class 0x%x not supported yet.\n"),
-                   regmap_get_class (regmap, i));
-            break;
-
-          default:
-            gdb_assert (0);
-        }
-    }
+  /* single SASS register */
+  val = *(uint32_t*)buf;
+  cuda_api_write_register (dev, sm, wp, ln, regnum, val);
 }
 
 static void
@@ -1166,10 +978,6 @@ cuda_is_device_code_address (CORE_ADDR addr)
 
 /*------------------------------------------------------------------------- */
 
-#define __S__(s)                   #s
-#define _STRING_(s)          __S__(s)
-
-
 /* Returns true if obfd points to a CUDA ELF object file
    (checked by machine type).  Otherwise, returns false. */
 bool
@@ -1257,7 +1065,7 @@ cuda_breakpoint_address_match (struct gdbarch *gdbarch,
           && addr1 == addr2);
 }
 
-static CORE_ADDR
+CORE_ADDR
 cuda_get_symbol_address (char *name)
 {
   struct minimal_symbol *sym = lookup_minimal_symbol (name, NULL, NULL);
@@ -1281,6 +1089,98 @@ cuda_get_symbol_address (char *name)
 #endif
 
   return 0;
+}
+
+uint64_t
+cuda_get_last_driver_api_error_code ()
+{
+  CORE_ADDR error_code_addr;
+  uint64_t res;
+
+  error_code_addr = cuda_get_symbol_address (_STRING_(CUDBG_REPORTED_DRIVER_API_ERROR_CODE));
+  if (!error_code_addr)
+    {
+      /* This should never happen. If we hit the breakpoint we should have the symbol */
+      error (_("Cannot retrieve the last driver API error code.\n"));
+    }
+
+  target_read_memory (error_code_addr, (char *)&res, sizeof (uint64_t));
+  return res;
+}
+
+static uint64_t
+cuda_get_last_driver_api_error_func_name_size ()
+{
+  CORE_ADDR error_func_name_size_addr;
+  uint64_t res;
+
+  error_func_name_size_addr = cuda_get_symbol_address (
+    _STRING_(CUDBG_REPORTED_DRIVER_API_ERROR_FUNC_NAME_SIZE));
+  if (!error_func_name_size_addr)
+    {
+      /* This should never happen. If we hit the breakpoint we should have the symbol */
+      error (_("Cannot retrieve the last driver API error function name size.\n"));
+    }
+
+  target_read_memory (error_func_name_size_addr, (char *)&res, sizeof (uint64_t));
+  return res;
+}
+
+void
+cuda_get_last_driver_api_error_func_name (char **name)
+{
+  CORE_ADDR error_func_name_core_addr;
+  uint64_t error_func_name_addr;
+  char *func_name = NULL;
+  uint32_t size = 0U;
+
+  size = cuda_get_last_driver_api_error_func_name_size ();
+  if (!size)
+    {
+      /* This should never happen. If we hit the breakpoint we should have the symbol */
+      error (_("Cannot retrieve the last driver API error function name size.\n"));
+    }
+
+  func_name = (char *)xcalloc(sizeof*func_name, size);
+  if (!func_name)
+    {
+      /* Buffer for function name string should be created successfully  */
+      error (_("Cannot allocate memory to save the reported function name.\n"));
+    }
+
+  error_func_name_core_addr = cuda_get_symbol_address (
+    _STRING_(CUDBG_REPORTED_DRIVER_API_ERROR_FUNC_NAME_ADDR));
+  if (!error_func_name_core_addr)
+    {
+      /* This should never happen. If we hit the breakpoint we should have the symbol */
+      error (_("Cannot retrieve the last driver API error function name addr.\n"));
+    }
+
+  target_read_memory (error_func_name_core_addr, (char *)&error_func_name_addr, sizeof (uint64_t));
+  target_read_memory (error_func_name_addr, func_name, size);
+  if (!func_name[0])
+    {
+      /* This should never happen. If we hit the breakpoint we should have the symbol */
+      error (_("Cannot retrieve the last driver API error function name.\n"));
+    }
+  *name = func_name;
+}
+
+uint64_t
+cuda_get_last_driver_internal_error_code ()
+{
+  CORE_ADDR error_code_addr;
+  uint64_t res;
+
+  error_code_addr = cuda_get_symbol_address (_STRING_(CUDBG_REPORTED_DRIVER_INTERNAL_ERROR_CODE));
+  if (!error_code_addr)
+    {
+      /* This should never happen. If we hit the breakpoint we should have the symbol */
+      error (_("Cannot retrieve the last driver internal error code.\n"));
+    }
+
+  target_read_memory (error_code_addr, (char *)&res, sizeof (uint64_t));
+  return res;
 }
 
 static void
@@ -1337,6 +1237,50 @@ cuda_final_cleanup (void *unused)
     cuda_api_finalize ();
 }
 
+static void
+cuda_initialize_driver_api_error_report ()
+{
+  //CORE_ADDR functionAddr;
+  CORE_ADDR functionEntryAddr =
+    cuda_get_symbol_address (_STRING_(CUDBG_REPORT_DRIVER_API_ERROR));
+  if (functionEntryAddr)
+    {
+      CORE_ADDR errorCodeAddr =
+        cuda_get_symbol_address (_STRING_(CUDBG_REPORTED_DRIVER_API_ERROR_CODE));
+      //target_read_memory (functionEntryAddr, (char *)&functionAddr, sizeof (CORE_ADDR));
+      if (errorCodeAddr)
+        /* Create an internal breakpoint at the entry */
+        create_cuda_driver_api_error_breakpoint (get_current_arch (),
+                                                 functionEntryAddr);
+      else
+        warning (_("Cannot find memory location of driver API error code."));
+    }
+  else
+    warning (_("Cannot find function entry for driver API error report."));
+}
+
+static void
+cuda_initialize_driver_internal_error_report ()
+{
+  //CORE_ADDR functionAddr;
+  CORE_ADDR functionEntryAddr =
+    cuda_get_symbol_address (_STRING_(CUDBG_REPORT_DRIVER_INTERNAL_ERROR));
+  if (functionEntryAddr)
+    {
+      CORE_ADDR errorCodeAddr =
+        cuda_get_symbol_address (_STRING_(CUDBG_REPORTED_DRIVER_INTERNAL_ERROR_CODE));
+      //target_read_memory (functionEntryAddr, (char *)&functionAddr, sizeof (CORE_ADDR));
+      if (errorCodeAddr)
+        /* Create an internal breakpoint at the entry */
+        create_cuda_driver_internal_error_breakpoint (get_current_arch (),
+                                                      functionEntryAddr);
+      else
+        warning (_("Cannot find memory location of driver internal error code."));
+    }
+  else
+    warning (_("Cannot find function entry for driver internal error report."));
+}
+
 /* Initialize the CUDA debugger API and collect the static data about
    the devices. Once per application run. */
 static void
@@ -1360,6 +1304,7 @@ void
 cuda_initialize_target ()
 {
   const unsigned char one = 1;
+  const unsigned char zero = 0;
   CORE_ADDR debugFlagAddr;
   CORE_ADDR rpcFlagAddr;
   CORE_ADDR gdbPidAddr;
@@ -1374,7 +1319,12 @@ cuda_initialize_target ()
       debugFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_IPC_FLAG_NAME));
       if (debugFlagAddr)
         {
-          target_write_memory (debugFlagAddr, &one, 1);
+          /* When attaching or detaching, cuda_nat_attach() and
+             cuda_nat_detach() control the setting of this flag,
+             so don't touch it here. */
+          if (CUDA_ATTACH_STATE_IN_PROGRESS != cuda_api_get_attach_state () &&
+              CUDA_ATTACH_STATE_DETACHING != cuda_api_get_attach_state ())
+            target_write_memory (debugFlagAddr, &one, 1);
           rpcFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_RPC_ENABLED));
           pid = getpid ();
           gdbPidAddr = cuda_get_symbol_address (_STRING_(CUDBG_APICLIENT_PID));
@@ -1393,6 +1343,8 @@ cuda_initialize_target ()
               kill (inferior_ptid.lwp, SIGKILL);
               error (_("CUDA application cannot be debugged:  driver incompatibility."));
             }
+          cuda_initialize_driver_api_error_report ();
+          cuda_initialize_driver_internal_error_report ();
         }
     }
 
@@ -1403,6 +1355,21 @@ bool
 cuda_inferior_in_debug_mode (void)
 {
   return inferior_in_debug_mode;
+}
+
+void
+cuda_inferior_update_suspended_devices_mask (void)
+{
+  CORE_ADDR suspendedDevicesMaskAddr;
+  unsigned int suspendedDevicesMask = cuda_system_get_suspended_devices_mask ();
+
+  suspendedDevicesMaskAddr = cuda_get_symbol_address (_STRING_(CUDBG_DETACH_SUSPENDED_DEVICES_MASK));
+
+  if (!suspendedDevicesMaskAddr)
+    error (_("Failed to get suspended devices mask."));
+
+  target_write_memory (suspendedDevicesMaskAddr, (char*)&suspendedDevicesMask,
+                       sizeof(suspendedDevicesMask));
 }
 
 int
@@ -1828,6 +1795,20 @@ cuda_sstep_ptid (void)
   return cuda_sstep_info.ptid;
 }
 
+uint32_t
+cuda_sstep_dev_id (void)
+{
+  gdb_assert (cuda_sstep_info.active);
+  return cuda_sstep_info.dev_id;
+}
+ 
+uint32_t
+cuda_sstep_grid_id (void)
+{
+  gdb_assert (cuda_sstep_info.active);
+  return cuda_sstep_info.grid_id;
+}
+
 void
 cuda_sstep_set_ptid (ptid_t ptid)
 {
@@ -1948,691 +1929,6 @@ cuda_sstep_kernel_has_terminated (void)
     return false;
 
   return true;
-}
-
-/* Frame management */
-
-bool cuda_frame_p (struct frame_info *);
-bool cuda_frame_outermost_p (struct frame_info *);
-static struct cuda_frame_cache * cuda_frame_cache (struct frame_info *, void **);
-static CORE_ADDR cuda_frame_base_address (struct frame_info *, void **);
-static void cuda_frame_this_id (struct frame_info *, void **, struct frame_id *);
-static struct value * cuda_frame_prev_register (struct frame_info *, void **, int);
-static int cuda_frame_sniffer_check (const struct frame_unwind *, struct frame_info *, void **);
-static CORE_ADDR cuda_frame_prev_pc (struct frame_info *);
-
-struct cuda_frame_cache
-{
-  CORE_ADDR base;
-  CORE_ADDR pc;
-};
-
-static const struct frame_unwind cuda_frame_unwind =
-{
-  NORMAL_FRAME,
-  cuda_frame_this_id,
-  cuda_frame_prev_register,
-  NULL,
-  cuda_frame_sniffer_check,
-  NULL,
-  NULL,
-};
-
-static const struct frame_base cuda_frame_base =
-{
-  &cuda_frame_unwind,
-  cuda_frame_base_address,
-  cuda_frame_base_address,
-  cuda_frame_base_address
-};
-
-/* Returns true if the frame corresponds to a CUDA device function. */
-bool
-cuda_frame_p (struct frame_info *next_frame)
-{
-  if (cuda_focus_is_device ())
-    return true;
-  else
-    return false;
-}
-
-static bool
-cuda_abi_frame_outermost_p (struct frame_info *next_frame)
-{
-  int call_depth = 0;
-  int syscall_call_depth = 0;
-  int next_level = 0;
-  int this_level = 0;
-  cuda_coords_t c;
-
-  /* For ABI compilations, we need to check that this level is equal
-     to the call depth.  If so, it's the outermost device frame. */
-  cuda_coords_get_current (&c);
-  call_depth = lane_get_call_depth (c.dev, c.sm, c.wp, c.ln);
-
-  /* In normal execution, we want to hide syscall frames. This is particularly
-     relevant when the application encounters an assertion on the device.
-     In this scenario, the call_depth is modified so that the frames
-     belonging to the syscall are hidden. */
-  if (cuda_options_hide_internal_frames ())
-      syscall_call_depth = lane_get_syscall_call_depth (c.dev, c.sm, c.wp, c.ln);
-
-  next_level = frame_relative_level (next_frame);
-  this_level = next_level + 1;
-
-  if (this_level >= call_depth - syscall_call_depth)
-    return true;
-
-  return false;
-}
-
-static bool
-cuda_noabi_frame_outermost_p (struct frame_info *next_frame)
-{
-  int next_level = frame_relative_level (next_frame);
-
-  /* For non-ABI compilations, there is only one device frame which is
-     at level 0 (it's next frame is the sentinel at level -1). */
-  if (next_level == -1)
-    return true;
-
-  return false;
-}
-
-
-/* Returns true if the current frame (next_frame->prev) is the
-   outermost device frame. */
-bool
-cuda_frame_outermost_p (struct frame_info *next_frame)
-{
-  if (!cuda_frame_p (next_frame))
-    return false;
-
-  if (cuda_current_active_elf_image_uses_abi ())
-    return cuda_abi_frame_outermost_p (next_frame);
-  else
-    return cuda_noabi_frame_outermost_p (next_frame);
-}
-
-static CORE_ADDR
-cuda_abi_frame_cache_base (struct frame_info *next_frame)
-{
-  struct gdbarch *gdbarch = get_frame_arch (next_frame);
-  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
-  gdb_byte buf[8];
-
-  memset (buf, 0, sizeof (buf));
-  frame_unwind_register (next_frame, tdep->sp_regnum, buf);
-  return extract_unsigned_integer (buf, sizeof buf, BFD_ENDIAN_LITTLE);
-}
-
-static CORE_ADDR
-cuda_noabi_frame_cache_base (struct frame_info *next_frame)
-{
-  struct gdbarch *gdbarch = get_frame_arch (next_frame);
-  gdb_byte buf[8];
-
-  if (cuda_frame_outermost_p (next_frame))
-      return 0;
-  else
-    {
-      memset (buf, 0, sizeof (buf));
-      frame_unwind_register (next_frame, 0 /* dummy */, buf);
-      return extract_unsigned_integer (buf, sizeof buf, BFD_ENDIAN_LITTLE);
-    }
-}
-
-static struct cuda_frame_cache *
-cuda_frame_cache (struct frame_info *next_frame, void **this_cache)
-{
-  struct cuda_frame_cache *cache;
-
-  gdb_assert (cuda_frame_p (next_frame));
-
-  if (*this_cache)
-    return *this_cache;
-
-  cache = FRAME_OBSTACK_ZALLOC (struct cuda_frame_cache);
-  *this_cache = cache;
-
-  cache->pc = get_frame_func (next_frame);
-
-  if (cuda_current_active_elf_image_uses_abi ())
-    cache->base = cuda_abi_frame_cache_base (next_frame);
-  else
-    cache->base = cuda_noabi_frame_cache_base (next_frame);
-
-  return cache;
-}
-
-/* cuda_frame_base_address is not ABI-dependent, since it only
-   queries the base field from the frame cache.  It is the frame
-   cache itself which is constructed uniquely for ABI/non-ABI
-   compilations. */
-static CORE_ADDR
-cuda_frame_base_address (struct frame_info *next_frame, void **this_cache)
-{
-  struct cuda_frame_cache *cache;
-  CORE_ADDR base;
-
-  gdb_assert (cuda_frame_p (next_frame));
-
-  if (*this_cache)
-    return ((struct cuda_frame_cache *)(*this_cache))->base;
-
-  cache = cuda_frame_cache (next_frame, this_cache);
-  base = cache->base;
-  return base;
-}
-
-static struct frame_id
-cuda_abi_frame_id_build (struct frame_info *next_frame, void **this_cache,
-                         struct frame_id *this_id)
-{
-  struct cuda_frame_cache *cache;
-  int call_depth = 0;
-  int syscall_call_depth = 0;
-  int next_level;
-  cuda_coords_t c;
-
-  cache = cuda_frame_cache (next_frame, this_cache);
-  next_level = frame_relative_level (next_frame);
-
-  cuda_coords_get_current (&c);
-  call_depth = lane_get_call_depth (c.dev, c.sm, c.wp, c.ln);
-  syscall_call_depth = lane_get_syscall_call_depth (c.dev, c.sm, c.wp, c.ln);
-
-  /* With the ABI, we can have multiple device frames. */
-  if (next_level < call_depth)
-    {
-      /* When we have syscall frames, we will build them as special frames,
-         as the API will always return only the PC to the first non syscall
-         frame. Thus all frames less the syscall_call_depth will be identical
-         to the frame at the syscall call depth */
-      if (next_level <= syscall_call_depth)
-        return frame_id_build_special (cache->base, cache->pc,
-                                       syscall_call_depth + next_level);
-      else
-        return frame_id_build (cache->base, cache->pc);
-    }
-  else
-    return frame_id_build_special (cache->base, cache->pc, 1);
-}
-
-static struct frame_id
-cuda_noabi_frame_id_build (struct frame_info *next_frame, void **this_cache,
-                           struct frame_id *this_id)
-{
-  struct cuda_frame_cache *cache;
-  int next_level = frame_relative_level (next_frame);
-
-  cache = cuda_frame_cache (next_frame, this_cache);
-
-  /* Without the ABI, we have a single device frame.  Device frame and
-     dummy frame are identical, except for the dummy frame that has the
-     special_p bit set. Required to fool GDB into thinking those are not
-     duplicates. Also it is a nice way to differentiate them. */
-  if (next_level == -1)
-    return frame_id_build_special (cache->base, cache->pc, 0);
-  else
-    return frame_id_build_special (cache->base, cache->pc, 1);
-}
-
-static void
-cuda_frame_this_id (struct frame_info *next_frame, void **this_cache,
-                    struct frame_id *this_id)
-{
-  int next_level = frame_relative_level (next_frame);
-
-  gdb_assert (cuda_frame_p (next_frame));
-
-  if (cuda_current_active_elf_image_uses_abi ())
-      *this_id = cuda_abi_frame_id_build (next_frame, this_cache, this_id);
-  else
-      *this_id = cuda_noabi_frame_id_build (next_frame, this_cache, this_id);
-
-  if (frame_debug)
-    {
-      fprintf_unfiltered (gdb_stdlog, "{ cuda_frame_this_id "
-                          "(frame=%d)", next_level);
-      fprintf_unfiltered (gdb_stdlog, " -> this_id=");
-      fprint_frame_id (gdb_stdlog, *this_id);
-      fprintf_unfiltered (gdb_stdlog, " }\n");
-    }
-}
-
-/* When unwinding registers stored on CUDA ABI frames, we use
-   this function to hook in the dwarf2 frame unwind routines. */
-static struct value *
-cuda_abi_hook_dwarf2_frame_prev_register (struct frame_info *next_frame,
-                                          void **this_cache,
-                                          int regnum)
-{
-  struct gdbarch *gdbarch = get_frame_arch (next_frame);
-  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
-  void *dwarfcache = NULL;
-  struct frame_base *dwarf2_base_finder = NULL;
-  struct value *value = NULL;
-  gdb_byte *value_contents = NULL;
-  CORE_ADDR sp = 0;
-  int dwarf2 = 0;
-
-  /* If we have a dwarf2 base finder, then we will use it to know what the
-     value of the stack pointer is.  See dwarf2-frame.c */
-  if (regnum == tdep->sp_regnum)
-    {
-      dwarf2_base_finder = (struct frame_base *)dwarf2_frame_base_sniffer (next_frame);
-      if (dwarf2_base_finder)
-        {
-          sp = dwarf2_base_finder->this_base (next_frame, &dwarfcache);
-          value = frame_unwind_got_address (next_frame, regnum, sp);
-        }
-    }
-
-  /* If we have a dwarf2 unwinder, then we will use it to know where to look
-     for the value of all CUDA registers.  See dwarf2-frame.c */
-  dwarf2 = dwarf2_frame_unwind.sniffer (&dwarf2_frame_unwind,
-                                        next_frame,
-                                        (void**)&dwarfcache);
-  if (!value && dwarf2)
-    value = dwarf2_frame_unwind.prev_register (next_frame,
-                                               (void **)&dwarfcache,
-                                               regnum);
-
-  return value;
-}
-
-/* With the ABI, prev_register needs assistance from the dwarf2 frame
-   unwinder to decode the storage location of a given regnum for a
-   given frame.  Non-debug compilations will not have this assistance,
-   so we check for a proper dwarf2 unwinder to make sure.  The PC can
-   be decoded without dwarf2 assistance thanks to the device's runtime
-   stack. */
-static struct value *
-cuda_abi_frame_prev_register (struct frame_info *next_frame,
-                              void **this_cache,
-                              int regnum)
-{
-  struct gdbarch *gdbarch = get_frame_arch (next_frame);
-  uint32_t pc_regnum = gdbarch_pc_regnum (gdbarch);
-  CORE_ADDR pc = 0;
-  struct value *value;
-
-  if (regnum == pc_regnum)
-    {
-      pc = cuda_frame_prev_pc (next_frame);
-      value = frame_unwind_got_address (next_frame, regnum, pc);
-    }
-  else if (frame_relative_level (next_frame) == -1)
-    value = frame_unwind_got_register (next_frame, regnum, regnum);
-  else
-    value = cuda_abi_hook_dwarf2_frame_prev_register (next_frame, this_cache, regnum);
-
-  /* Last resort: if no value found, use the register for the innermost frame. */
-  if (!value)
-    value = frame_unwind_got_register (next_frame, regnum, regnum);
-
-  return value;
-}
-
-/* Without the ABI, prev_register only needs to read current values from
-   the register file (with the exception of PC, which requires special
-   handling for inserted dummy frames) */
-static struct value *
-cuda_noabi_frame_prev_register (struct frame_info *next_frame,
-                                void **this_cache,
-                                int regnum)
-{
-  struct gdbarch *gdbarch = get_frame_arch (next_frame);
-  struct regcache *regcache = get_current_regcache ();
-  uint32_t pc_regnum = gdbarch_pc_regnum (gdbarch);
-  CORE_ADDR pc = 0;
-
-  if (regnum == pc_regnum)
-    {
-      pc = cuda_frame_prev_pc (next_frame);
-      return frame_unwind_got_address (next_frame, regnum, pc);
-    }
-  else
-    return frame_unwind_got_register (next_frame, regnum, regnum);
-}
-
-static struct value *
-cuda_frame_prev_register (struct frame_info *next_frame,
-                          void **this_cache,
-                          int regnum)
-{
-  int next_level = frame_relative_level (next_frame);
-  struct gdbarch *gdbarch = get_frame_arch (next_frame);
-  struct value *value = NULL;
-
-  if (cuda_current_active_elf_image_uses_abi ())
-    value = cuda_abi_frame_prev_register (next_frame, this_cache, regnum);
-  else
-    value = cuda_noabi_frame_prev_register (next_frame, this_cache, regnum);
-
-  if (frame_debug)
-    {
-      fprintf_unfiltered (gdb_stdlog, "{ cuda_frame_prev_register "
-                          "(frame=%d,regnum=%d(%s),...) ",
-                          next_level, regnum,
-                          user_reg_map_regnum_to_name (gdbarch, regnum));
-      fprintf_unfiltered (gdb_stdlog, "->");
-      fprintf_unfiltered (gdb_stdlog, " *bufferp=");
-      if (value == NULL)
-        fprintf_unfiltered (gdb_stdlog, "<NULL>");
-      else
-        {
-          int i;
-          const unsigned char *buf = value_contents (value);
-          fprintf_unfiltered (gdb_stdlog, "[");
-          for (i = 0; i < register_size (gdbarch, regnum); i++)
-            fprintf_unfiltered (gdb_stdlog, "%02x", buf[i]);
-          fprintf_unfiltered (gdb_stdlog, "]");
-        }
-      fprintf_unfiltered (gdb_stdlog, " }\n");
-    }
-
-  return value;
-}
-
-/* cuda_frame_sniffer_check is not ABI-dependent at the moment.
-   Ideally, there will be 2 separate sniffers, and we can remove
-   switching internally within each of the frame functions. */
-static int
-cuda_frame_sniffer_check (const struct frame_unwind *self,
-                          struct frame_info *next_frame,
-                          void **this_prologue_cache)
-{
-  bool is_cuda_frame;
-  int next_level = frame_relative_level (next_frame);
-
-  is_cuda_frame = cuda_frame_p (next_frame) &&
-                  self == &cuda_frame_unwind;
-
-  if (frame_debug)
-    fprintf_unfiltered (gdb_stdlog, "{ cuda_frame_sniffer_check "
-                        "(frame = %d) -> %d }\n", next_level, is_cuda_frame);
-  return is_cuda_frame;
-}
-
-static CORE_ADDR
-cuda_abi_frame_prev_pc (struct frame_info *next_frame)
-{
-  uint64_t pc;
-  int call_depth = 0;
-  int syscall_call_depth = 0;
-  int next_level;
-  cuda_coords_t c;
-
-  next_level = frame_relative_level (next_frame);
-
-  cuda_coords_get_current (&c);
-  call_depth = lane_get_call_depth (c.dev, c.sm, c.wp, c.ln);
-
-  if (next_level == -1)
-    pc = lane_get_virtual_pc (c.dev, c.sm, c.wp, c.ln);
-  else if (next_level < call_depth)
-    {
-      if (cuda_options_hide_internal_frames ())
-        {
-          syscall_call_depth = lane_get_syscall_call_depth (c.dev, c.sm, c.wp, c.ln);
-          if (next_level < syscall_call_depth)
-            next_level += syscall_call_depth;
-        }
-      pc = lane_get_virtual_return_address (c.dev, c.sm, c.wp, c.ln, next_level);
-    }
-  else
-    pc = 0ULL;
-
-  return (CORE_ADDR) pc;
-}
-
-static CORE_ADDR
-cuda_noabi_frame_prev_pc (struct frame_info *next_frame)
-{
-  uint64_t pc;
-  int next_level = frame_relative_level (next_frame);
-  cuda_coords_t c;
-  struct gdbarch *gdbarch = get_frame_arch (next_frame);
-
-  cuda_coords_get_current (&c);
-  pc = lane_get_virtual_pc (c.dev, c.sm, c.wp, c.ln);
-
-  /* dummy frame PC will point to the kernel entry + 1. Because it is
-     not the innermost frame, GDB sees it as the PC after the function
-     call and will decrement it by 1 when printing the stack. Therefore
-     we increment it by 1 now to make sure the final PC is still within
-     the kernel code block. */
-  if (next_level == 0)
-    pc = get_pc_function_start (pc) + 1;
-
-  return (CORE_ADDR) pc;
-}
-
-static CORE_ADDR
-cuda_frame_prev_pc (struct frame_info *next_frame)
-{
-  gdb_assert (cuda_frame_p (next_frame));
-
-  if (cuda_current_active_elf_image_uses_abi ())
-    return cuda_abi_frame_prev_pc (next_frame);
-  else
-    return cuda_noabi_frame_prev_pc (next_frame);
-}
-
-const struct frame_base *
-cuda_frame_base_sniffer (struct frame_info *next_frame)
-{
-  const struct frame_base *base = NULL;
-  int next_level = frame_relative_level (next_frame);
-
-  if (cuda_frame_p (next_frame))
-      base = &cuda_frame_base;
-
-  if (frame_debug)
-    fprintf_unfiltered (gdb_stdlog, "{ cuda_frame_base_sniffer "
-                        "(frame=%d) -> %d }\n", next_level, !!base);
-
-  return base;
-}
-
-const struct frame_unwind *
-cuda_frame_sniffer (struct frame_info *next_frame)
-{
-  const struct frame_unwind *unwind = NULL;
-  int next_level = frame_relative_level (next_frame);
-
-  if (cuda_frame_p (next_frame))
-    unwind = &cuda_frame_unwind;
-
-  if (frame_debug)
-    fprintf_unfiltered (gdb_stdlog, "{ cuda_frame_sniffer (frame=%d) -> %d }\n",
-                        next_level, !!unwind);
-
-  return unwind;
-}
-
-/* A CUDA internal frame is any frame deeper that the runtime frame (included)
-   that is not also a device frame. */
-int
-cuda_frame_is_internal (struct frame_info *fi)
-{
-  struct cuda_frame_info *cfi;
-  struct frame_info *frame;
-
-  if (!cuda_debugging_enabled || !fi)
-    return false;
-
-  cfi = cuda_get_frame_info (fi);
-  if (cfi->cuda_internal_p)
-    return cfi->cuda_internal;
-
-  if (cuda_frame_p (get_next_frame (fi)))
-    {
-      cfi->cuda_internal_p = true;
-      cfi->cuda_internal = false;
-      return false;
-    }
-
-  for (frame = fi; frame; frame = get_prev_frame (frame))
-    {
-      if (cuda_frame_is_runtime_entrypoint (frame))
-        {
-          cfi->cuda_internal_p = true;
-          cfi->cuda_internal = true;
-          return true;
-        }
-    }
-
-  cfi->cuda_internal_p = true;
-  cfi->cuda_internal = false;
-  return false;
-}
-
-/* A CUDA device syscall frame is any frame within the syscall_call_depth */
-int
-cuda_frame_is_device_syscall (struct frame_info *fi)
-{
-  struct cuda_frame_info *cfi;
-  cuda_coords_t c;
-  int syscall_call_depth = 0;
-  int call_depth = 0;
-  int this_level = 0;
-
-  if (!cuda_debugging_enabled || !fi)
-    return false;
-
-  cfi = cuda_get_frame_info (fi);
-  if (cfi->cuda_device_syscall_p)
-    return cfi->cuda_device_syscall;
-
-  cuda_coords_get_current (&c);
-  call_depth = lane_get_call_depth (c.dev, c.sm, c.wp, c.ln);
-  syscall_call_depth = lane_get_syscall_call_depth (c.dev, c.sm, c.wp, c.ln);
-
-  this_level = frame_relative_level (fi);
-  if (frame_debug)
-    {
-      fprintf_unfiltered (gdb_stdlog, "this_level:%d syscall_level:%d",
-                          this_level, syscall_call_depth);
-      fprintf_unfiltered (gdb_stdlog, "->");
-    }
-
-  if (this_level <= call_depth && this_level < syscall_call_depth)
-    {
-      cfi->cuda_device_syscall_p = true;
-      cfi->cuda_device_syscall = true;
-      return true;
-    }
-
-  cfi->cuda_device_syscall_p = true;
-  cfi->cuda_device_syscall = false;
-  return false;
-}
-
-/* The CUDA device frame is the kernel entry point function. */
-int
-cuda_frame_is_device (struct frame_info *fi)
-{
-  struct cuda_frame_info *cfi;
-
-  if (!fi)
-    return false;
-
-  cfi = cuda_get_frame_info (fi);
-  if (cfi->cuda_device_p)
-    return cfi->cuda_device;
-
-  cfi->cuda_device_p = true;
-  cfi->cuda_device = cuda_frame_p (get_next_frame (fi));
-  return cfi->cuda_device;
-}
-
-/* The CUDA runtime frame is the non-device frame whose function name
-   is the kernel name. */
-int
-cuda_frame_is_runtime_entrypoint (struct frame_info *fi)
-{
-  struct cuda_frame_info *cfi;
-  char *function_name = NULL;
-  uint64_t addr = 0;
-
-  if (!fi)
-    return false;
-
-  cfi = cuda_get_frame_info (fi);
-  if (cfi->cuda_runtime_entrypoint_p)
-    return cfi->cuda_runtime_entrypoint;
-
-  if (cuda_frame_is_device (fi))
-    {
-      cfi->cuda_runtime_entrypoint_p = true;
-      cfi->cuda_runtime_entrypoint = false;
-      return false;
-    }
-
-  function_name = cuda_find_kernel_name_from_pc (get_frame_address_in_block (fi), false);
-  if (function_name && cuda_api_lookup_device_code_symbol (function_name, &addr))
-    {
-      cfi->cuda_runtime_entrypoint_p = true;
-      cfi->cuda_runtime_entrypoint = true;
-      return true;
-    }
-
-  cfi->cuda_runtime_entrypoint_p = true;
-  cfi->cuda_runtime_entrypoint = false;
-  return false;
-}
-
-/* CUDA: frame relative level is computed recursively to handle hiding
-   of internal CUDA runtime frames.
-
-   NOTE: this function needs to co-exist with frame_relative_level to
-   avoid a deadlock. cuda_frame_is_internal_frame () needs
-   frame_relative_level () to compute its result, and
-   cuda_frame_relative_level () needs cuda_frame_is_internal_frame () to
-   compute its result... */
-int
-cuda_frame_relative_level (struct frame_info *fi)
-{
-  struct cuda_frame_info *cfi;
-  int ignored = 0;
-
-  if (fi == NULL)
-    return -1;
-
-  cfi = cuda_get_frame_info (fi);
-  if (cfi->cuda_level_p)
-    return cfi->cuda_level;
-
-  /* If hiding is inactive, no need for recursion. */
-  if (!cuda_options_hide_internal_frames ())
-    {
-      cfi->cuda_level_p = true;
-      cfi->cuda_level = frame_relative_level (fi);
-      return cfi->cuda_level;
-    }
-
-  /* Stop the recursion */
-  if (frame_relative_level (fi) == -1)
-    {
-      cfi->cuda_level_p = true;
-      cfi->cuda_level = -1;
-      return cfi->cuda_level;
-    }
-
-  /* Do not count internal frames. */
-  if (cuda_frame_is_internal (fi) || cuda_frame_is_device_syscall (fi))
-    {
-      cfi->cuda_level_p = true;
-      cfi->cuda_level = cuda_frame_relative_level (get_next_frame (fi));
-      return cfi->cuda_level;
-    }
-
-  cfi->cuda_level_p = true;
-  cfi->cuda_level = cuda_frame_relative_level (get_next_frame (fi)) + 1;
-  return cfi->cuda_level;
 }
 
 /* CUDA ABI return value convention:
@@ -2819,6 +2115,10 @@ cuda_find_function_pc_from_objfile (struct objfile *objfile,
   char *sym_name = NULL;
   char *tmp_func_name = NULL;
   struct gdbarch *gdbarch = get_current_arch ();
+  const struct language_defn *lang = current_language;
+  int dmgl_options = DMGL_ANSI | DMGL_PARAMS;
+  struct cleanup *cleanup = NULL;
+  char * demangled = NULL;
 
   gdb_assert (objfile);
   gdb_assert (func_name);
@@ -2838,9 +2138,13 @@ cuda_find_function_pc_from_objfile (struct objfile *objfile,
      which is what will be used to lookup a CUDA device code symbol. */
   if ((msymbol = lookup_minimal_symbol (func_name, NULL, objfile)))
     sym_name = msymbol->ginfo.name;
-
-  if (!sym_name)
-    return false;
+  else if ((demangled = language_demangle (lang, func_name, dmgl_options)))
+    {
+      sym_name = demangled;
+      cleanup = make_cleanup (xfree, sym_name);
+    }
+  else
+    sym_name = func_name;
 
   /* Look for functions - assigned from DWARF, this path will only
      find information for debug compilations. */
@@ -2854,7 +2158,8 @@ cuda_find_function_pc_from_objfile (struct objfile *objfile,
           if (!b || !b->function)
             continue;
 
-          if (!SYMBOL_MATCHES_NATURAL_NAME (b->function, sym_name))
+          if (!SYMBOL_MATCHES_NATURAL_NAME (b->function, sym_name) &&
+              !SYMBOL_MATCHES_SEARCH_NAME (b->function, sym_name))
             continue;
 
           found = true;
@@ -2880,6 +2185,10 @@ cuda_find_function_pc_from_objfile (struct objfile *objfile,
             }
         }
     }
+
+  /* Clean up before exiting. */
+  if (cleanup)
+    do_cleanups (cleanup);
 
   /* If we found the symbol, return its address in func_addr
      and return true. */
@@ -2951,23 +2260,6 @@ cuda_find_context_by_addr (CORE_ADDR addr)
   return NULL;
 }
 
-struct value *
-cuda_value_of_builtin_frame_phys_pc_reg (struct frame_info *frame)
-{
-  struct gdbarch *gdbarch = get_frame_arch (frame);
-  struct type *type_data_ptr = builtin_type (gdbarch)->builtin_data_ptr;
-  struct value *val = allocate_value (type_data_ptr);
-  gdb_byte *buf = value_contents_raw (val);
-
-  if (frame == NULL || !cuda_focus_is_device ())
-    memset (buf, 0, TYPE_LENGTH (value_type (val)));
-  else
-    gdbarch_address_to_pointer (gdbarch, type_data_ptr, buf,
-                                cuda_pc_virt_to_phys (get_frame_pc (frame)));
-  return val;
-}
-
-
 /* Returns 1 when a value is stored in more than one register (long, double).
    Works with assumption that the compiler allocates consecutive registers for
    those cases.  */
@@ -2980,128 +2272,6 @@ cuda_convert_register_p (struct gdbarch *gdbarch, int regnum, struct type *type)
   return 0;
 }
 
-static void
-cuda_special_register_to_value (struct frame_info *frame, int regnum,
-                                struct type *type, gdb_byte *to)
-{
-  int i = 0;
-  bool high = false;
-  regmap_t regmap = NULL;
-  uint32_t *p = (uint32_t *)to;
-  uint32_t dev = 0, sm = 0, wp = 0, ln = 0;
-  uint32_t sp_regnum = 0, offset = 0, stack_addr = 0, val32 = 0;
-  struct value *val = NULL;
-  struct gdbarch *gdbarch = get_frame_arch (frame);
-
-  gdb_assert (regnum == cuda_special_regnum (gdbarch));
-
-  cuda_coords_get_current_physical (&dev, &sm, &wp, &ln);
-  regmap = regmap_get_search_result ();
-
-  for (i = 0; i < regmap_get_num_entries (regmap); ++i)
-    {
-      switch (regmap_get_class (regmap, i))
-        {
-          case REG_CLASS_REG_FULL:
-            regnum = regmap_get_register (regmap, i);
-            get_frame_register (frame, regnum, (gdb_byte*)&p[i]);
-            break;
-
-          case REG_CLASS_MEM_LOCAL:
-            offset = regmap_get_offset (regmap, i);
-            cuda_api_read_local_memory (dev, sm, wp, ln, offset,
-                                        (void*)&p[i], sizeof (p[i]));
-            break;
-
-          case REG_CLASS_LMEM_REG_OFFSET:
-            sp_regnum = regmap_get_sp_register (regmap, i);
-            offset = regmap_get_sp_offset (regmap, i);
-            get_frame_register (frame, sp_regnum, (gdb_byte*)&stack_addr);
-            cuda_api_read_local_memory (dev, sm, wp, ln, stack_addr + offset,
-                                        (void*)&p[i], sizeof (p[i]));
-            break;
-
-          case REG_CLASS_REG_HALF:
-            regnum = regmap_get_half_register (regmap, i, &high);
-            get_frame_register (frame, regnum, (gdb_byte*)&val32);
-            p[i] = high ? val32 >> 16 : val32 & 0xffff;
-            break;
-
-          case REG_CLASS_REG_CC:
-          case REG_CLASS_REG_PRED:
-          case REG_CLASS_REG_ADDR:
-            error (_("CUDA Register Class 0x%x not supported yet.\n"),
-                   regmap_get_class (regmap, i));
-            break;
-
-          default:
-            gdb_assert (0);
-        }
-    }
-}
-
-static void
-cuda_value_to_special_register (struct frame_info *frame, int regnum,
-                                struct type *type, const gdb_byte *from)
-{
-  int i = 0;
-  bool high = false;
-  regmap_t regmap = NULL;
-  uint32_t *p = (uint32_t *)from;
-  uint32_t dev = 0, sm = 0, wp = 0, ln = 0;
-  uint32_t sp_regnum = 0, offset = 0, stack_addr = 0, val32 = 0;
-  struct value *val = NULL;
-  struct gdbarch *gdbarch = get_frame_arch (frame);
-
-  gdb_assert (regnum == cuda_special_regnum (gdbarch));
-
-  cuda_coords_get_current_physical (&dev, &sm, &wp, &ln);
-  regmap = regmap_get_search_result ();
-
-  for (i = 0; i < regmap_get_num_entries (regmap); ++i)
-    {
-      switch (regmap_get_class (regmap, i))
-        {
-          case REG_CLASS_REG_FULL:
-            regnum = regmap_get_register (regmap, i);
-            put_frame_register (frame, regnum, (gdb_byte*)&p[i]);
-            break;
-
-          case REG_CLASS_MEM_LOCAL:
-            offset = regmap_get_offset (regmap, i);
-            cuda_api_write_local_memory (dev, sm, wp, ln, offset,
-                                        (void*)&p[i], sizeof (p[i]));
-            break;
-
-          case REG_CLASS_LMEM_REG_OFFSET:
-            sp_regnum = regmap_get_sp_register (regmap, i);
-            offset = regmap_get_sp_offset (regmap, i);
-            get_frame_register (frame, sp_regnum, (gdb_byte*)&stack_addr);
-            cuda_api_write_local_memory (dev, sm, wp, ln, stack_addr + offset,
-                                         (void*)&p[i], sizeof (p[i]));
-            break;
-
-          case REG_CLASS_REG_HALF:
-            regnum = regmap_get_half_register (regmap, i, &high);
-            get_frame_register (frame, regnum, (gdb_byte*)&val32);
-            val32 = high ? (val32 & 0xffff)     | (p[i] << 16)
-                         : (val32 & 0xffff0000) | (p[i] & 0xffff);
-            put_frame_register (frame, regnum, (gdb_byte*)&val32);
-            break;
-
-          case REG_CLASS_REG_CC:
-          case REG_CLASS_REG_PRED:
-          case REG_CLASS_REG_ADDR:
-            error (_("CUDA Register Class 0x%x not supported yet.\n"),
-                   regmap_get_class (regmap, i));
-            break;
-
-          default:
-            gdb_assert (0);
-        }
-    }
-}
-
 /* Read a value of type TYPE from register REGNUM in frame FRAME, and
    return its contents in TO.  */
 static void
@@ -3109,9 +2279,13 @@ cuda_register_to_value (struct frame_info *frame, int regnum,
                         struct type *type, gdb_byte *to)
 {
   struct gdbarch *gdbarch = get_frame_arch (frame);
+  regmap_t regmap;
 
   if (regnum == cuda_special_regnum (gdbarch))
-    cuda_special_register_to_value (frame, regnum, type, to);
+    {
+      regmap = regmap_get_search_result ();
+      cuda_special_register_to_value (regmap, frame, to);
+    }
   else if (regnum == cuda_pc_regnum (gdbarch))
     gdb_assert (0); // use cuda_frame_prev_pc
   else
@@ -3125,9 +2299,13 @@ cuda_value_to_register (struct frame_info *frame, int regnum,
                         struct type *type, const gdb_byte *from)
 {
   struct gdbarch *gdbarch = get_frame_arch (frame);
+  regmap_t regmap;
 
   if (regnum == cuda_special_regnum (gdbarch))
-    cuda_value_to_special_register (frame, regnum, type, from);
+    {
+      regmap = regmap_get_search_result ();
+      cuda_value_to_special_register (regmap, frame, from);
+    }
   else if (regnum == cuda_pc_regnum (gdbarch))
     gdb_assert (0); // cannot write PC
   else
@@ -3152,6 +2330,7 @@ cuda_value_from_register (struct type *type, int regnum, struct frame_info *fram
       return val;
     }
 
+  /* CUDA - DW_OP_regx */
   /* That should not happen. But the DWARF info may encode locations with
      DW_OP_regx, which means that the variable is in a register, no matter the
      call stack. This is not true. The register will be caller/callee-saved and
@@ -3161,7 +2340,7 @@ cuda_value_from_register (struct type *type, int regnum, struct frame_info *fram
   if (level > 0)
     {
       next_frame = get_next_frame (frame);
-      val = cuda_frame_prev_register (next_frame, NULL, regnum);
+      val = frame_unwind_register_value (next_frame, regnum);
       if (type && !TYPE_CUDA_REG(type))
         deprecated_set_value_type (val, type);
       return val;
@@ -3169,21 +2348,6 @@ cuda_value_from_register (struct type *type, int regnum, struct frame_info *fram
 
   val = default_value_from_register (type, regnum, frame);
   return val;
-}
-
-static CORE_ADDR
-cuda_unwind_pc (struct gdbarch *gdbarch, struct frame_info *next_frame)
-{
-  CORE_ADDR pc;
-
-  pc = cuda_frame_prev_pc (next_frame);
-
-  if (frame_debug >= 3)
-    fprintf_unfiltered (gdb_stdlog,
-                        "{ cuda_unwind_pc (next_frame=n/a) -> %s }\n",
-                        hex_string (pc));
-
-  return pc;
 }
 
 static const gdb_byte *
@@ -3208,17 +2372,17 @@ cuda_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   gdbarch = gdbarch_alloc (&info, tdep);
 
   /* Set extra CUDA architecture specific information */
-  tdep->num_regs  = 128 + 1;
+  tdep->num_regs  = 256 + 1;
   tdep->sp_regnum       = 1;   /* ABI only, SP is in R1 */
   tdep->first_rv_regnum = 4;   /* ABI only, First RV is in R4, also used to pass args */
   tdep->last_rv_regnum  = 15;  /* ABI only, Last RV is in R15, also used to pass args */
   tdep->rz_regnum       = 63;  /* ABI only, Zero is in R63 */
-  tdep->pc_regnum       = 128; /* PC is after the last user register */
+  tdep->pc_regnum       = 256; /* PC is after the last user register */
 
   tdep->num_pseudo_regs    = 3;
-  tdep->special_regnum     = 129;
-  tdep->invalid_lo_regnum  = 130;
-  tdep->invalid_hi_regnum  = 131;
+  tdep->special_regnum     = 257;
+  tdep->invalid_lo_regnum  = 258;
+  tdep->invalid_hi_regnum  = 259;
 
   tdep->max_reg_rv_size = (tdep->last_rv_regnum - tdep->first_rv_regnum + 1) * 4;
   tdep->ptr_size = TARGET_CHAR_BIT * sizeof (CORE_ADDR); /* 32 or 64 bits */

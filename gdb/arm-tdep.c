@@ -2400,7 +2400,7 @@ arm_register_type (struct gdbarch *gdbarch, int regnum)
    number.  */
 
 static int
-arm_dwarf_reg_to_regnum (struct gdbarch *gdbarch, int reg)
+arm_dwarf_reg_to_regnum (struct gdbarch *gdbarch, reg_t reg)
 {
   /* Core integer regs.  */
   if (reg >= 0 && reg <= 15)
@@ -2439,7 +2439,7 @@ arm_dwarf_reg_to_regnum (struct gdbarch *gdbarch, int reg)
     {
       char name_buf[4];
 
-      sprintf (name_buf, "s%d", reg - 64);
+      sprintf (name_buf, "s%lld", reg - 64);
       return user_reg_map_name_to_regnum (gdbarch, name_buf,
 					  strlen (name_buf));
     }
@@ -2450,7 +2450,7 @@ arm_dwarf_reg_to_regnum (struct gdbarch *gdbarch, int reg)
     {
       char name_buf[4];
 
-      sprintf (name_buf, "d%d", reg - 256);
+      sprintf (name_buf, "d%lld", reg - 256);
       return user_reg_map_name_to_regnum (gdbarch, name_buf,
 					  strlen (name_buf));
     }
