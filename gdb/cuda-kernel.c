@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -20,6 +20,7 @@
 #include "defs.h"
 #include "frame.h"
 #include "gdb_assert.h"
+#include "ui-out.h"
 
 #include "cuda-api.h"
 #include "cuda-asm.h"
@@ -46,14 +47,19 @@ cuda_latest_launched_kernel_id (void)
  *****************************************************************************/
 
 struct kernel_st {
+  bool            grid_status_p;
   uint64_t        id;              /* unique kernel id per GDB session */
   uint32_t        dev_id;          /* device where the kernel was launched */
-  uint32_t        grid_id;         /* unique kernel id per device */
+  uint64_t        grid_id;         /* unique kernel id per device */
+  CUDBGGridStatus grid_status;     /* current grid status of the kernel */
+  kernel_t        parent;          /* the kernel that launched this grid */
+  kernel_t        children;        /* list of children */
+  kernel_t        siblings;        /* next sibling when traversing the list of children */
   char           *name;            /* name of the kernel if available */
+  char           *args;            /* kernel arguments in string format */
   uint64_t        virt_code_base;  /* virtual address of the kernel entry point */
   module_t        module;          /* CUmodule handle of the kernel */
   bool            launched;        /* Has the kernel been seen on the hw? */
-  bool            present;         /* Is kernel currently on the hw? */
   CuDim3          grid_dim;        /* The grid dimensions of the kernel. */
   CuDim3          block_dim;       /* The block dimensions of the kernel. */
   char            dimensions[128]; /* A string repr. of the kernel dimensions. */
@@ -62,37 +68,85 @@ struct kernel_st {
   kernel_t        next;            /* next kernel on the same device */
 };
 
+static void
+kernel_add_child (kernel_t parent, kernel_t child)
+{
+  gdb_assert (child);
+
+  if (!parent)
+    return;
+
+  child->siblings = parent->children;
+  parent->children = child;
+}
+
+static void
+kernel_remove_child (kernel_t parent, kernel_t child)
+{
+  kernel_t cur, prev;
+
+  gdb_assert (child);
+
+  if (!parent)
+    return;
+
+  if (parent->children == child)
+    {
+      parent->children = child->siblings;
+      return;
+    }
+
+  for (prev = parent->children, cur = parent->children->siblings;
+       cur != NULL;
+       prev = cur, cur = cur->siblings)
+    if (cur == child)
+    {
+      prev->siblings = cur->siblings;
+      break;
+    }
+}
+
 static kernel_t
 kernel_new (uint32_t dev_id, uint64_t grid_id, uint64_t virt_code_base,
             char *name, module_t module, CuDim3 grid_dim, CuDim3 block_dim,
-            CUDBGKernelType type)
+            CUDBGKernelType type, uint64_t parent_grid_id)
 {
-  kernel_t        kernel;
-  uint32_t        name_len;
-  char           *name_copy;
+  kernel_t   kernel;
+  uint32_t   name_len;
+  char      *name_copy;
+  kernel_t   parent_kernel;
 
-  kernel = xmalloc (sizeof *kernel);
-
+  parent_kernel = kernels_find_kernel_by_grid_id (dev_id, parent_grid_id);
   name_len  = strlen (name);
   name_copy = xmalloc (name_len + 1);
   memcpy (name_copy, name, name_len + 1);
 
-  kernel->id             = next_kernel_id++;
-  kernel->dev_id         = dev_id;
-  kernel->grid_id        = grid_id;
-  kernel->virt_code_base = virt_code_base;
-  kernel->name           = name_copy;
-  kernel->module         = module;
-  kernel->grid_dim       = grid_dim;
-  kernel->block_dim      = block_dim;
-  kernel->type           = type;
-  kernel->disasm_cache   = disasm_cache_create ();
-  kernel->next           = NULL;
+  kernel = xmalloc (sizeof *kernel);
+
+  kernel->grid_status_p            = false;
+
+  kernel->id                       = next_kernel_id++;
+  kernel->dev_id                   = dev_id;
+  kernel->grid_id                  = grid_id;
+  kernel->parent                   = parent_kernel;
+  kernel->children                 = NULL;
+  kernel->siblings                 = NULL;
+  kernel->virt_code_base           = virt_code_base;
+  kernel->name                     = name_copy;
+  kernel->args                     = NULL;
+  kernel->module                   = module;
+  kernel->grid_dim                 = grid_dim;
+  kernel->block_dim                = block_dim;
+  kernel->type                     = type;
+  kernel->disasm_cache             = disasm_cache_create ();
+  kernel->next                     = NULL;
 
   snprintf (kernel->dimensions, sizeof (kernel->dimensions), "<<<(%d,%d,%d),(%d,%d,%d)>>>",
             grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z);
 
   kernel->launched = false;
+
+  kernel_add_child (parent_kernel, kernel);
 
   if (cuda_options_show_kernel_events ())
     printf_unfiltered (_("[Launch of CUDA Kernel %"PRIu64" (%s%s) on Device %u]\n"),
@@ -106,13 +160,24 @@ kernel_delete (kernel_t kernel)
 {
   gdb_assert (kernel);
 
+  kernel_remove_child (kernel->parent, kernel);
+
   if (cuda_options_show_kernel_events ())
     printf_unfiltered (_("[Termination of CUDA Kernel %"PRIu64" (%s%s) on Device %u]\n"),
                       kernel->id, kernel->name, kernel->dimensions, kernel->dev_id);
 
   disasm_cache_destroy (kernel->disasm_cache);
   xfree (kernel->name);
+  xfree (kernel->args);
   xfree (kernel);
+}
+
+void
+kernel_invalidate (kernel_t kernel)
+{
+  cuda_trace ("kernel %"PRIu64": invalidate", kernel->id);
+
+  kernel->grid_status_p = false;
 }
 
 uint64_t
@@ -129,14 +194,84 @@ kernel_get_name (kernel_t kernel)
   return kernel->name;
 }
 
-uint32_t
+static void
+kernel_populate_args (kernel_t kernel)
+{
+  struct ui_file *stream = mem_fileopen ();
+  cuda_coords_t *coords, requested, candidates[CK_MAX];
+  struct frame_info *prev_frame, *frame;
+  cuda_focus_t focus;
+
+  cuda_focus_init (&focus);
+
+  make_cleanup_ui_file_delete (stream);
+
+  /* Find an active lane for the kernel */
+  requested = CUDA_WILDCARD_COORDS;
+  requested.kernelId = kernel_get_id (kernel);
+  cuda_coords_find_valid (requested, candidates, CUDA_SELECT_VALID);
+  coords = &candidates[CK_EXACT_LOGICAL];
+  if (!coords->valid || !cuda_coords_equal (&requested, coords))
+    return;
+
+  /* Save environment */
+  cuda_focus_save (&focus);
+  ui_out_redirect (uiout, stream);
+
+  /* Switch focus and ELF image to that lane/kernel, temporarily */
+  kernel_load_elf_images (kernel);
+  switch_to_cuda_thread (coords);
+
+  /* Find the outermost frame */
+  frame = get_current_frame ();
+  while ((prev_frame = get_prev_frame (frame)))
+    frame = prev_frame;
+
+  /* Print the arguments */
+  print_args_frame (frame);
+  kernel->args = ui_file_xstrdup (stream, NULL);
+
+  /* Restore environment */
+  ui_out_redirect (uiout, NULL);
+  cuda_focus_restore (&focus);
+}
+
+const char *
+kernel_get_args (kernel_t kernel)
+{
+  gdb_assert (kernel);
+  return kernel->args;
+}
+
+uint64_t
 kernel_get_grid_id (kernel_t kernel)
 {
   gdb_assert (kernel);
   return kernel->grid_id;
 }
 
-uint64_t
+kernel_t
+kernel_get_parent (kernel_t kernel)
+{
+  gdb_assert (kernel);
+  return kernel->parent;
+}
+
+kernel_t
+kernel_get_children (kernel_t kernel)
+{
+  gdb_assert (kernel);
+  return kernel->children;
+}
+
+kernel_t
+kernel_get_sibling (kernel_t kernel)
+{
+  gdb_assert (kernel);
+  return kernel->siblings;
+}
+
+  uint64_t
 kernel_get_virt_code_base (kernel_t kernel)
 {
   gdb_assert (kernel);
@@ -192,6 +327,48 @@ kernel_get_type (kernel_t kernel)
   return kernel->type;
 }
 
+CUDBGGridStatus
+kernel_get_status (kernel_t kernel)
+{
+  gdb_assert (kernel);
+
+  if (!kernel->grid_status_p)
+    {
+      cuda_api_get_grid_status (kernel->dev_id, kernel->grid_id, &kernel->grid_status);
+      kernel->grid_status_p = CACHED;
+    }
+
+  return kernel->grid_status;
+}
+
+uint32_t
+kernel_get_depth (kernel_t kernel)
+{
+  kernel_t k;
+  uint32_t depth = -1;
+
+  gdb_assert (kernel);
+
+  for (k = kernel; k; k = kernel_get_parent (k))
+    ++depth;
+
+  return depth;
+}
+
+uint32_t
+kernel_get_num_children (kernel_t kernel)
+{
+  kernel_t k;
+  uint32_t num_children = 0;
+
+  gdb_assert (kernel);
+
+  for (k = kernel_get_children (kernel); k; k = kernel_get_sibling (k))
+    ++num_children;
+
+  return num_children;
+}
+
 bool
 kernel_has_launched (kernel_t kernel)
 {
@@ -202,8 +379,16 @@ kernel_has_launched (kernel_t kernel)
 bool
 kernel_is_present (kernel_t kernel)
 {
+  CUDBGGridStatus status;
+  bool present;
+
   gdb_assert (kernel);
-  return kernel->present;
+
+  status = kernel_get_status (kernel);
+  present = (status == CUDBG_GRID_STATUS_ACTIVE ||
+             status == CUDBG_GRID_STATUS_SLEEPING);
+
+  return present;
 }
 
 uint32_t
@@ -241,6 +426,14 @@ kernel_disassemble (kernel_t kernel, uint64_t pc, uint32_t *inst_size)
 }
 
 void
+kernel_flush_disasm_cache (kernel_t kernel)
+{
+  gdb_assert (kernel);
+
+  disasm_cache_flush (kernel->disasm_cache);
+}
+
+void
 kernel_load_elf_images (kernel_t kernel)
 {
   context_t context;
@@ -261,12 +454,12 @@ kernel_print (kernel_t kernel)
   fprintf (stderr, "    Kernel %"PRIu64":\n", kernel->id);
   fprintf (stderr, "        name        : %s\n", kernel->name);
   fprintf (stderr, "        device id   : %u\n", kernel->dev_id);
-  fprintf (stderr, "        grid id     : %d\n", kernel->grid_id);
+  fprintf (stderr, "        grid id     : %"PRId64"\n", kernel->grid_id);
   fprintf (stderr, "        module id   : 0x%"PRIx64"\n", module_get_id (kernel->module));
   fprintf (stderr, "        entry point : 0x%"PRIx64"\n", kernel->virt_code_base);
   fprintf (stderr, "        dimensions  : %s\n", kernel->dimensions);
   fprintf (stderr, "        launched    : %s\n", kernel->launched ? "yes" : "no");
-  fprintf (stderr, "        present     : %s\n", kernel->present ? "yes" : "no");
+  fprintf (stderr, "        present     : %s\n", kernel_is_present (kernel)? "yes" : "no");
   fprintf (stderr, "        next        : 0x%"PRIx64"\n", (uint64_t)(uintptr_t)kernel->next);
   fflush (stderr);
 }
@@ -278,219 +471,159 @@ kernel_print (kernel_t kernel)
  *
  *****************************************************************************/
 
-struct kernels_st {
-  uint32_t dev_id;               /* the parent device */
-  uint32_t num_present_kernels;  /* number of kernels currently on the device */
-  kernel_t head;                 /* the head of the list of kernels */
-};
-
-kernels_t
-kernels_new (uint32_t dev_id)
-{
-  kernels_t kernels;
-
-  kernels = xmalloc (sizeof *kernels);
-  kernels->dev_id              = dev_id;
-  kernels->num_present_kernels = 0;
-  kernels->head                = NULL;
-
-  return kernels;
-}
+/* head of the system list of kernels */
+static kernel_t kernels = NULL;
 
 void
-kernels_delete (kernels_t kernels)
-{
-  kernel_t kernel, next_kernel;
-
-  gdb_assert (kernels);
-
-  kernel = kernels->head;
-  while (kernel)
-    {
-      next_kernel = kernel->next;
-      kernel_delete (kernel);
-      kernel = next_kernel;
-    }
-
-  xfree (kernels);
-}
-
-uint32_t
-kernels_get_dev_id (kernels_t kernels)
-{
-  gdb_assert (kernels);
-  return kernels->dev_id;
-}
-
-uint32_t
-kernels_get_num_kernels (kernels_t kernels)
-{
-  kernel_t kernel;
-  uint32_t num_kernels;
-
-  gdb_assert (kernels);
-
-  num_kernels = 0;
-  for (kernel = kernels->head; kernel; kernel = kernel->next)
-    ++num_kernels;
-
-  return num_kernels;
-}
-
-
-uint32_t
-kernels_get_num_present_kernels (kernels_t kernels)
-{
-  gdb_assert (kernels);
-  return kernels->num_present_kernels;
-}
-
-void
-kernels_print (kernels_t kernels)
+kernels_print (void)
 {
   kernel_t kernel;
 
-  gdb_assert (kernels);
-
-  for (kernel = kernels->head; kernel; kernel = kernel->next)
+  for (kernel = kernels; kernel; kernel = kernels_get_next_kernel (kernel))
     kernel_print (kernel);
 }
 
 void
-kernels_start_kernel (kernels_t kernels, uint64_t grid_id,
+kernels_start_kernel (uint32_t dev_id, uint64_t grid_id,
                       uint64_t virt_code_base, uint64_t context_id,
                       uint64_t module_id, CuDim3 grid_dim,
-                      CuDim3 block_dim, CUDBGKernelType type)
+                      CuDim3 block_dim, CUDBGKernelType type,
+                      uint64_t parent_grid_id)
 {
-  uint32_t  dev_id;
   context_t context;
   modules_t modules;
   module_t  module;
   kernel_t  kernel;
   char     *kernel_name = NULL;
 
-  gdb_assert (kernels);
-
-  dev_id  = kernels->dev_id;
   context = device_find_context_by_id (dev_id, context_id);
   modules = context_get_modules (context);
-  module  = modules_find_module_by_id (modules, module_id);
+  module = modules_find_module_by_id (modules, module_id);
 
-  set_current_context (context);
-  kernel_name = cuda_find_kernel_name_from_pc (virt_code_base, true);
+  if (context)
+    set_current_context (context);
+  kernel_name = cuda_find_function_name_from_pc (virt_code_base, true);
 
   kernel = kernel_new (dev_id, grid_id, virt_code_base, kernel_name, module,
-                       grid_dim, block_dim, type);
+                       grid_dim, block_dim, type, parent_grid_id);
 
-  kernel->next  = kernels->head;
-  kernels->head = kernel;
+
+  kernel->next = kernels;
+  kernels = kernel;
 }
 
 void
-kernels_terminate_kernel (kernels_t kernels, kernel_t kernel)
+kernels_terminate_kernel (kernel_t kernel)
 {
-  kernel_t  prev;
-  kernel_t  ker;
+  kernel_t  prev, ker;
 
-  gdb_assert (kernels);
-  gdb_assert (kernel);
+  if (!kernel)
+    return;
 
-  for (ker = kernels->head, prev = NULL;
+  // must keep kernel object until all the children have terminated
+  if (kernel->children)
+    return;
+
+  for (ker = kernels, prev = NULL;
        ker && ker != kernel;
-       prev = ker, ker = ker->next)
+       prev = ker, ker = kernels_get_next_kernel (ker))
     ;
   gdb_assert (ker);
 
   if (prev)
-    prev->next = kernel->next;
+    prev->next = kernels_get_next_kernel (kernel);
   else
-    kernels->head = kernel->next;
+    kernels = kernels_get_next_kernel (kernel);
 
   kernel_delete (kernel);
 }
 
-kernel_t
-kernels_find_kernel_by_grid_id (kernels_t kernels, uint64_t grid_id)
-{
-  kernel_t kernel;
-
-  gdb_assert (kernels);
-
-  for (kernel = kernels->head; kernel; kernel = kernel->next)
-    if (kernel->grid_id == grid_id)
-      return kernel;
-
-  return NULL;
-}
-
-static kernel_t
-kernels_find_kernel_by_module (kernels_t kernels, module_t module)
-{
-  kernel_t kernel;
-
-  gdb_assert (kernels);
-
-  for (kernel = kernels->head; kernel; kernel = kernel->next)
-    if (kernel->module == module)
-      return kernel;
-
-  return NULL;
-}
-
 void
-kernels_remove_kernels_for_module (kernels_t kernels, module_t module)
+kernels_terminate_module (module_t module)
 {
-  kernel_t kernel;
+  kernel_t kernel, next_kernel;
 
-  kernel = kernels_find_kernel_by_module (kernels, module);
+  gdb_assert (module);
 
-  while (kernel != NULL)
+  kernel = kernels_get_first_kernel ();
+  while (kernel)
     {
-      kernels_terminate_kernel (kernels, kernel);
-
-      kernel = kernels_find_kernel_by_module (kernels, module);
+      next_kernel = kernels_get_next_kernel (kernel);
+      if (kernel_get_module (kernel) == module)
+        kernels_terminate_kernel (kernel);
+      kernel = next_kernel;
     }
 }
 
+kernel_t
+kernels_get_first_kernel (void)
+{
+  return kernels;
+}
+
+kernel_t
+kernels_get_next_kernel (kernel_t kernel)
+{
+  if (!kernel)
+    return NULL;
+
+  return kernel->next;
+}
+
+kernel_t
+kernels_find_kernel_by_grid_id (uint32_t dev_id, uint64_t grid_id)
+{
+  kernel_t kernel;
+
+  for (kernel = kernels; kernel; kernel = kernels_get_next_kernel (kernel))
+    if (kernel->dev_id == dev_id && kernel->grid_id == grid_id)
+      return kernel;
+
+  return NULL;
+}
+
+kernel_t
+kernels_find_kernel_by_kernel_id (uint64_t kernel_id)
+{
+  kernel_t kernel;
+
+  for (kernel = kernels; kernel; kernel = kernels_get_next_kernel (kernel))
+    if (kernel->id == kernel_id)
+      return kernel;
+
+  return NULL;
+}
+
 void
-kernels_update_kernels (kernels_t kernels)
+kernels_update_args (void)
+{
+  kernel_t kernel;
+
+  for (kernel = kernels_get_first_kernel (); kernel; kernel = kernels_get_next_kernel (kernel))
+    if (!kernel->args && kernel_is_present (kernel))
+      kernel_populate_args (kernel);
+}
+
+void
+kernels_update_terminated (void)
 {
   kernel_t      kernel;
   kernel_t      next_kernel;
-  CUDBGGridStatus status;
-
-  gdb_assert (kernels);
-
-  kernels->num_present_kernels = 0;
 
   /* rediscover the kernels currently running on the hardware */
-  kernel = kernels->head;
+  kernel = kernels_get_first_kernel ();
   while (kernel)
     {
-      next_kernel = kernel->next;
+      next_kernel = kernels_get_next_kernel (kernel);
 
-      /* reset the kernel to not currently running */
-      kernel->present = false;
-
-      cuda_api_get_grid_status (kernel->dev_id, kernel->grid_id, &status);
-
-      if (status == CUDBG_GRID_STATUS_ACTIVE || status == CUDBG_GRID_STATUS_SLEEPING)
-        {
-          kernel->launched = true;
-          kernel->present = true;
-          ++kernels->num_present_kernels;
-        }
-      else if (status == CUDBG_GRID_STATUS_TERMINATED ||
-               status == CUDBG_GRID_STATUS_UNDETERMINED ||
-               status == CUDBG_GRID_STATUS_INVALID)
-        {
-          kernel->present = false;
-        }
+      if (kernel_is_present (kernel))
+        kernel->launched = true;
 
       /* terminate the kernels that we had seen running at some point
-         but are not here on the hardware anymore. */
-      if (kernel->launched && !kernel->present)
-          kernels_terminate_kernel (kernels, kernel);
+         but are not here on the hardware anymore. If there is any child kernel
+         still present, keep the data available. */
+      if (kernel->launched && !kernel_is_present (kernel))
+        kernels_terminate_kernel (kernel);
 
       kernel = next_kernel;
     }

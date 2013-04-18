@@ -22,6 +22,7 @@
 #endif
 
 #include "gdb_proc_service.h"
+#include <signal.h>
 
 #ifdef HAVE_LINUX_REGSETS
 typedef void (*regset_fill_func) (struct regcache *, void *);
@@ -46,7 +47,6 @@ struct regset_info
 extern struct regset_info target_regsets[];
 #endif
 
-struct siginfo;
 
 struct process_info_private
 {
@@ -100,7 +100,7 @@ struct linux_target_ops
      Returns true if any conversion was done; false otherwise.
      If DIRECTION is 1, then copy from INF to NATIVE.
      If DIRECTION is 0, copy from NATIVE to INF.  */
-  int (*siginfo_fixup) (struct siginfo *native, void *inf, int direction);
+  int (*siginfo_fixup) (siginfo_t *native, void *inf, int direction);
 
   /* Hook to call when a new process is created or attached to.
      If extra per-process architecture-specific data is needed,

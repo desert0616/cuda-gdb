@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -127,8 +127,12 @@ autostep_report_exception_device (int before_ln, uint64_t before_pc,
          that the exception was at after_pc-8. This is true in all but some
          obscure cases. */
 
-      uint64_t guess_pc = after_pc - 8;
-      struct symtab_and_line guess_sal = find_pc_line (guess_pc, 0);
+      uint64_t guess_pc;
+      struct symtab_and_line guess_sal;
+
+      cuda_api_get_adjusted_code_address (c.dev, after_pc, &guess_pc, CUDBG_ADJ_PREVIOUS_ADDRESS);
+
+      guess_sal = find_pc_line (guess_pc, 0);
 
       printf_filtered (_("Autostep caught exception at instruction before 0x%" PRIx64 "\n"),
         after_pc);
@@ -373,5 +377,4 @@ cuda_handle_autostep ()
   else
     handle_autostep_host ();
 }
-
 

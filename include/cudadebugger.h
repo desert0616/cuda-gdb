@@ -1,5 +1,5 @@
 /*
- * Copyright 2007-2012 NVIDIA Corporation.  All rights reserved.
+ * Copyright 2007-2013 NVIDIA Corporation.  All rights reserved.
  *
  * NOTICE TO LICENSEE:
  *
@@ -77,6 +77,7 @@ extern "C" {
 #if defined(_WIN32)
 /* Windows 32- and 64-bit */
 #define PRIx64  "I64x"
+#define PRId64  "I64d"
 typedef unsigned char bool;
 #undef false
 #undef true
@@ -87,8 +88,8 @@ typedef unsigned char bool;
 /*--------------------------------- API Version ------------------------------*/
 
 #define CUDBG_API_VERSION_MAJOR      5  /* Major release version number */
-#define CUDBG_API_VERSION_MINOR      0  /* Minor release version number */
-#define CUDBG_API_VERSION_REVISION  77  /* Revision (build) number */
+#define CUDBG_API_VERSION_MINOR      5  /* Minor release version number */
+#define CUDBG_API_VERSION_REVISION  90  /* Revision (build) number */
 
 /*---------------------------------- Constants -------------------------------*/
 
@@ -134,6 +135,9 @@ typedef enum {
 #define CUDBG_SESSION_ID                    cudbgSessionId
 #define CUDBG_ATTACH_HANDLER_AVAILABLE      cudbgAttachHandlerAvailable
 #define CUDBG_DETACH_SUSPENDED_DEVICES_MASK cudbgDetachSuspendedDevicesMask
+#define CUDBG_ENABLE_LAUNCH_BLOCKING        cudbgEnableLaunchBlocking
+#define CUDBG_ENABLE_INTEGRATED_MEMCHECK    cudbgEnableIntegratedMemcheck
+#define CUDBG_ENABLE_PREEMPTION_DEBUGGING   cudbgEnablePreemptionDebugging
 
 /*---------------- Internal Breakpoint Entries for Error Reporting ------------*/
 
@@ -245,6 +249,21 @@ typedef enum {
     CUDBG_EVENT_ATTACH_COMPLETE        = 0x00a,   /* Attach complete. */
     CUDBG_EVENT_DETACH_COMPLETE        = 0x00b,   /* Detach complete. */
 } CUDBGEventKind;
+
+/*------------------------------- Kernel Origin ------------------------------*/
+
+typedef enum {
+    CUDBG_KNL_ORIGIN_CPU               = 0x000,   /* The kernel was launched from the CPU. */
+    CUDBG_KNL_ORIGIN_GPU               = 0x001,   /* The kernel was launched from the GPU. */
+} CUDBGKernelOrigin;
+
+/*------------------------------ Code Address --------------------------------*/
+
+typedef enum {
+    CUDBG_ADJ_PREVIOUS_ADDRESS         = 0x000,   /* Get the adjusted previous code address. */
+    CUDBG_ADJ_CURRENT_ADDRESS          = 0x001,   /* Get the adjusted current code address. */
+    CUDBG_ADJ_NEXT_ADDRESS             = 0x002,   /* Get the adjusted next code address. */
+} CUDBGAdjAddrAction;
 
 /* Deprecated */
 typedef struct {
@@ -380,6 +399,65 @@ typedef struct {
 
 typedef struct {
     CUDBGEventKind kind;
+    union cases50_st {
+        struct elfImageLoaded50_st {
+            char     *relocatedElfImage;
+            char     *nonRelocatedElfImage;
+            uint32_t  size32;
+            uint32_t  dev;
+            uint64_t  context;
+            uint64_t  module;
+            uint64_t  size;
+        } elfImageLoaded;
+        struct kernelReady50_st{
+            uint32_t dev;
+            uint32_t gridId;
+            uint32_t tid;
+            uint64_t context;
+            uint64_t module;
+            uint64_t function;
+            uint64_t functionEntry;
+            CuDim3   gridDim;
+            CuDim3   blockDim;
+            CUDBGKernelType type;
+        } kernelReady;
+        struct kernelFinished50_st {
+            uint32_t dev;
+            uint32_t gridId;
+            uint32_t tid;
+            uint64_t context;
+            uint64_t module;
+            uint64_t function;
+            uint64_t functionEntry;
+        } kernelFinished;
+        struct contextPush50_st {
+            uint32_t dev;
+            uint32_t tid;
+            uint64_t context;
+        } contextPush;
+        struct contextPop50_st {
+            uint32_t dev;
+            uint32_t tid;
+            uint64_t context;
+        } contextPop;
+        struct contextCreate50_st {
+            uint32_t dev;
+            uint32_t tid;
+            uint64_t context;
+        } contextCreate;
+        struct contextDestroy50_st {
+            uint32_t dev;
+            uint32_t tid;
+            uint64_t context;
+        } contextDestroy;
+        struct internalError50_st {
+            CUDBGResult errorType;
+        } internalError;
+    } cases;
+} CUDBGEvent50;
+
+typedef struct {
+    CUDBGEventKind kind;
     union cases_st {
         struct elfImageLoaded_st {
             char     *relocatedElfImage;
@@ -401,6 +479,8 @@ typedef struct {
             CuDim3   gridDim;
             CuDim3   blockDim;
             CUDBGKernelType type;
+            uint64_t parentGridId;
+            uint64_t gridId64;
         } kernelReady;
         struct kernelFinished_st {
             uint32_t dev;
@@ -410,6 +490,7 @@ typedef struct {
             uint64_t module;
             uint64_t function;
             uint64_t functionEntry;
+            uint64_t gridId64;
         } kernelFinished;
         struct contextPush_st {
             uint32_t dev;
@@ -446,6 +527,23 @@ typedef struct {
     uint32_t timeout;
 } CUDBGEventCallbackData;
 
+#pragma pack(push,1)
+typedef struct {
+    uint32_t dev;
+    uint64_t gridId64;
+    uint32_t tid;
+    uint64_t context;
+    uint64_t module;
+    uint64_t function;
+    uint64_t functionEntry;
+    CuDim3   gridDim;
+    CuDim3   blockDim;
+    CUDBGKernelType type;
+    uint64_t parentGridId;
+    CUDBGKernelOrigin origin;
+} CUDBGGridInfo;
+#pragma pack(pop)
+
 typedef void (*CUDBGNotifyNewEventCallback31)(void *data);
 typedef void (*CUDBGNotifyNewEventCallback40)(CUDBGEventCallbackData40 *data);
 typedef void (*CUDBGNotifyNewEventCallback)(CUDBGEventCallbackData *data);
@@ -468,6 +566,7 @@ typedef enum {
     CUDBG_EXCEPTION_LANE_MISALIGNED_ADDRESS = 11,
     CUDBG_EXCEPTION_WARP_ASSERT = 12,
     CUDBG_EXCEPTION_LANE_SYSCALL_ERROR = 13,
+    CUDBG_EXCEPTION_WARP_ILLEGAL_ADDRESS = 14,
 } CUDBGException_t;
 
 /*--------------------------------- Exports --------------------------------*/
@@ -477,7 +576,8 @@ typedef const struct CUDBGAPI_st *CUDBGAPI;
 CUDBGResult cudbgGetAPI(uint32_t major, uint32_t minor, uint32_t rev, CUDBGAPI *api);
 CUDBGResult cudbgGetAPIVersion(uint32_t *major, uint32_t *minor, uint32_t *rev);
 CUDBGResult cudbgMain(int apiClientPid, uint32_t apiClientRevision, int sessionId, int attachState,
-                      int attachEventInitialized, int writeFd, int detachFd, int attachStubInUse);
+                      int attachEventInitialized, int writeFd, int detachFd, int attachStubInUse,
+                      int enablePreemptionDebugging);
 
 struct CUDBGAPI_st {
     /* Initialization */
@@ -494,7 +594,7 @@ struct CUDBGAPI_st {
     CUDBGResult (*unsetBreakpoint31)(uint64_t addr);
 
     /* Device State Inspection */
-    CUDBGResult (*readGridId)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *gridId);
+    CUDBGResult (*readGridId50)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *gridId);
     CUDBGResult (*readBlockIdx32)(uint32_t dev, uint32_t sm, uint32_t wp, CuDim2 *blockIdx);
     CUDBGResult (*readThreadIdx)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, CuDim3 *threadIdx);
     CUDBGResult (*readBrokenWarps)(uint32_t dev, uint32_t sm, uint64_t *brokenWarpsMask);
@@ -588,13 +688,22 @@ struct CUDBGAPI_st {
 
     /* 5.0 Extensions */
     CUDBGResult (*clearAttachState)(void);
-    CUDBGResult (*getNextSyncEvent)(CUDBGEvent *event);
+    CUDBGResult (*getNextSyncEvent50)(CUDBGEvent50 *event);
     CUDBGResult (*memcheckReadErrorAddress)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint64_t *address, ptxStorageKind *storage);
     CUDBGResult (*acknowledgeSyncEvents)(void);
-    CUDBGResult (*getNextAsyncEvent)(CUDBGEvent *event);
+    CUDBGResult (*getNextAsyncEvent50)(CUDBGEvent50 *event);
     CUDBGResult (*requestCleanupOnDetach)(void);
     CUDBGResult (*initializeAttachStub)(void);
-    CUDBGResult (*getGridStatus)(uint32_t dev, uint32_t gridId, CUDBGGridStatus *status);
+    CUDBGResult (*getGridStatus50)(uint32_t dev, uint32_t gridId, CUDBGGridStatus *status);
+
+    /* 5.5 Extensions */
+    CUDBGResult (*getAdjustedCodeAddress)(uint32_t dev, uint64_t address, uint64_t *adjustedAddress, CUDBGAdjAddrAction adjAction);
+    CUDBGResult (*getNextSyncEvent)(CUDBGEvent *event);
+    CUDBGResult (*getNextAsyncEvent)(CUDBGEvent *event);
+    CUDBGResult (*getGridInfo)(uint32_t dev, uint64_t gridId64, CUDBGGridInfo *gridInfo);
+    CUDBGResult (*readGridId)(uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *gridId64);
+    CUDBGResult (*getGridStatus)(uint32_t dev, uint64_t gridId64, CUDBGGridStatus *status);
+    CUDBGResult (*setAsyncLaunchNotifications)(bool enabled);
 };
 
 #ifdef __cplusplus

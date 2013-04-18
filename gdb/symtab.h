@@ -151,6 +151,9 @@ struct general_symbol_info
   /* The section associated with this symbol.  It can be NULL.  */
 
   struct obj_section *obj_section;
+
+  /* CUDA - mangled symbol name */
+  char *cuda_name;
 };
 
 extern CORE_ADDR symbol_overlayed_address (CORE_ADDR, struct obj_section *);
@@ -195,6 +198,12 @@ extern void symbol_set_names (struct general_symbol_info *symbol,
 			      const char *linkage_name, int len, int copy_name,
 			      struct objfile *objfile);
 
+/* CUDA - set CUDA symbol name */
+#define SYMBOL_SET_CUDA_NAME(symbol,name,len,objfile)	\
+  symbol_set_cuda_name (&(symbol)->ginfo, name, len, objfile)
+extern void symbol_set_cuda_name (struct general_symbol_info *symbol,
+                 const char *name, int len, struct objfile *objfile);
+
 /* Now come lots of name accessor macros.  Short version as to when to
    use which: Use SYMBOL_NATURAL_NAME to refer to the name of the
    symbol in the original source code.  Use SYMBOL_LINKAGE_NAME if you
@@ -218,6 +227,10 @@ extern char *symbol_natural_name (const struct general_symbol_info *symbol);
    it's the same as SYMBOL_NATURAL_NAME.  */
 
 #define SYMBOL_LINKAGE_NAME(symbol)	(symbol)->ginfo.name
+
+/* Return CUDA symbol name */
+#define SYMBOL_CUDA_NAME(symbol) ((symbol)->ginfo.cuda_name ? \
+                (symbol)->ginfo.cuda_name : (symbol)->ginfo.name)
 
 /* Return the demangled name for a symbol based on the language for
    that symbol.  If no demangled name exists, return NULL. */

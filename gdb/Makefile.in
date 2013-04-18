@@ -18,7 +18,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #
-# NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+# NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
 # Modified from the original GDB file referenced above by the CUDA-GDB 
 # team at NVIDIA <cudatools@nvidia.com>.
 #
@@ -527,11 +527,12 @@ ALL_TARGET_OBS = \
 	avr-tdep.o \
 	cris-tdep.o \
 	cuda-api.o cuda-autostep.o cuda-asm.o cuda-commands.o cuda-context.o \
-	cuda-coords.o cuda-elf-image.o cuda-events.o cuda-frame.o cuda-gdb.o \
+	cuda-coords.o cuda-elf-image.o cuda-events.o cuda-exceptions.o \
+        cuda-frame.o cuda-gdb.o cuda-darwin-nat.o \
         cuda-iterator.o cuda-kernel.o  cuda-linux-nat.o cuda-modules.o \
-        cuda-notifications.o cuda-options.o cuda-regmap.o \
+        cuda-notifications.o cuda-options.o cuda-packet-manager.o cuda-regmap.o \
         cuda-special-register.o cuda-state.o cuda-tdep.o cuda-textures.o \
-	cuda-utils.o libcudbg.o libcudbgipc.o \
+	cuda-utils.o cuda-convvars.o libcudbg.o libcudbgipc.o remote-cuda.o \
 	dicos-tdep.o \
 	frv-linux-tdep.o frv-tdep.o \
 	h8300-tdep.o \
@@ -807,11 +808,12 @@ sentinel-frame.h bcache.h symfile.h windows-tdep.h linux-tdep.h \
 gdb_usleep.h jit.h xml-syscall.h ada-operator.inc microblaze-tdep.h \
 psymtab.h psympriv.h \
 cuda-api.h  cuda-autostep.h cuda-builtins.h cuda-context.h cuda-defs.h \
-cuda-events.h cuda-frame.h cuda-gdb.h cuda-kernel.h cuda-notifications.h \
+cuda-events.h cuda-exceptions.h cuda-frame.h cuda-gdb.h cuda-kernel.h \
+cuda-notifications.h \
 cuda-parser.h cuda-tdep.h cuda-asm.h cuda-commands.h cuda-coords.h \
-cuda-elf-image.h cuda-iterator.h cuda-modules.h cuda-options.h \
-cuda-regmap.h cuda-special-register.h cuda-state.h cuda-textures.h \
-cuda-utils.h libcudbg.h libcudbgipc.h
+cuda-elf-image.h cuda-iterator.h cuda-modules.h cuda-options.h cuda-convvars.h \
+cuda-packet-manager.h cuda-regmap.h cuda-special-register.h cuda-state.h \
+cuda-textures.h cuda-utils.h libcudbg.h libcudbgipc.h remote-cuda.h
 
 # Header files that already have srcdir in them, or which are in objdir.
 
@@ -1476,11 +1478,12 @@ ALLDEPFILES = \
 	bsd-uthread.c bsd-kvm.c \
 	core-regset.c corelow.c \
 	cuda-api.c cuda-autostep.c cuda-asm.c cuda-commands.c cuda-context.c \
-        cuda-coords.c cuda-elf-image.c cuda-events.c cuda-frame.c cuda-gdb.c \
+        cuda-coords.c cuda-elf-image.c cuda-events.c cuda-exceptions.c \
+        cuda-frame.c cuda-gdb.c cuda-darwin-nat.c \
         cuda-iterator.c cuda-kernel.c cuda-linux-nat.c cuda-modules.c \
-        cuda-notifications.c cuda-options.c cuda-regmap.c \
+        cuda-notifications.c cuda-options.c cuda-packet-manager.c cuda-regmap.c \
         cuda-special-register.c cuda-state.c cuda-tdep.c  cuda-textures.c \
-        cuda-utils.c libcudbg.c libcudbgipc.c \
+        cuda-utils.c cuda-convvars.c libcudbg.c libcudbgipc.c remote-cuda.c \
 	dcache.c dicos-tdep.c darwin-nat.c \
 	exec.c \
 	fbsd-nat.c \

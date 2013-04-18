@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -42,4 +42,6 @@ void cuda_gdb_dir_cleanup_files (char* dirpath);
 cuda_clock_t cuda_clock (void);
 void         cuda_clock_increment (void);
 
+void cuda_gdb_tmpdir_cleanup_self (void *unused);
+void cuda_gdb_record_remove_all (void *unused);
 #endif

@@ -46,7 +46,8 @@ case "${target}" in
 			srv_regobj="${srv_regobj} arm-with-vfpv2.o"
 			srv_regobj="${srv_regobj} arm-with-vfpv3.o"
 			srv_regobj="${srv_regobj} arm-with-neon.o"
-			srv_tgtobj="linux-low.o linux-arm-low.o"
+			cuda_tgtobj="cuda-notifications.o cuda-packet-manager.o cuda-tdep-server.o cuda-utils.o libcudbg.o libcudbgipc.o linux-cuda-low.o"
+			srv_tgtobj="linux-low.o linux-arm-low.o ${cuda_tgtobj}"
 			srv_xmlfiles="arm-with-iwmmxt.xml"
 			srv_xmlfiles="${srv_xmlfiles} arm-with-vfpv2.xml"
 			srv_xmlfiles="${srv_xmlfiles} arm-with-vfpv3.xml"
@@ -87,7 +88,8 @@ case "${target}" in
 			    srv_regobj="$srv_regobj $srv_amd64_linux_regobj"
 			    srv_xmlfiles="${srv_xmlfiles} $srv_amd64_linux_xmlfiles"
 			fi
-			srv_tgtobj="linux-low.o linux-x86-low.o i386-low.o i387-fp.o"
+			cuda_tgtobj="cuda-notifications.o cuda-packet-manager.o cuda-tdep-server.o cuda-utils.o libcudbg.o libcudbgipc.o linux-cuda-low.o"
+			srv_tgtobj="linux-low.o linux-x86-low.o i386-low.o i387-fp.o ${cuda_tgtobj}"
 			srv_linux_usrregs=yes
 			srv_linux_regsets=yes
 			srv_linux_thread_db=yes
@@ -231,7 +233,8 @@ case "${target}" in
 			srv_tgtobj="spu-low.o"
 			;;
   x86_64-*-linux*)	srv_regobj="$srv_amd64_linux_regobj $srv_i386_linux_regobj"
-			srv_tgtobj="linux-low.o linux-x86-low.o i386-low.o i387-fp.o"
+                        cuda_tgtobj="cuda-notifications.o cuda-packet-manager.o cuda-tdep-server.o cuda-utils.o libcudbg.o libcudbgipc.o linux-cuda-low.o"
+			srv_tgtobj="linux-low.o linux-x86-low.o i386-low.o i387-fp.o ${cuda_tgtobj}"
 			srv_xmlfiles="$srv_i386_linux_xmlfiles $srv_amd64_linux_xmlfiles"
 			srv_linux_usrregs=yes # This is for i386 progs.
 			srv_linux_regsets=yes

@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -28,13 +28,79 @@
 #include "gdb.h"
 #include "exceptions.h"
 #include "gdbcmd.h"
+#include "source.h"
 #include "symtab.h"
 #include "breakpoint.h"
 #include "cuda-context.h"
 #include "cuda-iterator.h"
 #include "cuda-kernel.h"
 #include "cuda-state.h"
-#include "cuda-tdep.h"
+#include "cuda-convvars.h"
+
+const char *status_string[] =
+  { "Invalid", "Pending", "Active", "Sleeping", "Terminated", "Undetermined" };
+
+/* returned string must be freed */
+static char *
+get_filename (struct symtab *s)
+{
+  char *full_path = NULL;
+  char *real_path = NULL;
+
+  if (!s)
+    return NULL;
+
+  /* in CLI mode, we only display the filename */
+  if (!ui_out_is_mi_like_p (uiout))
+    return xstrdup (s->filename);
+
+  /* in MI mode, we display the canonicalized full path */
+  full_path = symtab_to_fullname (s);
+  if (!full_path)
+    return NULL;
+
+  real_path = gdb_realpath (full_path);
+  return real_path;
+}
+
+typedef struct {
+  /* cuda coordinates filter */
+  cuda_coords_t coords;
+
+  /* cuda breakpoints filter.
+     Set to -1 to disable this filter.
+     Set to 0 to check all cuda breakpoints.
+     Set to a breakpoint number to check that breakpoint. */
+  int bp_number;
+
+  bool bp_number_p;
+} cuda_filters_t;
+
+#define CUDA_INVALID_FILTERS ((cuda_filters_t)              \
+            { CUDA_INVALID_COORDS, 0, false})
+
+#define CUDA_WILDCARD_FILTERS ((cuda_filters_t)             \
+            { CUDA_WILDCARD_COORDS, 0, false })
+
+static void
+cuda_parser_request_to_coords (request_t *request, cuda_coords_t *coords)
+{
+  gdb_assert (request);
+  gdb_assert (coords);
+
+  switch (request->type)
+    {
+    case FILTER_TYPE_DEVICE : coords->dev       = request->value.scalar; break;
+    case FILTER_TYPE_SM     : coords->sm        = request->value.scalar; break;
+    case FILTER_TYPE_WARP   : coords->wp        = request->value.scalar; break;
+    case FILTER_TYPE_LANE   : coords->ln        = request->value.scalar; break;
+    case FILTER_TYPE_KERNEL : coords->kernelId  = request->value.scalar; break;
+    case FILTER_TYPE_GRID   : coords->gridId    = request->value.scalar; break;
+    case FILTER_TYPE_BLOCK  : coords->blockIdx  = request->value.cudim3; break;
+    case FILTER_TYPE_THREAD : coords->threadIdx = request->value.cudim3; break;
+    default                 : error (_("Unexpected request type."));
+    }
+}
 
 static void
 cuda_parser_result_to_coords (cuda_parser_result_t *result, cuda_coords_t *coords)
@@ -46,36 +112,44 @@ cuda_parser_result_to_coords (cuda_parser_result_t *result, cuda_coords_t *coord
   gdb_assert (coords);
 
   for (i = 0, request = result->requests; i < result->num_requests; ++i, ++request)
-    switch (request->type)
-      {
-      case COORD_TYPE_DEVICE : coords->dev = request->value.scalar; break;
-      case COORD_TYPE_SM     : coords->sm = request->value.scalar; break;
-      case COORD_TYPE_WARP   : coords->wp = request->value.scalar; break;
-      case COORD_TYPE_LANE   : coords->ln = request->value.scalar; break;
-      case COORD_TYPE_KERNEL : coords->kernelId = request->value.scalar; break;
-      case COORD_TYPE_GRID   : coords->gridId = request->value.scalar; break;
-      case COORD_TYPE_BLOCK  : coords->blockIdx = request->value.cudim3; break;
-      case COORD_TYPE_THREAD : coords->threadIdx = request->value.cudim3; break;
-      default                : error (_("Unexpected request type."));
-      }
+    cuda_parser_request_to_coords (request, coords);
 }
 
-static cuda_coords_t
-cuda_build_filter (char* filter_string, cuda_coords_t *default_filter)
+static void
+cuda_parser_result_to_filters (cuda_parser_result_t *result, cuda_filters_t *filters)
 {
-  cuda_coords_t filter;
+  uint32_t i;
+  request_t *request;
+
+  gdb_assert (result);
+  gdb_assert (filters);
+
+  for (i = 0, request = result->requests; i < result->num_requests; ++i, ++request)
+    if (request->type == FILTER_TYPE_BREAKPOINT)
+      {
+        filters->bp_number_p = true;
+        filters->bp_number = request->value.scalar;
+      }
+    else
+      cuda_parser_request_to_coords (request, &filters->coords);
+}
+
+static cuda_filters_t
+cuda_build_filter (char* filter_string, cuda_filters_t *default_filter, command_t command)
+{
+  cuda_filters_t filter;
   cuda_parser_result_t *result;
 
   if (filter_string && *filter_string != 0)
     {
       /* parse the filter string */
-      cuda_parser (filter_string, CMD_FILTER, &result, CUDA_WILDCARD);
-      if (result->command != CMD_FILTER)
+      cuda_parser (filter_string, command, &result, CUDA_WILDCARD);
+      if (result->command != command)
         error (_("Incorrect filter: '%s'."), filter_string);
 
       /* build the filter object from the result of the parser */
-      filter = CUDA_WILDCARD_COORDS;
-      cuda_parser_result_to_coords (result, &filter);
+      filter = CUDA_WILDCARD_FILTERS;
+      cuda_parser_result_to_filters (result, &filter);
     }
   else if (default_filter)
     {
@@ -85,14 +159,14 @@ cuda_build_filter (char* filter_string, cuda_coords_t *default_filter)
   else
     {
       /* No filter means anything is acceptable */
-      filter = CUDA_WILDCARD_COORDS;
+      filter = CUDA_WILDCARD_FILTERS;
     }
 
   /* Evaluate the CUDA_CURRENT tokens */
-  cuda_coords_evaluate_current (&filter, false);
+  cuda_coords_evaluate_current (&filter.coords, false);
 
   /* sanity check */
-  cuda_coords_check_fully_defined (&filter, false, false, true);
+  cuda_coords_check_fully_defined (&filter.coords, false, false, true);
 
   return filter;
 }
@@ -114,7 +188,8 @@ cuda_info_devices (char *filter_string, cuda_info_device_t **devices, uint32_t *
 {
   uint32_t num_elements;
   cuda_iterator iter;
-  cuda_coords_t default_filter, c, filter;
+  cuda_filters_t default_filter, filter;
+  cuda_coords_t c;
   cuda_info_device_t *d;
 
   /* sanity checks */
@@ -122,11 +197,11 @@ cuda_info_devices (char *filter_string, cuda_info_device_t **devices, uint32_t *
   gdb_assert (num_devices);
 
   /* get the filter */
-  default_filter = CUDA_WILDCARD_COORDS;
-  filter = cuda_build_filter (filter_string, &default_filter);
+  default_filter = CUDA_WILDCARD_FILTERS;
+  filter = cuda_build_filter (filter_string, &default_filter, CMD_FILTER);
 
   /* get the list of devices */
-  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_DEVICES, &filter, CUDA_SELECT_ALL);
+  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_DEVICES, &filter.coords, CUDA_SELECT_ALL);
   num_elements = cuda_iterator_get_size (iter);
   *devices = xmalloc (num_elements * sizeof (**devices));
   *num_devices = 0;
@@ -255,7 +330,8 @@ cuda_info_sms (char *filter_string, cuda_info_sm_t **sms, uint32_t *num_sms)
 {
   uint32_t num_elements;
   cuda_iterator iter;
-  cuda_coords_t default_filter, c, filter;
+  cuda_filters_t default_filter, filter;
+  cuda_coords_t c;
   cuda_info_sm_t *s;
 
   /* sanity checks */
@@ -263,12 +339,12 @@ cuda_info_sms (char *filter_string, cuda_info_sm_t **sms, uint32_t *num_sms)
   gdb_assert (num_sms);
 
   /* set the filter */
-  default_filter = CUDA_WILDCARD_COORDS;
-  default_filter.dev = CUDA_CURRENT;
-  filter = cuda_build_filter (filter_string, &default_filter);
+  default_filter = CUDA_WILDCARD_FILTERS;
+  default_filter.coords.dev = CUDA_CURRENT;
+  filter = cuda_build_filter (filter_string, &default_filter, CMD_FILTER);
 
   /* get the list of sms */
-  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_SMS, &filter, CUDA_SELECT_ALL);
+  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_SMS, &filter.coords, CUDA_SELECT_ALL);
   num_elements = cuda_iterator_get_size (iter);
   *sms = xmalloc (num_elements * sizeof (**sms));
   *num_sms = 0;
@@ -375,7 +451,8 @@ cuda_info_warps (char *filter_string, cuda_info_warp_t **warps, uint32_t *num_wa
 {
   uint32_t num_elements;
   cuda_iterator iter;
-  cuda_coords_t default_filter, c, filter;
+  cuda_filters_t default_filter, filter;
+  cuda_coords_t c;
   cuda_info_warp_t *w;
   uint64_t active_physical_pc;
   uint32_t kernel_id, active_lanes_mask, divergent_lanes_mask;
@@ -387,13 +464,13 @@ cuda_info_warps (char *filter_string, cuda_info_warp_t **warps, uint32_t *num_wa
   gdb_assert (num_warps);
 
   /* set the filter */
-  default_filter = CUDA_WILDCARD_COORDS;
-  default_filter.dev = CUDA_CURRENT;
-  default_filter.sm  = CUDA_CURRENT;
-  filter = cuda_build_filter (filter_string, &default_filter);
+  default_filter = CUDA_WILDCARD_FILTERS;
+  default_filter.coords.dev = CUDA_CURRENT;
+  default_filter.coords.sm  = CUDA_CURRENT;
+  filter = cuda_build_filter (filter_string, &default_filter, CMD_FILTER);
 
   /* get the list of sms */
-  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_WARPS, &filter, CUDA_SELECT_ALL);
+  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_WARPS, &filter.coords, CUDA_SELECT_ALL);
   num_elements = cuda_iterator_get_size (iter);
   *warps = xmalloc (num_elements * sizeof (**warps));
   *num_warps = 0;
@@ -547,7 +624,8 @@ cuda_info_lanes (char *filter_string, cuda_info_lane_t **lanes, uint32_t *num_la
   CuDim3 threadIdx;
   uint32_t num_elements;
   cuda_iterator iter;
-  cuda_coords_t default_filter, c, filter;
+  cuda_filters_t default_filter, filter;
+  cuda_coords_t c;
   cuda_info_lane_t *l;
   uint64_t physical_pc;
   bool active;
@@ -557,14 +635,14 @@ cuda_info_lanes (char *filter_string, cuda_info_lane_t **lanes, uint32_t *num_la
   gdb_assert (num_lanes);
 
   /* set the filter */
-  default_filter = CUDA_WILDCARD_COORDS;
-  default_filter.dev = CUDA_CURRENT;
-  default_filter.sm  = CUDA_CURRENT;
-  default_filter.wp  = CUDA_CURRENT;
-  filter = cuda_build_filter (filter_string, &default_filter);
+  default_filter = CUDA_WILDCARD_FILTERS;
+  default_filter.coords.dev = CUDA_CURRENT;
+  default_filter.coords.sm  = CUDA_CURRENT;
+  default_filter.coords.wp  = CUDA_CURRENT;
+  filter = cuda_build_filter (filter_string, &default_filter, CMD_FILTER);
 
   /* get the list of lanes */
-  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_LANES, &filter, CUDA_SELECT_ALL);
+  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_LANES, &filter.coords, CUDA_SELECT_ALL);
   num_elements = cuda_iterator_get_size (iter);
   *lanes = xmalloc (num_elements * sizeof (**lanes));
   *num_lanes = 0;
@@ -686,95 +764,78 @@ info_cuda_lanes_command (char *arg)
   cuda_info_lanes_destroy (lanes);
 }
 
-static void
-info_cuda_kernels_print_frame_args (kernel_t kernel)
-{
-  cuda_coords_t *coords, requested, candidates[CK_MAX];
-  struct frame_info *prev_frame, *frame;
-
-  /* Find an active lane for the kernel */
-  requested = CUDA_WILDCARD_COORDS;
-  requested.kernelId = kernel_get_id (kernel);
-  cuda_coords_find_valid (requested, candidates, CUDA_SELECT_VALID);
-  coords = &candidates[CK_EXACT_LOGICAL];
-  if (!cuda_coords_equal (&requested, coords))
-    return;
-
-  /* Switch focus and ELF image to that lane/kernel, temporarily */
-  kernel_load_elf_images (kernel);
-  switch_to_cuda_thread (coords);
-
-  /* Find the outermost frame */
-  frame = get_current_frame ();
-  while ((prev_frame = get_prev_frame (frame)))
-    frame = prev_frame;
-
-  /* Print the arguments */
-  print_args_frame (frame);
-}
-
 typedef struct {
   bool           current;
   kernel_t       kernel;
   uint32_t       kernel_id;
   uint32_t       device;
-  uint32_t       grid_id;
+  uint64_t       grid_id;
+  char           parent[32];
   uint32_t       sms_mask;
+  const char *   status;
   char           grid_dim[32];
   char           block_dim[32];
-  const char*    name;
+  char          *invocation;
 } cuda_info_kernel_t;
 
 static void
 cuda_info_kernels_build (char *filter_string, cuda_info_kernel_t **kernels, uint32_t *num_kernels)
 {
-  uint32_t num_elements;
-  cuda_iterator iter;
-  kernel_t kernel;
-  cuda_coords_t default_filter, c, filter;
+  kernel_t kernel, parent_kernel;
   cuda_info_kernel_t *k;
   CuDim3 grid_dim;
   CuDim3 block_dim;
+  const char *args;
+  const char *name;
+  int len;
 
   /* sanity checks */
   gdb_assert (kernels);
   gdb_assert (num_kernels);
 
-  /* get the filter */
-  default_filter = CUDA_WILDCARD_COORDS;
-  filter = cuda_build_filter (filter_string, &default_filter);
-
-  /* get the list of kernels */
-  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_KERNELS, &filter, CUDA_SELECT_VALID);
-  num_elements = cuda_iterator_get_size (iter);
-  *kernels = xmalloc (num_elements * sizeof (**kernels));
-  *num_kernels = 0;
+  /* build the list of kernels */
+  *num_kernels = cuda_system_get_num_present_kernels ();
+  *kernels = xmalloc (*num_kernels * sizeof (**kernels));
 
   /* compile the needed info for each kernel */
-  for (cuda_iterator_start (iter), k = *kernels;
-       !cuda_iterator_end (iter);
-       cuda_iterator_next (iter), ++k)
+  k = *kernels;
+  for (kernel = kernels_get_first_kernel (); kernel; kernel = kernels_get_next_kernel (kernel))
     {
-      c  = cuda_iterator_get_current (iter);
-      kernel = device_find_kernel_by_grid_id (c.dev, c.gridId);
-
-      k->kernel      = kernel;
-      k->current     = cuda_coords_is_current (&c);
-      k->kernel_id   = kernel_get_id (kernel);
-      k->name        = kernel_get_name (kernel);
-      k->device      = c.dev;
-      k->grid_id     = c.gridId;
-      k->sms_mask    = kernel_compute_sms_mask (kernel);
+      if (!kernel_is_present (kernel))
+        continue;
 
       grid_dim = kernel_get_grid_dim (kernel);
-      snprintf(k->grid_dim, sizeof (k->grid_dim), "(%u,%u,%u)", grid_dim.x, grid_dim.y, grid_dim.z);
       block_dim = kernel_get_block_dim (kernel);
-      snprintf(k->block_dim, sizeof (k->block_dim), "(%u,%u,%u)", block_dim.x, block_dim.y, block_dim.z);
+      parent_kernel = kernel_get_parent (kernel);
+      name = kernel_get_name (kernel);
+      args = kernel_get_args (kernel);
 
-      ++*num_kernels;
+      if (!args)
+        args = "n/a";
+
+      k->kernel     = kernel;
+      k->current    = kernel == cuda_current_kernel ();
+      k->kernel_id  = kernel_get_id (kernel);
+      k->device     = kernel_get_dev_id (kernel);
+      k->grid_id    = kernel_get_grid_id (kernel);
+      k->sms_mask   = kernel_compute_sms_mask (kernel);
+      k->status     = status_string[kernel_get_status (kernel)];
+
+      if (parent_kernel)
+        snprintf (k->parent, sizeof (k->parent), "%"PRIu64, kernel_get_id (parent_kernel));
+      else
+        snprintf (k->parent, sizeof (k->parent), "-");
+      snprintf(k->grid_dim, sizeof (k->grid_dim), "(%u,%u,%u)",
+               grid_dim.x, grid_dim.y, grid_dim.z);
+      snprintf(k->block_dim, sizeof (k->block_dim), "(%u,%u,%u)",
+               block_dim.x, block_dim.y, block_dim.z);
+
+      len = strlen (name) + 2 + strlen (args) + 1;
+      k->invocation = xmalloc (len);
+      snprintf (k->invocation, len, "%s(%s)", name, args);
+
+      ++k;
     }
-
-  cuda_iterator_destroy (iter);
 }
 
 static void
@@ -789,18 +850,19 @@ info_cuda_kernels_command (char *arg)
   cuda_info_kernel_t *kernels, *k;
   uint32_t i, num_kernels;
   struct cleanup *table_chain, *row_chain;
-  struct { uint32_t current, kernel, device, grid, sms_mask, grid_dim, block_dim, name, args; } width;
+  struct { uint32_t current, kernel, device, grid, parent, status, sms_mask, grid_dim, block_dim, invocation; } width;
 
   /* column headers */
   const char *header_current   = " ";
   const char *header_kernel    = "Kernel";
   const char *header_device    = "Dev";
+  const char *header_parent    = "Parent";
   const char *header_grid      = "Grid";
+  const char *header_status    = "Status";
   const char *header_sms_mask  = "SMs Mask";
   const char *header_grid_dim  = "GridDim";
   const char *header_block_dim = "BlockDim";
-  const char *header_name      = "Name";
-  const char *header_args      = "Args";
+  const char *header_invocation= "Invocation";
 
   /* get the information */
   cuda_info_kernels_build (arg, &kernels, &num_kernels);
@@ -817,46 +879,51 @@ info_cuda_kernels_command (char *arg)
   width.kernel    = strlen (header_kernel);
   width.device    = strlen (header_device);
   width.grid      = strlen (header_grid);
+  width.status    = strlen (header_status);
+  width.parent    = strlen (header_parent);
   width.sms_mask  = strlen (header_sms_mask);
   width.grid_dim  = strlen (header_grid_dim);
   width.block_dim = strlen (header_block_dim);
-  width.name      = strlen (header_name);
-  width.args      = strlen (header_args);
+  width.invocation= strlen (header_invocation);
 
   for (k = kernels, i = 0; i < num_kernels; ++i, ++k)
     {
+      width.status    = max (width.status, strlen (k->status));
+      width.parent    = max (width.parent, strlen (k->parent));
       width.sms_mask  = max (width.sms_mask, 10);
       width.grid_dim  = max (width.grid_dim,  strlen (k->grid_dim));
       width.block_dim = max (width.block_dim, strlen (k->block_dim));
-      width.name      = max (width.name, strlen (k->name));
+      width.invocation= max (width.invocation, strlen (header_invocation));
     }
 
   /* print table header */
-  table_chain = make_cleanup_ui_out_table_begin_end (uiout, 9, num_kernels, "InfoCudaKernelsTable");
+  table_chain = make_cleanup_ui_out_table_begin_end (uiout, 10, num_kernels, "InfoCudaKernelsTable");
   ui_out_table_header (uiout, width.current  , ui_right, "current"  , header_current);
   ui_out_table_header (uiout, width.kernel   , ui_right, "kernel"   , header_kernel);
+  ui_out_table_header (uiout, width.parent   , ui_right, "parent"   , header_parent);
   ui_out_table_header (uiout, width.device   , ui_right, "device"   , header_device);
   ui_out_table_header (uiout, width.grid     , ui_right, "grid"     , header_grid);
+  ui_out_table_header (uiout, width.status   , ui_right, "status"   , header_status);
   ui_out_table_header (uiout, width.sms_mask , ui_right, "sms_mask" , header_sms_mask);
   ui_out_table_header (uiout, width.grid_dim , ui_right, "gridDim"  , header_grid_dim);
   ui_out_table_header (uiout, width.block_dim, ui_right, "blockDim" , header_block_dim);
-  ui_out_table_header (uiout, width.name     , ui_right, "name"     , header_name);
-  ui_out_table_header (uiout, width.args     , ui_left , "arguments", header_args);
+  ui_out_table_header (uiout, width.invocation,ui_left , "invocation", header_invocation);
   ui_out_table_body (uiout);
 
   /* print table rows */
   for (k = kernels, i = 0; i < num_kernels; ++i, ++k)
     {
       row_chain = make_cleanup_ui_out_tuple_begin_end (uiout, "InfoCudaKernelsRow");
-      ui_out_field_string (uiout, "current"   , k->current ? "*" : " ");
-      ui_out_field_int    (uiout, "kernel"    , k->kernel_id);
-      ui_out_field_int    (uiout, "device"    , k->device);
-      ui_out_field_int    (uiout, "grid"      , k->grid_id);
-      ui_out_field_fmt    (uiout, "sms_mask"  , "0x%08x", k->sms_mask);
-      ui_out_field_string (uiout, "gridDim"   , k->grid_dim);
-      ui_out_field_string (uiout, "blockDim"  , k->block_dim);
-      ui_out_field_string (uiout, "name"      , k->name);
-      info_cuda_kernels_print_frame_args (k->kernel);
+      ui_out_field_string (uiout, "current" , k->current ? "*" : " ");
+      ui_out_field_int    (uiout, "kernel"  , k->kernel_id);
+      ui_out_field_string (uiout, "parent"  , k->parent);
+      ui_out_field_int    (uiout, "device"  , k->device);
+      ui_out_field_int    (uiout, "grid"    , k->grid_id);
+      ui_out_field_string (uiout, "status"  , k->status);
+      ui_out_field_fmt    (uiout, "sms_mask", "0x%08x", k->sms_mask);
+      ui_out_field_string (uiout, "gridDim" , k->grid_dim);
+      ui_out_field_string (uiout, "blockDim", k->block_dim);
+      ui_out_field_string (uiout, "invocation", k->invocation);
       ui_out_text         (uiout, "\n");
       do_cleanups (row_chain);
     }
@@ -874,7 +941,7 @@ typedef struct {
   uint64_t       kernel_id;
   CuDim3         start_block_idx;
   CuDim3         end_block_idx;
-  const char    *kernel_name;
+  char           invocation[1024];
   const char    *kernel_dim;
   char           start_block_idx_string[32];
   char           end_block_idx_string[32];
@@ -888,7 +955,8 @@ cuda_info_blocks_build (char *filter_string, cuda_info_block_t **blocks, uint32_
 {
   uint32_t i, num_elements;
   cuda_iterator iter;
-  cuda_coords_t default_filter, filter, c, expected;
+  cuda_filters_t default_filter, filter;
+  cuda_coords_t c, expected;
   CuDim3 prev_block_idx = { CUDA_INVALID, CUDA_INVALID, CUDA_INVALID };
   kernel_t kernel;
   cuda_info_block_t *b;
@@ -899,12 +967,12 @@ cuda_info_blocks_build (char *filter_string, cuda_info_block_t **blocks, uint32_
   gdb_assert (num_blocks);
 
   /* get the filter */
-  default_filter = CUDA_WILDCARD_COORDS;
-  default_filter.kernelId = CUDA_CURRENT;
-  filter = cuda_build_filter (filter_string, &default_filter);
+  default_filter = CUDA_WILDCARD_FILTERS;
+  default_filter.coords.kernelId = CUDA_CURRENT;
+  filter = cuda_build_filter (filter_string, &default_filter, CMD_FILTER);
 
   /* get the list of blocks */
-  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_BLOCKS, &filter, CUDA_SELECT_VALID);
+  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_BLOCKS, &filter.coords, CUDA_SELECT_VALID);
   num_elements = cuda_iterator_get_size (iter);
   *blocks = xmalloc (num_elements * sizeof (**blocks));
   *num_blocks = 0;
@@ -915,7 +983,7 @@ cuda_info_blocks_build (char *filter_string, cuda_info_block_t **blocks, uint32_
        cuda_iterator_next (iter),  first_entry = false, ++i)
     {
       c  = cuda_iterator_get_current (iter);
-      kernel = device_find_kernel_by_grid_id (c.dev, c.gridId);
+      kernel = kernels_find_kernel_by_grid_id (c.dev, c.gridId);
 
       /* data for the current iteration */
       break_of_contiguity = cuda_coords_compare_logical (&expected, &c) != 0;
@@ -938,7 +1006,6 @@ cuda_info_blocks_build (char *filter_string, cuda_info_block_t **blocks, uint32_
           b->start_block_idx = c.blockIdx;
           b->count           = 0;
           b->kernel_id       = kernel_get_id (kernel);
-          b->kernel_name     = kernel_get_name (kernel);
           b->kernel_dim      = kernel_get_dimensions (kernel);
           b->device          = c.dev;
           b->sm              = c.sm;
@@ -1155,14 +1222,13 @@ typedef struct {
   kernel_t       kernel;
   uint64_t       kernel_id;
   uint64_t       pc;
-  char           filename[256];
+  char          *filename;
   uint32_t       line;
   CuDim3         start_block_idx;
   CuDim3         start_thread_idx;
   CuDim3         end_block_idx;
   CuDim3         end_thread_idx;
   uint32_t       count;
-  const char    *kernel_name;
   const char    *kernel_dim;
   char           start_block_idx_string[32];
   char           start_thread_idx_string[32];
@@ -1177,22 +1243,24 @@ typedef struct {
 static void
 cuda_info_threads_build (char *filter_string, cuda_info_thread_t **threads, uint32_t *num_threads)
 {
+  struct expression *breakpoint_condition = NULL;
   uint32_t i, num_elements;
   uint64_t pc = 0, prev_pc = 0;
   cuda_iterator iter;
-  cuda_coords_t default_filter, filter, c, expected;
+  cuda_filters_t default_filter, filter;
+  cuda_coords_t  c, expected;
   CuDim3 prev_block_idx = { CUDA_INVALID, CUDA_INVALID, CUDA_INVALID };
   CuDim3 prev_thread_idx = { CUDA_INVALID, CUDA_INVALID, CUDA_INVALID };
   kernel_t kernel, prev_kernel = 0;
   cuda_info_thread_t *t;
-  struct symtab_and_line sal;
-  struct symtab_and_line prev_sal;
+  struct symtab_and_line sal, prev_sal;
   bool first_entry, break_of_contiguity;
   struct value_print_options opts;
 
   /* sanity checks */
   gdb_assert (threads);
   gdb_assert (num_threads);
+  *num_threads = 0;
 
   /* make valgrind not complain */
   expected = CUDA_INVALID_COORDS;
@@ -1203,26 +1271,29 @@ cuda_info_threads_build (char *filter_string, cuda_info_thread_t **threads, uint
   get_user_print_options (&opts);
 
   /* get the filter */
-  default_filter = CUDA_WILDCARD_COORDS;
-  default_filter.kernelId = CUDA_CURRENT;
-  filter = cuda_build_filter (filter_string, &default_filter);
+  default_filter = CUDA_WILDCARD_FILTERS;
+  default_filter.coords.kernelId = CUDA_CURRENT;
+  filter = cuda_build_filter (filter_string, &default_filter, CMD_FILTER);
 
   /* get the list of threads */
-  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter, CUDA_SELECT_VALID);
+  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter.coords, CUDA_SELECT_VALID);
   num_elements = cuda_iterator_get_size (iter);
   *threads = xmalloc (num_elements * sizeof (**threads));
-  *num_threads = 0;
 
   /* compile the needed info for each block */
-  for (cuda_iterator_start (iter), first_entry = true, i = 0, t = *threads;
+  for (cuda_iterator_start (iter), first_entry = true, i = 0, t = *threads, num_elements = 0;
        !cuda_iterator_end (iter);
-       cuda_iterator_next (iter),  first_entry = false, ++i)
+       cuda_iterator_next (iter), ++i)
     {
       c  = cuda_iterator_get_current (iter);
-      kernel = device_find_kernel_by_grid_id (c.dev, c.gridId);
+      kernel = kernels_find_kernel_by_grid_id (c.dev, c.gridId);
       if (kernel != prev_kernel)
         kernel_load_elf_images (kernel);
       pc = lane_get_virtual_pc (c.dev, c.sm, c.wp, c.ln);
+
+      if (filter.bp_number_p  && !cuda_eval_thread_at_breakpoint (pc, &c, filter.bp_number))
+        continue;
+
       if (pc != prev_pc) /* optimization */
         sal = find_pc_line (pc, 0);
 
@@ -1256,14 +1327,13 @@ cuda_info_threads_build (char *filter_string, cuda_info_thread_t **threads, uint
           t->start_thread_idx = c.threadIdx;
           t->count            = 0;
           t->kernel_id        = kernel_get_id (kernel);
-          t->kernel_name      = kernel_get_name (kernel);
           t->kernel_dim       = kernel_get_dimensions (kernel);
           t->device           = c.dev;
           t->sm               = c.sm;
           t->wp               = c.wp;
           t->ln               = c.ln;
-          snprintf (t->filename, sizeof (t->filename),
-                    "%s", sal.symtab ? sal.symtab->filename : "n/a");
+          t->filename         = get_filename (sal.symtab);
+
           snprintf (t->start_block_idx_string, sizeof (t->start_block_idx_string),
                     "(%u,%u,%u)", c.blockIdx.x, c.blockIdx.y, c.blockIdx.z);
           snprintf (t->start_thread_idx_string, sizeof (t->start_thread_idx_string),
@@ -1273,6 +1343,7 @@ cuda_info_threads_build (char *filter_string, cuda_info_thread_t **threads, uint
       /* update the current range */
       t->current |= cuda_coords_is_current (&c);
       ++t->count;
+      first_entry = false;
 
       /* data for the next iteration */
       prev_kernel = kernel;
@@ -1286,17 +1357,18 @@ cuda_info_threads_build (char *filter_string, cuda_info_thread_t **threads, uint
       expected.threadIdx = c.threadIdx;
       cuda_coords_increment_thread (&expected, kernel_get_grid_dim (kernel),
                                     kernel_get_block_dim (kernel));
+      ++num_elements;
     }
 
   /* close the last range */
   if (num_elements > 0)
     {
-      t->end_block_idx  = c.blockIdx;
-      t->end_thread_idx = c.threadIdx;
+      t->end_block_idx  = prev_block_idx;
+      t->end_thread_idx = prev_thread_idx;
       snprintf (t->end_block_idx_string, sizeof (t->end_block_idx_string),
-                "(%u,%u,%u)", c.blockIdx.x, c.blockIdx.y, c.blockIdx.z);
+                "(%u,%u,%u)", prev_block_idx.x, prev_block_idx.y, prev_block_idx.z);
       snprintf (t->end_thread_idx_string, sizeof (t->end_thread_idx_string),
-                "(%u,%u,%u)", c.threadIdx.x, c.threadIdx.y, c.threadIdx.z);
+                "(%u,%u,%u)", prev_thread_idx.x, prev_thread_idx.y, prev_thread_idx.z);
       ++*num_threads;
     }
 
@@ -1304,8 +1376,14 @@ cuda_info_threads_build (char *filter_string, cuda_info_thread_t **threads, uint
 }
 
 static void
-cuda_info_threads_destroy (cuda_info_thread_t *threads)
+cuda_info_threads_destroy (cuda_info_thread_t *threads, uint32_t num_threads)
 {
+  uint32_t i = 0;
+  cuda_info_thread_t *t = NULL;
+
+  for (t = threads, i = 0; i < num_threads; ++i, ++t)
+    xfree (t->filename);
+
   xfree (threads);
 }
 
@@ -1359,7 +1437,7 @@ info_cuda_threads_print_uncoalesced (cuda_info_thread_t *threads, uint32_t num_t
       width.pc         = max (width.pc, 18);
       width.block_idx  = max (width.block_idx, strlen (b->start_block_idx_string));
       width.thread_idx = max (width.thread_idx, strlen (b->start_thread_idx_string));
-      width.filename   = max (width.filename, strlen (b->filename));
+      width.filename   = max (width.filename, b->filename ? strlen (b->filename): 0);
       width.line       = max (width.line, 5);
     }
 
@@ -1401,7 +1479,7 @@ info_cuda_threads_print_uncoalesced (cuda_info_thread_t *threads, uint32_t num_t
       ui_out_field_int    (uiout, "sm"        , b->sm);
       ui_out_field_int    (uiout, "warp"      , b->wp);
       ui_out_field_int    (uiout, "lane"      , b->ln);
-      ui_out_field_string (uiout, "filename"  , b->filename);
+      ui_out_field_string (uiout, "filename"  , b->filename ? b->filename : "n/a");
       ui_out_field_int    (uiout, "line"      , b->line);
       ui_out_text         (uiout, "\n");
       do_cleanups (row_chain);
@@ -1461,7 +1539,7 @@ info_cuda_threads_print_coalesced (cuda_info_thread_t *threads, uint32_t num_thr
       width.start_thread_idx = max (width.start_thread_idx, strlen (b->start_thread_idx_string));
       width.end_block_idx    = max (width.end_block_idx, strlen (b->end_block_idx_string));
       width.end_thread_idx   = max (width.end_thread_idx, strlen (b->end_thread_idx_string));
-      width.filename         = max (width.filename, strlen (b->filename));
+      width.filename         = max (width.filename, b->filename ? strlen (b->filename) : 0);
       width.line             = max (width.line, 5);
     }
 
@@ -1501,7 +1579,7 @@ info_cuda_threads_print_coalesced (cuda_info_thread_t *threads, uint32_t num_thr
       ui_out_field_string (uiout, "to_threadIdx"  , b->end_thread_idx_string);
       ui_out_field_int    (uiout, "count"         , b->count);
       ui_out_field_fmt    (uiout, "virtual_pc"    , "0x%016"PRIx64, b->pc);
-      ui_out_field_string (uiout, "filename"      , b->filename);
+      ui_out_field_string (uiout, "filename"      , b->filename ? b->filename : "n/a");
       ui_out_field_int    (uiout, "line"          , b->line);
       ui_out_text         (uiout, "\n");
       do_cleanups (row_chain);
@@ -1511,12 +1589,12 @@ info_cuda_threads_print_coalesced (cuda_info_thread_t *threads, uint32_t num_thr
 }
 
 void
-info_cuda_threads_command (char *filter_string)
+info_cuda_threads_command (char *arg)
 {
   cuda_info_thread_t *threads;
   uint32_t num_threads;
 
-  cuda_info_threads_build (filter_string, &threads, &num_threads);
+  cuda_info_threads_build (arg, &threads, &num_threads);
 
   if (cuda_options_coalescing ())
     info_cuda_threads_print_coalesced (threads, num_threads);
@@ -1525,25 +1603,493 @@ info_cuda_threads_command (char *filter_string)
 
   gdb_flush (gdb_stdout);
 
-  cuda_info_threads_destroy (threads);
+  cuda_info_threads_destroy (threads, num_threads);
+}
+
+typedef struct {
+  bool           current;
+  kernel_t       kernel;
+  uint32_t       level;
+  uint32_t       kernel_id;
+  uint32_t       device;
+  uint64_t       grid_id;
+  const char*    status;
+  char           grid_dim[32];
+  char           block_dim[32];
+  char          *invocation;
+} cuda_info_launch_trace_t;
+
+static void
+cuda_info_launch_trace_build (char *filter_string,
+                               cuda_info_launch_trace_t **kernels,
+                               uint32_t *num_kernels)
+{
+  uint32_t num_elements;
+  kernel_t kernel = NULL;
+  cuda_info_launch_trace_t *k = NULL;
+  cuda_filters_t default_filter, filter;
+  cuda_coords_t c;
+  CuDim3 grid_dim;
+  CuDim3 block_dim;
+  uint32_t num_kernel_seeds = 0;
+  uint32_t i = 0;
+  const char *args;
+  const char *name;
+  int len;
+
+  /* sanity checks */
+  gdb_assert (kernels);
+  gdb_assert (num_kernels);
+
+  /* set the filter */
+  default_filter = CUDA_WILDCARD_FILTERS;
+  default_filter.coords.kernelId = CUDA_CURRENT;
+  filter = cuda_build_filter (filter_string, &default_filter, CMD_FILTER_KERNEL);
+
+  /* find the kernel to start the trace from */
+  kernel = kernels_find_kernel_by_kernel_id (filter.coords.kernelId);
+  if (!kernel)
+    error ("Incorrect kernel specified or the focus is not set on a kernel");
+
+  /* allocate the trace of kernels */
+  *num_kernels = kernel_get_depth (kernel) + 1;
+  *kernels = xmalloc (*num_kernels * sizeof (**kernels));
+
+  /* populate the launch trace */
+  for (i = 0; i < *num_kernels; ++i, kernel = kernel_get_parent (kernel))
+    {
+      grid_dim = kernel_get_grid_dim (kernel);
+      block_dim = kernel_get_block_dim (kernel);
+      name = kernel_get_name (kernel);
+      args = kernel_get_args (kernel);
+
+      if (!args)
+        args = "n/a";
+
+      k = &(*kernels)[i];
+      k->current        = kernel == cuda_current_kernel ();
+      k->kernel         = kernel;
+      k->level          = i;
+      k->kernel_id      = kernel_get_id (kernel);
+      k->device         = kernel_get_dev_id (kernel);
+      k->grid_id        = kernel_get_grid_id (kernel);
+      k->status         = status_string[kernel_get_status (kernel)];
+
+      snprintf (k->grid_dim, sizeof (k->grid_dim),
+                "(%u,%u,%u)", grid_dim.x, grid_dim.y, grid_dim.z);
+      snprintf (k->block_dim, sizeof (k->block_dim),
+                "(%u,%u,%u)", block_dim.x, block_dim.y, block_dim.z);
+
+      len = strlen (name) + 2 + strlen (args) + 1;
+      k->invocation = xmalloc (len);
+      snprintf (k->invocation, len, "%s(%s)", name, args);
+    }
 }
 
 static void
-cleanup_info_cuda_command (void* dummy)
+cuda_info_launch_trace_destroy (cuda_info_launch_trace_t *kernels)
+{
+  xfree (kernels);
+}
+
+static void
+cuda_info_launch_trace_print (cuda_info_launch_trace_t *kernels, uint32_t num_kernels)
+{
+  struct cleanup *table_chain, *row_chain;
+  struct { uint32_t current, level, kernel, device, grid, status, invocation, grid_dim, block_dim; } width;
+  uint32_t i = 0;
+  cuda_info_launch_trace_t *k = NULL;
+
+  /* column headers */
+  const char *header_current     = " ";
+  const char *header_level       = "Lvl";
+  const char *header_kernel      = "Kernel";
+  const char *header_device      = "Dev";
+  const char *header_grid        = "Grid";
+  const char *header_status      = "Status";
+  const char *header_grid_dim    = "GridDim";
+  const char *header_block_dim   = "BlockDim";
+  const char *header_invocation  = "Invocation";
+
+  /* column widths */
+  width.current     = strlen (header_current);
+  width.level       = strlen (header_level);
+  width.kernel      = strlen (header_kernel);
+  width.device      = strlen (header_device);
+  width.grid        = strlen (header_grid);
+  width.status      = strlen (header_status);
+  width.invocation  = strlen (header_invocation);
+  width.grid_dim    = strlen (header_grid_dim);
+  width.block_dim   = strlen (header_block_dim);
+
+  for (k = kernels, i = 0; i < num_kernels; ++i, ++k)
+    {
+      width.status      = max (width.status,      strlen (k->status));
+      width.invocation  = max (width.invocation,  strlen (k->invocation));
+      width.grid_dim    = max (width.grid_dim,    strlen (k->grid_dim));
+      width.block_dim   = max (width.block_dim,   strlen (k->block_dim));
+    }
+
+  /* print table header */
+  table_chain = make_cleanup_ui_out_table_begin_end (uiout, 9, num_kernels, "InfoCudaLaunchTraceTable");
+  ui_out_table_header (uiout, width.current    , ui_right, "current"   , header_current);
+  ui_out_table_header (uiout, width.level      , ui_left,  "level"     , header_level);
+  ui_out_table_header (uiout, width.kernel     , ui_right, "kernel"    , header_kernel);
+  ui_out_table_header (uiout, width.device     , ui_right, "device"    , header_device);
+  ui_out_table_header (uiout, width.grid       , ui_right, "grid"      , header_grid);
+  ui_out_table_header (uiout, width.status     , ui_right, "status"    , header_status);
+  ui_out_table_header (uiout, width.grid_dim   , ui_right, "gridDim"   , header_grid_dim);
+  ui_out_table_header (uiout, width.block_dim  , ui_right, "blockDim"  , header_block_dim);
+  ui_out_table_header (uiout, width.invocation , ui_left , "invocation", header_invocation);
+  ui_out_table_body (uiout);
+
+  /* print table rows */
+  for (k = kernels, i = 0; i < num_kernels; ++i, ++k)
+    {
+      row_chain = make_cleanup_ui_out_tuple_begin_end (uiout, "InfoCudaLaunchTraceRow");
+      ui_out_field_string (uiout, "current"   , k->current ? "*" : " ");
+      ui_out_text         (uiout, "#");
+      ui_out_field_int    (uiout, "level"     , k->level);
+      ui_out_field_int    (uiout, "kernel"    , k->kernel_id);
+      ui_out_field_int    (uiout, "device"    , k->device);
+      ui_out_field_int    (uiout, "grid"      , k->grid_id);
+      ui_out_field_string (uiout, "status"    , k->status);
+      ui_out_field_string (uiout, "gridDim"   , k->grid_dim);
+      ui_out_field_string (uiout, "blockDim"  , k->block_dim);
+      ui_out_field_string (uiout, "invocation", k->invocation);
+      ui_out_text         (uiout, "\n");
+      do_cleanups (row_chain);
+    }
+
+  do_cleanups (table_chain);
+
+  gdb_flush (gdb_stdout);
+}
+
+void
+info_cuda_launch_trace_command (char *arg)
+{
+  cuda_info_launch_trace_t *kernels = NULL;
+  uint32_t num_kernels = 0;
+
+  cuda_info_launch_trace_build (arg, &kernels, &num_kernels);
+
+  if (!ui_out_is_mi_like_p (uiout) && num_kernels == ~0U)
+    return;
+
+  cuda_info_launch_trace_print (kernels, num_kernels);
+
+  cuda_info_launch_trace_destroy (kernels);
+}
+
+typedef struct {
+  bool           current;
+  kernel_t       kernel;
+  uint32_t       kernel_id;
+  uint32_t       device;
+  uint64_t       grid_id;
+  char           grid_dim[32];
+  char           block_dim[32];
+  char          *invocation;
+} cuda_info_launch_children_t;
+
+static void
+cuda_info_launch_children_build (char *filter_string,
+                                 cuda_info_launch_children_t **kernels,
+                                 uint32_t *num_kernels)
+{
+  uint32_t num_elements;
+  kernel_t kernel = NULL, parent_kernel = NULL;
+  cuda_info_launch_children_t *k = NULL;
+  cuda_filters_t default_filter, filter;
+  cuda_coords_t c;
+  CuDim3 grid_dim;
+  CuDim3 block_dim;
+  uint32_t num_kernel_seeds = 0;
+  uint32_t i = 0;
+  const char *args;
+  const char *name;
+  int len;
+
+  /* sanity checks */
+  gdb_assert (kernels);
+  gdb_assert (num_kernels);
+
+  /* set the filter */
+  default_filter = CUDA_WILDCARD_FILTERS;
+  default_filter.coords.kernelId = CUDA_CURRENT;
+  filter = cuda_build_filter (filter_string, &default_filter, CMD_FILTER_KERNEL);
+
+  /* find the kernel to start the trace from */
+  kernel = kernels_find_kernel_by_kernel_id (filter.coords.kernelId);
+  if (!kernel)
+    error ("Incorrect kernel specified or the focus is not set on a kernel");
+
+  /* build the list of children */
+  *num_kernels = kernel_get_num_children (kernel);
+  *kernels = xmalloc (*num_kernels * sizeof (**kernels));
+
+  for (i = 0, kernel = kernel_get_children (kernel); kernel; ++i, kernel = kernel_get_sibling (kernel))
+    {
+      grid_dim = kernel_get_grid_dim (kernel);
+      block_dim = kernel_get_block_dim (kernel);
+      name = kernel_get_name (kernel);
+      args = kernel_get_args (kernel);
+
+      if (!args)
+        args = "n/a";
+
+      k = &(*kernels)[i];
+      k->current        = kernel == cuda_current_kernel ();
+      k->kernel         = kernel;
+      k->kernel_id      = kernel_get_id (kernel);
+      k->device         = kernel_get_dev_id (kernel);
+      k->grid_id        = kernel_get_grid_id (kernel);
+
+      snprintf (k->grid_dim, sizeof (k->grid_dim),
+                "(%u,%u,%u)", grid_dim.x, grid_dim.y, grid_dim.z);
+      snprintf (k->block_dim, sizeof (k->block_dim),
+                "(%u,%u,%u)", block_dim.x, block_dim.y, block_dim.z);
+
+      len = strlen (name) + 2 + strlen (args) + 1;
+      k->invocation = xmalloc (len);
+      snprintf (k->invocation, len, "%s(%s)", name, args);
+    }
+}
+
+static void
+cuda_info_launch_children_destroy (cuda_info_launch_children_t *kernels)
+{
+  xfree (kernels);
+}
+
+static void
+cuda_info_launch_children_print (cuda_info_launch_children_t *kernels, uint32_t num_kernels)
+{
+  struct cleanup *table_chain, *row_chain;
+  struct { uint32_t current, kernel, device, grid, invocation, grid_dim, block_dim; } width;
+  uint32_t i = 0;
+  cuda_info_launch_children_t *k = NULL;
+
+  /* column headers */
+  const char *header_current     = " ";
+  const char *header_kernel      = "Kernel";
+  const char *header_device      = "Dev";
+  const char *header_grid        = "Grid";
+  const char *header_invocation  = "Invocation";
+  const char *header_grid_dim    = "GridDim";
+  const char *header_block_dim   = "BlockDim";
+
+  /* column widths */
+  width.current     = strlen (header_current);
+  width.kernel      = strlen (header_kernel);
+  width.device      = strlen (header_device);
+  width.grid        = strlen (header_grid);
+  width.invocation  = strlen (header_invocation);
+  width.grid_dim    = strlen (header_grid_dim);
+  width.block_dim   = strlen (header_block_dim);
+
+  for (k = kernels, i = 0; i < num_kernels; ++i, ++k)
+    {
+      width.invocation  = max (width.invocation,  strlen (k->invocation));
+      width.grid_dim    = max (width.grid_dim,    strlen (k->grid_dim));
+      width.block_dim   = max (width.block_dim,   strlen (k->block_dim));
+    }
+
+  /* print table header */
+  table_chain = make_cleanup_ui_out_table_begin_end (uiout, 7, num_kernels, "InfoCudaLaunchChildrenTable");
+  ui_out_table_header (uiout, width.current    , ui_right, "current"   , header_current);
+  ui_out_table_header (uiout, width.kernel     , ui_right, "kernel"    , header_kernel);
+  ui_out_table_header (uiout, width.device     , ui_right, "device"    , header_device);
+  ui_out_table_header (uiout, width.grid       , ui_right, "grid"      , header_grid);
+  ui_out_table_header (uiout, width.grid_dim   , ui_right, "gridDim"   , header_grid_dim);
+  ui_out_table_header (uiout, width.block_dim  , ui_right, "blockDim"  , header_block_dim);
+  ui_out_table_header (uiout, width.invocation , ui_left , "invocation", header_invocation);
+  ui_out_table_body (uiout);
+
+  /* print table rows */
+  for (k = kernels, i = 0; i < num_kernels; ++i, ++k)
+    {
+      row_chain = make_cleanup_ui_out_tuple_begin_end (uiout, "InfoCudaLaunchChildrenRow");
+      ui_out_field_string (uiout, "current"   , k->current ? "*" : " ");
+      ui_out_field_int    (uiout, "kernel"    , k->kernel_id);
+      ui_out_field_int    (uiout, "device"    , k->device);
+      ui_out_field_int    (uiout, "grid"      , k->grid_id);
+      ui_out_field_string (uiout, "gridDim"   , k->grid_dim);
+      ui_out_field_string (uiout, "blockDim"  , k->block_dim);
+      ui_out_field_string (uiout, "invocation", k->invocation);
+      ui_out_text         (uiout, "\n");
+      do_cleanups (row_chain);
+    }
+
+  do_cleanups (table_chain);
+
+  gdb_flush (gdb_stdout);
+}
+
+void
+info_cuda_launch_children_command (char *arg)
+{
+  cuda_info_launch_children_t *kernels = NULL;
+  uint32_t num_kernels = 0;
+
+  cuda_info_launch_children_build (arg, &kernels, &num_kernels);
+
+  if (!ui_out_is_mi_like_p (uiout) && num_kernels == ~0U)
+    return;
+
+  cuda_info_launch_children_print (kernels, num_kernels);
+
+  cuda_info_launch_children_destroy (kernels);
+}
+
+typedef struct {
+  bool           current;
+  uint64_t       context_id;
+  uint32_t       device;
+  char           state[32];
+} cuda_info_context_t;
+
+static void
+cuda_info_contexts_build (char *filter_string, cuda_info_context_t **contexts, uint32_t *num_contexts)
+{
+  list_elt_t elt;
+  cuda_info_context_t *c;
+  cuda_filters_t default_filter, filter, invalid_filter;
+  uint32_t num_dev;
+  uint32_t num_elements = 0;
+  uint32_t i;
+
+  /* sanity checks */
+  gdb_assert (contexts);
+  gdb_assert (num_contexts);
+
+  /* get the filter */
+  default_filter = CUDA_WILDCARD_FILTERS;
+  filter = cuda_build_filter (filter_string, &default_filter, CMD_FILTER);
+
+  /* the only allowed filter is 'device' */
+  invalid_filter = CUDA_INVALID_FILTERS;
+  invalid_filter.coords.dev = CUDA_WILDCARD;
+  if (!cuda_coords_equal (&filter.coords, &invalid_filter.coords))
+    error ("Invalid filter. Only 'device' is supported'.");
+
+  num_dev = cuda_system_get_num_devices ();
+  for (i = 0; i < num_dev; i++)
+   if (filter.coords.dev == CUDA_WILDCARD || filter.coords.dev == i)
+     num_elements += contexts_get_list_size (device_get_contexts (i));
+
+  *contexts = xmalloc (num_elements * sizeof (**contexts));
+  c = *contexts;
+
+  /* compile the needed info for each context */
+  for (i = 0; i < num_dev; i++)
+    {
+      contexts_t ctxs;
+      if (filter.coords.dev != CUDA_WILDCARD && filter.coords.dev != i)
+        continue;
+
+      /* find all active contexts of each device */
+      ctxs = device_get_contexts (i);
+      for (elt = ctxs->list; elt; elt = elt->next)
+        {
+           c->current    = elt->context == get_current_context () ? true : false;
+           c->context_id = elt->context->context_id;
+           c->device     = elt->context->dev_id;
+           snprintf (c->state, sizeof (c->state), "%s",
+                     device_is_active_context (i, elt->context) ? "active" : "inactive");
+           ++*num_contexts;
+           ++c;
+        }
+    }
+}
+
+static void
+cuda_info_contexts_destroy (cuda_info_context_t *contexts)
+{
+  xfree (contexts);
+}
+
+void
+info_cuda_contexts_command (char *arg)
+{
+  cuda_info_context_t *contexts, *c;
+  uint32_t i;
+  uint32_t num_contexts = 0;
+  struct cleanup *table_chain, *row_chain;
+  struct { uint32_t current, context, device, state; } width;
+
+  /* column header */
+  const char *header_current         = " ";
+  const char *header_context         = "Context";
+  const char *header_device          = "Dev";
+  const char *header_state           = "State";
+
+  /* get the information */
+  cuda_info_contexts_build (arg, &contexts, &num_contexts);
+  
+  /* output message if the list is empty */
+  if (num_contexts == 0 && !ui_out_is_mi_like_p (uiout))
+    {
+      ui_out_field_string (uiout, NULL, _("No CUDA contexts.\n"));
+      return;
+    }
+
+  /* column widths */
+  width.current   = strlen (header_current);
+  width.context   = strlen (header_context);
+  width.device    = strlen (header_device);
+  width.state     = strlen (header_state);
+
+  width.context = max (width.context, 10);
+  width.state   = max (width.state, strlen ("inactive")); 
+
+  /* print table header */
+  table_chain = make_cleanup_ui_out_table_begin_end (uiout, 4, num_contexts, "InfoCudaContextsTable");
+  ui_out_table_header (uiout, width.current  , ui_right, "current"  , header_current);
+  ui_out_table_header (uiout, width.context  , ui_right, "context"  , header_context);
+  ui_out_table_header (uiout, width.device   , ui_right, "device"   , header_device);
+  ui_out_table_header (uiout, width.state    , ui_right, "state"    , header_state);
+  ui_out_table_body (uiout);
+
+  /* print table rows */
+  for (c = contexts, i = 0; i < num_contexts; ++i, ++c)
+    {
+      row_chain = make_cleanup_ui_out_tuple_begin_end (uiout, "InfoCudaContextsRow");
+      ui_out_field_string (uiout, "current" , c->current ? "*" : " ");
+      ui_out_field_fmt    (uiout, "context" , "0x%08"PRIx64"", c->context_id);
+      ui_out_field_int    (uiout, "device"  , c->device);
+      ui_out_field_string (uiout, "state"   , c->state);
+      ui_out_text         (uiout, "\n");
+      do_cleanups (row_chain);
+    }
+
+  do_cleanups (table_chain);
+
+  gdb_flush (gdb_stdout);
+
+  cuda_info_contexts_destroy (contexts);
+}
+
+static void
+cleanup_info_cuda_command (void* data)
 {
   restore_current_context ();
-  cuda_restore_focus ();
+  cuda_focus_restore ((cuda_focus_t *)data);
 }
 
 void
 run_info_cuda_command (void (*command)(char *), char *arg)
 {
   struct cleanup *cleanups;
+  cuda_focus_t focus;
+
+  cuda_focus_init (&focus);
 
   /* Save the current focus and ELF image */
   save_current_context ();
-  cuda_save_focus ();
-  cleanups = make_cleanup (cleanup_info_cuda_command, NULL);
+  cuda_focus_save (&focus);
+  cleanups = make_cleanup (cleanup_info_cuda_command, (void*)&focus);
 
   /* Execute the proper info cuda command */
   command (arg);
@@ -1552,37 +2098,65 @@ run_info_cuda_command (void (*command)(char *), char *arg)
   do_cleanups (cleanups);
 }
 
+
+static struct {
+  char *name;
+  void (*func) (char *);
+  char *help;
+} cuda_info_subcommands[] =
+{
+  { "devices",          info_cuda_devices_command,
+             "information about all the devices" },
+  { "sms",              info_cuda_sms_command,
+             "information about all the SMs in the current device" },
+  { "warps",            info_cuda_warps_command,
+             "information about all the warps in the current SM" },
+  { "lanes",            info_cuda_lanes_command,
+             "information about all the lanes in the current warp" },
+  { "kernels",          info_cuda_kernels_command,
+             "information about all the active kernels" },
+  { "contexts",         info_cuda_contexts_command,
+             "information about all the contexts" },
+  { "blocks",           info_cuda_blocks_command,
+             "information about all the active blocks in the current kernel" },
+  { "threads",          info_cuda_threads_command,
+             "information about all the active threads in the current kernel" },
+  { "launch trace",     info_cuda_launch_trace_command,
+             "information about the parent kernels of the kernel in focus" },
+  { "launch children",  info_cuda_launch_children_command,
+             "information about the kernels launched by the kernels in focus" },
+  { NULL, NULL, NULL},
+};
+
+static int
+cuda_info_subcommands_max_name_length (void)
+{
+  int cnt,rc;
+  for (cnt=0,rc=0; cuda_info_subcommands[cnt].name; cnt++)
+    rc = max (rc, strlen(cuda_info_subcommands[cnt].name));
+  return rc;
+}
+
 static void
 info_cuda_command (char *arg, int from_tty)
 {
+  int cnt;
   char *argument;
-  bool found = 0;
   void (*command)(char *) = NULL;
 
   if (!arg)
     error (_("Missing option."));
 
   /* Sanity check and save which command (with correct argument) to invoke. */
+  for (cnt=0; cuda_info_subcommands[cnt].name; cnt++)
+    if (strstr(arg, cuda_info_subcommands[cnt].name) == arg)
+       {
+         command = cuda_info_subcommands[cnt].func;
+         argument = arg + strlen(cuda_info_subcommands[cnt].name);
+         break;
+       }
 
-#define MAP_ARG_TO_COMMAND(name,cmd)                           \
-  if (!found && !strncmp (arg, name, sizeof (name) - 1))  \
-    {                                                     \
-      command = &cmd;                                     \
-      argument = arg + sizeof (name) - 1;                 \
-      found = 1;;                                         \
-    }
-
-  MAP_ARG_TO_COMMAND ("devices", info_cuda_devices_command);
-  MAP_ARG_TO_COMMAND ("sms",     info_cuda_sms_command);
-  MAP_ARG_TO_COMMAND ("warps",   info_cuda_warps_command);
-  MAP_ARG_TO_COMMAND ("lanes",   info_cuda_lanes_command);
-  MAP_ARG_TO_COMMAND ("kernels", info_cuda_kernels_command);
-  MAP_ARG_TO_COMMAND ("blocks",  info_cuda_blocks_command);
-  MAP_ARG_TO_COMMAND ("threads", info_cuda_threads_command);
-
-#undef MAP_ARG_TO_COMMAND
-
-  if (!found)
+  if (!command)
     error (_("Unrecognized option: '%s'."), arg);
 
   run_info_cuda_command (command, argument);
@@ -1621,8 +2195,8 @@ cuda_command_switch (char *switch_string)
   /* Physical or logical coordinates. Physical coordinates have priority. */
   ck = CK_CLOSEST_LOGICAL;
   for (i = 0, request = command->requests; i < command->num_requests; ++i, ++request)
-    if (request->type == COORD_TYPE_DEVICE || request->type == COORD_TYPE_SM ||
-        request->type == COORD_TYPE_WARP   || request->type == COORD_TYPE_LANE)
+    if (request->type == FILTER_TYPE_DEVICE || request->type == FILTER_TYPE_SM ||
+        request->type == FILTER_TYPE_WARP   || request->type == FILTER_TYPE_LANE)
       ck = CK_CLOSEST_PHYSICAL;
 
   /* Find the closest match */
@@ -1663,7 +2237,7 @@ cuda_command_query (char *query_string)
   /* Bail out if focus not set on a CUDA device */
   if (!cuda_focus_is_device ())
     {
-      ui_out_field_string (uiout, NULL, _("Focus not set on any active CUDA kernel."));
+      ui_out_field_string (uiout, NULL, _("Focus is not set on any active CUDA kernel.\n"));
       return;
     }
 
@@ -1764,9 +2338,65 @@ cuda_command (char *arg, int from_tty)
     error (_("Missing argument(s)."));
 }
 
+static char cuda_info_cmd_help_str[1024];
+
+/* Prepare help for info cuda command */
+static void
+cuda_build_info_cuda_help_message (void)
+{
+  char *ptr = cuda_info_cmd_help_str;
+  int size = sizeof(cuda_info_cmd_help_str);
+  int rc, cnt;
+
+  rc = snprintf (ptr, size,
+    _("Print informations about the current CUDA activities. Available options:\n"));
+  ptr += rc; size -= rc;
+  for (cnt=0; cuda_info_subcommands[cnt].name; cnt++)
+    {
+       rc = snprintf (ptr, size, " %*s : %s\n",
+          cuda_info_subcommands_max_name_length(),
+          cuda_info_subcommands[cnt].name,
+          _(cuda_info_subcommands[cnt].help) );
+        if (rc <= 0) break;
+        ptr += rc;
+        size -= rc;
+    }
+}
+
+char **
+cuda_info_command_completer (struct cmd_list_element *self,
+                             char *text, char *word)
+{
+  char **return_val;
+  char *name;
+  int return_val_alloced;
+  int return_val_used;
+  int cnt;
+  long offset;
+
+  offset = (long)word-(long)text;
+  for (cnt=0; cuda_info_subcommands[cnt].name; cnt++);
+  return_val_alloced = cnt+1;
+  return_val_used = 0;
+  return_val = (char **) xmalloc (return_val_alloced * sizeof (char *));
+
+  for (cnt=0; cuda_info_subcommands[cnt].name; cnt++)
+    {
+       name = cuda_info_subcommands[cnt].name;
+       if (offset >= strlen(name)) continue;
+       if (strstr(name, text) != name) continue;
+
+       return_val[return_val_used++] = xstrdup (name+offset);
+    }
+  return_val[return_val_used] = NULL;
+  return return_val;
+}
+
 void
 cuda_commands_initialize ()
 {
+  struct cmd_list_element *cmd;
+
   add_prefix_cmd ("cuda", class_cuda, cuda_command,
                   _("Print or select the CUDA focus."),
                   &cudalist, "cuda ", 0, &cmdlist);
@@ -1795,13 +2425,7 @@ cuda_commands_initialize ()
   add_cmd ("thread", no_class, cuda_thread_command,
            _("Print or select the current CUDA thread."), &cudalist);
 
-  add_info ("cuda", info_cuda_command,
-            _("Print informations about the current CUDA activities. Available options:\n"
-              "  devices : information about all the devices\n"
-              "  sms     : information about all the SMs in the current device\n"
-              "  warps   : information about all the warps in the current SM\n"
-              "  lanes   : information about all the lanes in the current warp\n"
-              "  kernels : information about all the active kernels\n"
-              "  blocks  : information about all the active blocks in the current kernel\n"
-              "  threads : information about all the active threads in the current kernel\n"));
+  cuda_build_info_cuda_help_message ();
+  cmd = add_info ("cuda", info_cuda_command, cuda_info_cmd_help_str);
+  set_cmd_completer (cmd, cuda_info_command_completer);
 }

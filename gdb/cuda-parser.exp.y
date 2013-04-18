@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -35,7 +35,7 @@ struct {
 static request_value_t value_buffer;
 
 /*Detect when the same coordinate type is specified more than one */
-coord_type_t handled_coords;
+filter_type_t handled_filters;
 
 /*Default value when a coordinate is omitted */
 cuda_coords_special_value_t default_value;
@@ -47,10 +47,10 @@ command_t start_token; /* read once, then set to CMD_NONE. See Bison manual 11.5
 static cuda_parser_result_t  result;
 
 static void handle_command (command_t cmd);
-static void handle_query (coord_type_t type);
-static void handle_condition (coord_type_t type, compare_t cmp);
-static void handle_switch (coord_type_t type);
-static void handle_filter (coord_type_t type);
+static void handle_query (filter_type_t type);
+static void handle_condition (filter_type_t type, compare_t cmp);
+static void handle_switch (filter_type_t type);
+static void handle_filter (filter_type_t type);
 static void handle_scalar (uint32_t index, uint32_t value);
 
 int  cuda_parser_lex (void);
@@ -66,11 +66,12 @@ void cuda_parser_reset_lexer (void);
     compare_t cmp;
   }
 
-%token START_QUERY_OR_SWITCH START_CONDITIONS START_FILTER
+%token START_QUERY_OR_SWITCH START_CONDITIONS START_FILTER START_FILTER_KERNEL
 %token DEVICE SM WARP LANE
 %token KERNEL GRID BLOCK THREAD
 %token BLOCKIDX_X BLOCKIDX_Y BLOCKIDX_Z
 %token THREADIDX_X THREADIDX_Y THREADIDX_Z
+%token BREAKPOINT
 %token CURRENT WILDCARD ALL
 %token <value> VALUE
 %token <cmp> CMP
@@ -86,34 +87,57 @@ command : START_QUERY_OR_SWITCH queries              { handle_command (CMD_QUERY
         | START_CONDITIONS      or_conditions        { handle_command (CMD_COND_OR); }
         | START_QUERY_OR_SWITCH switches             { handle_command (CMD_SWITCH); }
         | START_FILTER          filters              { handle_command (CMD_FILTER); }
+        | START_FILTER_KERNEL   kernel               { handle_command (CMD_FILTER_KERNEL); }
         ;
 
 filters : filter
-         | filters filter
-         ;
+        | filters filter
+        ;
 
-filter : DEVICE scalar           { handle_filter (COORD_TYPE_DEVICE); }
-       | SM scalar               { handle_filter (COORD_TYPE_SM); }
-       | WARP scalar             { handle_filter (COORD_TYPE_WARP); }
-       | LANE scalar             { handle_filter (COORD_TYPE_LANE); }
-       | KERNEL scalar           { handle_filter (COORD_TYPE_KERNEL); }
-       | GRID scalar             { handle_filter (COORD_TYPE_GRID); }
-       | BLOCK cudim3            { handle_filter (COORD_TYPE_BLOCK); }
-       | THREAD cudim3           { handle_filter (COORD_TYPE_THREAD); }
+filter : device
+       | sm
+       | warp
+       | lane 
+       | kernel
+       | grid
+       | block
+       | thread
+       | breakpoint 
        ;
+
+device     : DEVICE scalar           { handle_filter (FILTER_TYPE_DEVICE); }
+           ;
+sm         : SM scalar               { handle_filter (FILTER_TYPE_SM); }
+           ;
+warp       : WARP scalar             { handle_filter (FILTER_TYPE_WARP); }
+           ;
+lane       : LANE scalar             { handle_filter (FILTER_TYPE_LANE); }
+           ;
+kernel     : KERNEL scalar           { handle_filter (FILTER_TYPE_KERNEL); }
+           ;
+grid       : GRID scalar             { handle_filter (FILTER_TYPE_GRID); }
+           ;
+block      : BLOCK cudim3            { handle_filter (FILTER_TYPE_BLOCK); }
+           ;
+thread     : THREAD cudim3           { handle_filter (FILTER_TYPE_THREAD); }
+           ;
+breakpoint : BREAKPOINT ALL          { handle_filter (FILTER_TYPE_BREAKPOINT); handle_scalar (0, 0); }
+           ;
+breakpoint : BREAKPOINT scalar       { handle_filter (FILTER_TYPE_BREAKPOINT); }
+           ;
 
 queries : query
         | queries query
         ;
 
-query : DEVICE            { handle_query (COORD_TYPE_DEVICE); }
-      | SM                { handle_query (COORD_TYPE_SM); }
-      | WARP              { handle_query (COORD_TYPE_WARP); }
-      | LANE              { handle_query (COORD_TYPE_LANE); }
-      | KERNEL            { handle_query (COORD_TYPE_KERNEL); }
-      | GRID              { handle_query (COORD_TYPE_GRID); }
-      | BLOCK             { handle_query (COORD_TYPE_BLOCK); }
-      | THREAD            { handle_query (COORD_TYPE_THREAD); }
+query : DEVICE            { handle_query (FILTER_TYPE_DEVICE); }
+      | SM                { handle_query (FILTER_TYPE_SM); }
+      | WARP              { handle_query (FILTER_TYPE_WARP); }
+      | LANE              { handle_query (FILTER_TYPE_LANE); }
+      | KERNEL            { handle_query (FILTER_TYPE_KERNEL); }
+      | GRID              { handle_query (FILTER_TYPE_GRID); }
+      | BLOCK             { handle_query (FILTER_TYPE_BLOCK); }
+      | THREAD            { handle_query (FILTER_TYPE_THREAD); }
       ;
 
 and_conditions : condition
@@ -124,26 +148,26 @@ or_conditions : condition LOGICAL_OR condition
               | or_conditions LOGICAL_OR condition
               :
 
-condition : BLOCKIDX_X CMP scalar     { handle_condition (COORD_TYPE_BLOCKIDX_X, $2); }
-          | BLOCKIDX_Y CMP scalar     { handle_condition (COORD_TYPE_BLOCKIDX_Y, $2); }
-          | BLOCKIDX_Z CMP scalar     { handle_condition (COORD_TYPE_BLOCKIDX_Z, $2); }
-          | THREADIDX_X CMP scalar    { handle_condition (COORD_TYPE_THREADIDX_X, $2); }
-          | THREADIDX_Y CMP scalar    { handle_condition (COORD_TYPE_THREADIDX_Y, $2); }
-          | THREADIDX_Z CMP scalar    { handle_condition (COORD_TYPE_THREADIDX_Z, $2); }
+condition : BLOCKIDX_X CMP scalar     { handle_condition (FILTER_TYPE_BLOCKIDX_X, $2); }
+          | BLOCKIDX_Y CMP scalar     { handle_condition (FILTER_TYPE_BLOCKIDX_Y, $2); }
+          | BLOCKIDX_Z CMP scalar     { handle_condition (FILTER_TYPE_BLOCKIDX_Z, $2); }
+          | THREADIDX_X CMP scalar    { handle_condition (FILTER_TYPE_THREADIDX_X, $2); }
+          | THREADIDX_Y CMP scalar    { handle_condition (FILTER_TYPE_THREADIDX_Y, $2); }
+          | THREADIDX_Z CMP scalar    { handle_condition (FILTER_TYPE_THREADIDX_Z, $2); }
           ;
 
 switches : switch
          | switches switch
          ;
 
-switch : DEVICE scalar           { handle_switch (COORD_TYPE_DEVICE); }
-       | SM scalar               { handle_switch (COORD_TYPE_SM); }
-       | WARP scalar             { handle_switch (COORD_TYPE_WARP); }
-       | LANE scalar             { handle_switch (COORD_TYPE_LANE); }
-       | KERNEL scalar           { handle_switch (COORD_TYPE_KERNEL); }
-       | GRID scalar             { handle_switch (COORD_TYPE_GRID); }
-       | BLOCK cudim3            { handle_switch (COORD_TYPE_BLOCK); }
-       | THREAD cudim3           { handle_switch (COORD_TYPE_THREAD); }
+switch : DEVICE scalar           { handle_switch (FILTER_TYPE_DEVICE); }
+       | SM scalar               { handle_switch (FILTER_TYPE_SM); }
+       | WARP scalar             { handle_switch (FILTER_TYPE_WARP); }
+       | LANE scalar             { handle_switch (FILTER_TYPE_LANE); }
+       | KERNEL scalar           { handle_switch (FILTER_TYPE_KERNEL); }
+       | GRID scalar             { handle_switch (FILTER_TYPE_GRID); }
+       | BLOCK cudim3            { handle_switch (FILTER_TYPE_BLOCK); }
+       | THREAD cudim3           { handle_switch (FILTER_TYPE_THREAD); }
        ;
 
 cudim3 : OPENPAR triplet CLOSEPAR
@@ -180,7 +204,7 @@ z : VALUE    { handle_scalar (2, $1); }
 %%
 
 static void
-new_request (coord_type_t type, request_value_t value, compare_t cmp)
+new_request (filter_type_t type, request_value_t value, compare_t cmp)
 {
   request_t *request;
 
@@ -216,39 +240,39 @@ handle_command (command_t cmd)
 }
 
 static void
-handle_query (coord_type_t type)
+handle_query (filter_type_t type)
 {
-  if (handled_coords & type)
-    cuda_parser_error ("Duplicate coordinate type");
-  handled_coords |= type;
+  if (handled_filters & type)
+    cuda_parser_error ("Duplicate filter type");
+  handled_filters |= type;
   value_buffer.cudim3 = (CuDim3) {CUDA_CURRENT, CUDA_CURRENT, CUDA_CURRENT};
   new_request (type, value_buffer, CMP_NONE);
   reset_value_buffer ();
 }
 
 static void
-handle_condition (coord_type_t type, compare_t cmp)
+handle_condition (filter_type_t type, compare_t cmp)
 {
   new_request (type, value_buffer, cmp);
   reset_value_buffer ();
 }
 
 static void
-handle_switch (coord_type_t type)
+handle_switch (filter_type_t type)
 {
-  if (handled_coords & type)
-    cuda_parser_error ("Duplicate coordinate type");
-  handled_coords |= type;
+  if (handled_filters & type)
+    cuda_parser_error ("Duplicate filter type");
+  handled_filters |= type;
   new_request (type, value_buffer, CMP_NONE);
   reset_value_buffer ();
 }
 
 static void
-handle_filter (coord_type_t type)
+handle_filter (filter_type_t type)
 {
-  if (handled_coords & type)
-    cuda_parser_error ("Duplicate coordinate type");
-  handled_coords |= type;
+  if (handled_filters & type)
+    cuda_parser_error ("Duplicate filter type");
+  handled_filters |= type;
   new_request (type, value_buffer, CMP_NONE);
   reset_value_buffer ();
 }
@@ -277,20 +301,21 @@ print_coord  (uint32_t value)
 static void
 print_request (request_t *request)
 {
-  if (request->type & COORD_TYPE_DEVICE) printf ("device");
-  if (request->type & COORD_TYPE_SM)     printf ("sm");
-  if (request->type & COORD_TYPE_WARP)   printf ("warp");
-  if (request->type & COORD_TYPE_LANE)   printf ("lane");
-  if (request->type & COORD_TYPE_KERNEL) printf ("kernel");
-  if (request->type & COORD_TYPE_GRID)   printf ("grid");
-  if (request->type & COORD_TYPE_BLOCK)  printf ("block");
-  if (request->type & COORD_TYPE_THREAD) printf ("thread");
-  if (request->type & COORD_TYPE_BLOCKIDX_X)  printf ("blockIdx.x");
-  if (request->type & COORD_TYPE_BLOCKIDX_Y)  printf ("blockIdx.y");
-  if (request->type & COORD_TYPE_BLOCKIDX_Z)  printf ("blockIdx.z");
-  if (request->type & COORD_TYPE_THREADIDX_X) printf ("threadIdx.z");
-  if (request->type & COORD_TYPE_THREADIDX_Y) printf ("threadIdx.y");
-  if (request->type & COORD_TYPE_THREADIDX_Z) printf ("threadIdx.z");
+  if (request->type & FILTER_TYPE_DEVICE) printf ("device");
+  if (request->type & FILTER_TYPE_SM)     printf ("sm");
+  if (request->type & FILTER_TYPE_WARP)   printf ("warp");
+  if (request->type & FILTER_TYPE_LANE)   printf ("lane");
+  if (request->type & FILTER_TYPE_KERNEL) printf ("kernel");
+  if (request->type & FILTER_TYPE_GRID)   printf ("grid");
+  if (request->type & FILTER_TYPE_BLOCK)  printf ("block");
+  if (request->type & FILTER_TYPE_THREAD) printf ("thread");
+  if (request->type & FILTER_TYPE_BLOCKIDX_X)  printf ("blockIdx.x");
+  if (request->type & FILTER_TYPE_BLOCKIDX_Y)  printf ("blockIdx.y");
+  if (request->type & FILTER_TYPE_BLOCKIDX_Z)  printf ("blockIdx.z");
+  if (request->type & FILTER_TYPE_THREADIDX_X) printf ("threadIdx.z");
+  if (request->type & FILTER_TYPE_THREADIDX_Y) printf ("threadIdx.y");
+  if (request->type & FILTER_TYPE_THREADIDX_Z) printf ("threadIdx.z");
+  if (request->type & FILTER_TYPE_BREAKPOINT) printf ("breakpoint");
 
   if (request->cmp == CMP_EQ) printf (" == ");
   if (request->cmp == CMP_NE) printf (" != ");
@@ -300,8 +325,8 @@ print_request (request_t *request)
   if (request->cmp == CMP_GE) printf (" >= ");
   if (request->cmp == CMP_NONE) printf (" ");
 
-  if (request->type & COORD_TYPE_THREAD ||
-      request->type & COORD_TYPE_BLOCK)
+  if (request->type & FILTER_TYPE_THREAD ||
+      request->type & FILTER_TYPE_BLOCK)
     {
       printf ("(");
       print_coord (request->value.cudim3.x);
@@ -348,13 +373,16 @@ cuda_parser_initialize (const char *input, command_t command,
   reset_value_buffer ();
 
   /* Initialize the sanity check variables */
-  handled_coords = COORD_TYPE_NONE;
+  handled_filters = FILTER_TYPE_NONE;
 
   /* Initialize the requested command */
   if (command & CMD_SWITCH ||
       command & CMD_QUERY ||
-      command & CMD_FILTER)
+      command & CMD_FILTER ||
+      command & CMD_FILTER_KERNEL)
+{
     start_token = command;
+}
   else
     cuda_parser_error ("Incorrect requested command\n");
 

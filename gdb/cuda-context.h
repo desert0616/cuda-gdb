@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -40,18 +40,21 @@ contexts_t     contexts_new              (void);
 void           contexts_delete           (contexts_t this);
 void           contexts_print            (contexts_t this);
 
-void           contexts_add_context            (contexts_t this, context_t context);
-context_t      contexts_remove_context         (contexts_t this, context_t context);
-void           contexts_stack_context          (contexts_t this, context_t context, uint32_t tid);
-context_t      contexts_unstack_context        (contexts_t this, uint32_t tid);
-context_t      contexts_get_active_context     (contexts_t this, uint32_t tid);
-bool           contexts_is_any_context_present (contexts_t this);
+void           contexts_add_context             (contexts_t this, context_t context);
+context_t      contexts_remove_context          (contexts_t this, context_t context);
+void           contexts_stack_context           (contexts_t this, context_t context, uint32_t tid);
+context_t      contexts_unstack_context         (contexts_t this, uint32_t tid);
+context_t      contexts_get_active_context      (contexts_t this, uint32_t tid);
+bool           contexts_is_any_context_present  (contexts_t this);
+bool           contexts_is_active_context       (contexts_t this, context_t context);
 
-void           contexts_resolve_breakpoints    (contexts_t this);
-void           contexts_cleanup_breakpoints    (contexts_t this);
+void           contexts_resolve_breakpoints     (contexts_t this);
+void           contexts_cleanup_breakpoints     (contexts_t this);
 
 context_t      contexts_find_context_by_id      (contexts_t this, uint64_t context_id);
 context_t      contexts_find_context_by_address (contexts_t this, CORE_ADDR addr);
+
+uint32_t       contexts_get_list_size           (contexts_t this);
 
 /* Current Context */
 context_t get_current_context     (void);
@@ -82,6 +85,7 @@ typedef struct list_elt_st     *list_elt_t;
 struct contexts_st {
   uint32_t   *ctxtid_to_tid;
   uint32_t    num_ctxtids;
+  uint32_t    list_size;            /* size of the context list */
   list_elt_t  list;                 /* list of all contexts on the device */
   list_elt_t *stacks;               /* context stacks for each host thread */
 };

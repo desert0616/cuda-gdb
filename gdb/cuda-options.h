@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -29,6 +29,7 @@ bool cuda_options_debug_libcudbg (void);
 bool cuda_options_debug_siginfo (void);
 bool cuda_options_debug_api (void);
 bool cuda_options_debug_convenience_vars (void);
+bool cuda_options_debug_strict (void);
 bool cuda_options_memcheck (void);
 bool cuda_options_coalescing (void);
 bool cuda_options_break_on_launch_application(void);
@@ -37,6 +38,9 @@ bool cuda_options_disassemble_from_device_memory (void);
 bool cuda_options_disassemble_from_elf_image (void);
 bool cuda_options_hide_internal_frames (void);
 bool cuda_options_show_kernel_events (void);
+bool cuda_options_show_kernel_events_async (void);
+bool cuda_options_async_events_needs_updating (void);
+void cuda_options_force_set_async_events_update (void);
 bool cuda_options_show_context_events (void);
 bool cuda_options_launch_blocking (void);
 bool cuda_options_thread_selection_logical (void);
@@ -45,6 +49,10 @@ bool cuda_options_api_failures_ignore (void);
 bool cuda_options_api_failures_stop (void);
 bool cuda_options_api_failures_hide (void);
 void cuda_options_disable_break_on_launch (void);
+bool cuda_options_notify_youngest (void);
+bool cuda_options_notify_random (void);
+bool cuda_options_software_preemption (void);
+bool cuda_options_gpu_busy_check (void);
 
 #endif
 

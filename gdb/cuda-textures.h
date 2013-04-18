@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -24,6 +24,7 @@
 #include "cudadebugger.h"
 
 
+#define TEXTURE_DIM_MAX    4
 #define TEXTURE_TYPE_NAME     "__texture_type__"
 #define IS_TEXTURE_TYPE(type) ((type) && \
                                TYPE_CODE (type) == TYPE_CODE_TYPEDEF && \

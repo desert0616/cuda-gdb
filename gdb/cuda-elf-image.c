@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -31,8 +31,9 @@
 #include "cuda-utils.h"
 
 struct elf_image_st {
-  void              *image;       /* the relocated ELF image */
   struct objfile    *objfile;     /* pointer to the ELF image as managed by GDB */
+  char               objfile_path [CUDA_GDB_TMP_BUF_SIZE];
+                                  /* file path of the ELF image in the tmp folder */
   uint64_t           size;        /* the size of the relocated ELF image */
   bool               loaded;      /* is the ELF image in memory? */
   bool               uses_abi;    /* does the ELF image uses the ABI to call functions */
@@ -46,12 +47,15 @@ cuda_elf_image_new (void *image, uint64_t size, module_t module)
   elf_image_t elf_image;
 
   elf_image = xmalloc (sizeof (*elf_image));
-  elf_image->image    = image;
-  elf_image->objfile  = NULL;
   elf_image->size     = size;
   elf_image->loaded   = false;
   elf_image->uses_abi = false;
   elf_image->module   = module;
+
+  if (cuda_remote)
+    strcpy (elf_image->objfile_path, (char *) image);
+  else
+    cuda_elf_image_save (elf_image, image);
 
   return elf_image;
 }
@@ -60,16 +64,7 @@ void
 cuda_elf_image_delete (elf_image_t elf_image)
 {
   gdb_assert (elf_image);
-  gdb_assert (elf_image->image);
-  xfree (elf_image->image);
   xfree (elf_image);
-}
-
-void*
-cuda_elf_image_get_image (elf_image_t elf_image)
-{
-  gdb_assert (elf_image);
-  return elf_image->image;
 }
 
 struct objfile *
@@ -166,15 +161,13 @@ cuda_elf_image_uses_abi (elf_image_t elf_image)
 
 void cuda_decode_line_table (struct objfile *objfile);
 
+/* This function gets the ELF image from a module load and saves it
+ * onto the hard drive. */
 void
-cuda_elf_image_load (elf_image_t elf_image)
+cuda_elf_image_save (elf_image_t elf_image, void *image)
 {
-  bfd *abfd;
   int object_file_fd;
   struct stat object_file_stat;
-  struct objfile *objfile = NULL;
-  const struct bfd_arch_info *arch_info;
-  char object_file_path[CUDA_GDB_TMP_BUF_SIZE] = {0};
   context_t context;
   uint64_t context_id;
   uint64_t module_id;
@@ -186,27 +179,41 @@ cuda_elf_image_load (elf_image_t elf_image)
   context    = module_get_context (elf_image->module);
   context_id = context_get_id (context);
   module_id  = module_get_id (elf_image->module);
-  snprintf (object_file_path, sizeof (object_file_path),
+  snprintf (elf_image->objfile_path, sizeof (elf_image->objfile_path),
             "%s/elf.%"PRIx64".%"PRIx64".o.XXXXXX",
             cuda_gdb_session_get_dir (), context_id, module_id);
 
-  object_file_fd = mkstemp (object_file_path);
+  object_file_fd = mkstemp (elf_image->objfile_path);
   if (object_file_fd == -1)
     error (_("Error: Failed to create device ELF symbol file!"));
 
-  nbytes = write (object_file_fd, elf_image->image, elf_image->size);
+  nbytes = write (object_file_fd, image, elf_image->size);
   close (object_file_fd);
   if (nbytes != elf_image->size)
     error (_("Error: Failed to write the ELF image file"));
 
-  if (stat (object_file_path, &object_file_stat))
+  if (stat (elf_image->objfile_path, &object_file_stat))
     error (_("Error: Failed to stat device ELF symbol file!"));
   else if (object_file_stat.st_size != elf_image->size)
     error (_("Error: The device ELF file size is incorrect!"));
+}
+
+/* cuda_elf_image_load() reads the ELF image file into symbol table.
+ * Native debugging calls cuda_elf_image_save() first. Remote debugging
+ * only calls load() since the ELF image file has already fetched from server. */
+void
+cuda_elf_image_load (elf_image_t elf_image)
+{
+  bfd *abfd;
+  struct objfile *objfile = NULL;
+  const struct bfd_arch_info *arch_info;
+
+  gdb_assert (elf_image);
+  gdb_assert (!elf_image->loaded);
 
   /* Open the object file and make sure to adjust its arch_info before reading
      its symbols. */
-  abfd = symfile_bfd_open (object_file_path);
+  abfd = symfile_bfd_open (elf_image->objfile_path);
   arch_info = bfd_lookup_arch (bfd_arch_m68k, 0);
   bfd_set_arch_info (abfd, arch_info);
 
@@ -251,9 +258,6 @@ cuda_elf_image_unload (elf_image_t elf_image)
   clear_current_source_symtab_and_line ();
   clear_displays ();
   cuda_reset_invalid_breakpoint_location_section (objfile);
-  if (!cuda_options_debug_general () && objfile->name)
-    if (unlink (objfile->name))
-      cuda_trace ("unable to unlink file %s", objfile->name);
   free_objfile (objfile);
 
   elf_image->objfile = NULL;

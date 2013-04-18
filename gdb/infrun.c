@@ -21,7 +21,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.*/
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -73,6 +73,7 @@
 #include "cuda-state.h"
 #include "cuda-iterator.h"
 #include "cuda-autostep.h"
+#include "cuda-options.h"
 
 /* Prototypes for local functions */
 
@@ -132,6 +133,9 @@ static ptid_t previous_inferior_ptid;
 /* CUDA - focus */
 /* Same as previous_inferior_ptid with CUDA coordinates */
 static cuda_coords_t previous_cuda_coords;
+
+/* CUDA - host singlestep*/
+int cuda_host_want_singlestep = 0;
 
 /* Default behavior is to detach newly forked processes (legacy).  */
 int detach_fork = 1;
@@ -1572,7 +1576,10 @@ resume (int step, enum target_signal sig)
   CORE_ADDR pc = regcache_read_pc (regcache);
   struct address_space *aspace = get_regcache_aspace (regcache);
 
-  QUIT;
+  /* CUDA - since host resume is faked during single-stepping thru
+     device code it's safe to ignore quit flag */
+  if (! (step && cuda_focus_is_device()))
+    QUIT;
 
   if (debug_infrun)
     fprintf_unfiltered (gdb_stdlog,
@@ -1594,6 +1601,9 @@ The program is stopped at a permanent breakpoint, but GDB does not know\n\
 how to step past a permanent breakpoint on this architecture.  Try using\n\
 a command like `return' or `jump' to continue execution."));
     }
+
+  /* CUDA - host singlestep*/
+  cuda_host_want_singlestep = step;
 
   /* If enabled, step over breakpoints by executing a copy of the
      instruction at a different address.
@@ -2102,6 +2112,10 @@ raw_proceed (CORE_ADDR addr, enum target_signal siggnal, int step)
       wait_for_inferior (0);
       normal_stop ();
     }
+
+  /* CUDA - Collect as much info about the kernels as we can every time the
+     debugger stops. */
+  kernels_update_args ();
 }
 
 
@@ -4403,8 +4417,10 @@ infrun: not switching back to stepped thread, it has vanished\n");
      changed focus to ensure that control properly moves to the next warp
      when the previous one runs to completion. */
   if (cuda_focus_is_device ()
-  && !cuda_coords_is_current (&previous_cuda_coords)
-  && ecs->event_thread->step_over_calls == STEP_OVER_ALL)
+      && (cuda_options_software_preemption ()
+          ? !cuda_coords_is_current_logical (&previous_cuda_coords)
+          : !cuda_coords_is_current (&previous_cuda_coords))
+      && ecs->event_thread->step_over_calls == STEP_OVER_ALL)
     {
       ecs->event_thread->stop_step = 1;
       print_stop_reason (END_STEPPING_RANGE, 0);
@@ -4762,6 +4778,9 @@ infrun: not switching back to stepped thread, it has vanished\n");
     }
 
   stop_pc_sal = find_pc_line (stop_pc, 0);
+
+  /* CUDA : The PC that the line belongs to may need to be adjusted */
+  cuda_adjust_device_code_address (stop_pc_sal.pc, &stop_pc_sal.pc);
 
   /* NOTE: tausq/2004-05-24: This if block used to be done before all
      the trampoline processing logic, however, there are some trampolines 

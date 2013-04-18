@@ -164,7 +164,7 @@ install: all install-only
 install-only:
 	n=`echo gdbserver | sed '$(program_transform_name)'`; \
 	if [ x$$n = x ]; then n=gdbserver; else true; fi; \
-	if [ x$IPA_DEPFILES != x ]; then \
+	if [ x"$(IPA_DEPFILES)" != x ]; then \
 		$(SHELL) $(srcdir)/../../mkinstalldirs $(DESTDIR)$(libdir); \
 		$(INSTALL_PROGRAM) $(IPA_LIB) $(DESTDIR)$(libdir)/$(IPA_LIB); \
 	fi; \
@@ -274,6 +274,15 @@ stamp-xml: $(XML_DIR)/feature_to_c.sh Makefile $(XML_FILES)
 	$(SHELL) $(XML_DIR)/feature_to_c.sh xml-builtin.tmp $(XML_FILES)
 	$(SHELL) $(srcdir)/../../move-if-change xml-builtin.tmp xml-builtin.c
 	echo stamp > stamp-xml
+
+cuda-notifications.o: $(srcdir)/../cuda-notifications.c $(srcdir)/../cuda-notifications.h
+	${CC} -c ${INTERNAL_CFLAGS} $< -I$(srcdir)/.. -DGDBSERVER
+cuda-utils.o: $(srcdir)/../cuda-utils.c $(srcdir)/../cuda-utils.h
+	${CC} -c ${INTERNAL_CFLAGS} $< -I$(srcdir)/.. -DGDBSERVER
+libcudbg.o: $(srcdir)/../libcudbg.c $(srcdir)/../libcudbg.h
+	${CC} -c ${INTERNAL_CFLAGS} $< -I$(srcdir)/.. -DGDBSERVER
+libcudbgipc.o: $(srcdir)/../libcudbgipc.c $(srcdir)/../libcudbgipc.h
+	${CC} -c ${INTERNAL_CFLAGS} $< -I$(srcdir)/.. -DGDBSERVER
 
 .PRECIOUS: xml-builtin.c
 

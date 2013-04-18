@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -44,10 +44,14 @@ struct cuda_iterator_t
 cuda_iterator
 cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_select_t select_mask)
 {
-  uint32_t dev, sm, wp, ln, gridId, i;
+  uint32_t dev, sm, wp, ln, i;
   bool store_dev, store_sm, store_warp, store_lane, store_kernel, store_grid, store_block, store_thread;
   kernel_t kernel;
-  uint64_t kernelId;
+  uint64_t kernelId, gridId;
+  uint64_t validWarpsMask;
+  uint64_t validLanesMask;
+  bool validWarp;
+  bool validLane;
   CuDim3 blockIdx;
   CuDim3 threadIdx;
   cuda_coords_t *c;
@@ -55,6 +59,7 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
   bool valid         = select_mask & CUDA_SELECT_VALID;
   bool at_breakpoint = select_mask & CUDA_SELECT_BKPT;
   bool at_exception  = select_mask & CUDA_SELECT_EXCPT;
+  bool single        = select_mask & CUDA_SELECT_SNGL;
   struct address_space *aspace = NULL;
 
   if (!ptid_equal (inferior_ptid, null_ptid))
@@ -99,24 +104,33 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
      filter. Duplicates are dealt with later. */
   for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
     {
-      if (valid && !device_is_valid (dev))
-        continue;
+      if (single && itr->num_elements)
+        break;
       if (filter && filter->dev != CUDA_WILDCARD && filter->dev != dev)
         continue;
 
       for (sm = 0; sm < device_get_num_sms (dev); ++sm)
         {
+          if (single && itr->num_elements)
+            break;
           if (filter && filter->sm != CUDA_WILDCARD && filter->sm != sm)
             continue;
 
+          validWarpsMask = sm_get_valid_warps_mask (dev, sm);
+          if (valid && validWarpsMask == 0)
+             continue;
+
           for (wp = 0; wp < device_get_num_warps (dev); ++wp)
             {
-              if (valid && !warp_is_valid (dev, sm, wp))
+              if (single && itr->num_elements)
+                break;
+              validWarp = (validWarpsMask>>wp)&1;
+              if (valid && !validWarp)
                 continue;
               if (filter && filter->wp != CUDA_WILDCARD && filter->wp != wp)
                 continue;
 
-              if (warp_is_valid (dev, sm, wp))
+              if (validWarp)
                 {
                   kernel   = warp_get_kernel (dev, sm, wp);
                   kernelId = kernel ? kernel_get_id (kernel) : CUDA_INVALID;
@@ -138,15 +152,17 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
                    (filter->blockIdx.z != CUDA_WILDCARD && filter->blockIdx.z != blockIdx.z)))
                 continue;
 
+              validLanesMask = warp_get_valid_lanes_mask (dev, sm, wp);
               for (ln = 0; ln < device_get_num_lanes (dev); ++ln)
                 {
-                  if (valid && !lane_is_valid (dev, sm, wp, ln))
+                  validLane = (validLanesMask>>ln)&validWarp;
+                  if (valid && !validLane)
                     continue;
                   if (filter && filter->ln != CUDA_WILDCARD && filter->ln != ln)
                     continue;
 
-                  if (warp_is_valid (dev, sm, wp) &&
-                      lane_is_valid (dev, sm, wp, ln))
+
+                  if (validLane)
                     threadIdx = lane_get_thread_idx (dev, sm, wp, ln);
                   else
                     threadIdx = (CuDim3){ CUDA_INVALID, CUDA_INVALID, CUDA_INVALID };
@@ -159,16 +175,14 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
 
                   /* if looking for breakpoints, skip non-broken kernels */
                   if (at_breakpoint &&
-                      (!warp_is_valid (dev, sm, wp) ||
-                       !lane_is_valid (dev, sm, wp, ln) ||
+                      (!validLane ||
                        !lane_is_active (dev, sm, wp, ln) ||
                        !breakpoint_here_p (aspace, lane_get_virtual_pc (dev, sm, wp, ln))))
                     continue;
 
                   /* if looking for exceptions, skip healthy kernels */
                   if (at_exception &&
-                      (!warp_is_valid (dev, sm, wp) ||
-                       !lane_is_valid (dev, sm, wp, ln)  ||
+                      (!validLane ||
                        !lane_is_active (dev, sm, wp, ln) ||
                        !lane_get_exception (dev, sm, wp, ln)))
                     continue;
@@ -194,9 +208,17 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
                   c->threadIdx = store_thread ? threadIdx : c->threadIdx;
 
                   ++itr->num_elements;
+                  if (single)
+                    break;
                 }
             }
         }
+    }
+
+  if (itr->num_elements == 1)
+    {
+      itr->num_unique_elements = 1;
+      return itr;
     }
 
   /* sort the list by coordinates */

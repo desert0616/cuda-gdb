@@ -30,6 +30,7 @@
 #include "gdb_assert.h"
 #include "gdb_string.h"
 #include "gdb_ptrace.h"
+#include "gdb_stat.h"
 #include "gdb_wait.h"
 #include <signal.h>
 
@@ -122,7 +123,7 @@ inf_ptrace_create_inferior (struct target_ops *ops,
   int pid;
 
   pid = fork_inferior (exec_file, allargs, env, inf_ptrace_me, NULL,
-		       NULL, NULL);
+		       NULL, NULL, NULL);
 
   push_target (ops);
 
@@ -212,7 +213,20 @@ inf_ptrace_attach (struct target_ops *ops, char *args, int from_tty)
   errno = 0;
   ptrace (PT_ATTACH, pid, (PTRACE_TYPE_ARG3)0, 0);
   if (errno != 0)
-    perror_with_name (("ptrace"));
+    {
+#ifdef __linux__
+      struct stat stat_dummy;
+      if (errno == EPERM && 
+          stat("/proc/sys/kernel/yama/ptrace_scope", &stat_dummy) == 0)
+        {
+	      fprintf_unfiltered (gdb_stderr,
+            _("Could not attach to process.  If your uid matches the uid of the target\n"
+              "process, check the setting of /proc/sys/kernel/yama/ptrace_scope, or try\n"
+              "again as the root user.\n"));
+        }
+#endif
+      perror_with_name (("ptrace"));
+    }
 #else
   error (_("This system does not support attaching to a process"));
 #endif
@@ -353,6 +367,12 @@ inf_ptrace_resume (struct target_ops *ops,
      already written a new program counter value to the child.  */
   errno = 0;
   ptrace (request, pid, (PTRACE_TYPE_ARG3)1, target_signal_to_host (signal));
+
+  /* ptracing zombie is illegal (ptrace(PT_CONTINUE,ZOMBIE_PID) sets errno to ESRCH)
+   * but POSIX endorses shooting zeroth signal at it (i.e. kill(ZOMBIE_PID,0)==0) */
+  if (errno == ESRCH && kill (pid, 0) == 0)
+    return;
+
   if (errno != 0)
     perror_with_name (("ptrace"));
 }

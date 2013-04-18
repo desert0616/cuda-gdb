@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -33,8 +33,10 @@ uint64_t         cuda_elf_image_get_size         (elf_image_t elf_image);
 module_t         cuda_elf_image_get_module       (elf_image_t elf_image);
 
 bool             cuda_elf_image_is_loaded        (elf_image_t elf_image);
+//bool             cuda_elf_image_is_saved         (elf_image_t elf_image);
 bool             cuda_elf_image_uses_abi         (elf_image_t elf_image);
 
+void             cuda_elf_image_save             (elf_image_t elf_image, void *image);
 void             cuda_elf_image_load             (elf_image_t elf_image);
 void             cuda_elf_image_unload           (elf_image_t elf_image);
 

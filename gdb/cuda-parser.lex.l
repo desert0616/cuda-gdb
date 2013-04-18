@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -79,6 +79,11 @@ int  cuda_parser_get_next_input (char *buf, int max_size);
       start_token = CMD_NONE;
       return START_FILTER;
     }
+  else if (start_token & CMD_FILTER_KERNEL)
+    {
+      start_token = CMD_NONE;
+      return START_FILTER_KERNEL;
+    }
   else if (start_token != CMD_NONE)
     return PARSING_ERROR;
 
@@ -100,6 +105,8 @@ threadIdx\.z    { return THREADIDX_Z; }
 blockIdx\.x     { return BLOCKIDX_X; }
 blockIdx\.y     { return BLOCKIDX_Y; }
 blockIdx\.z     { return BLOCKIDX_Z; }
+
+breakpoint      { return BREAKPOINT; }
 
 {NUM10}         { cuda_parser_lval.value = strtol (yytext, NULL, 10); return VALUE; }
 {NUM16} 	{ cuda_parser_lval.value = strtol (yytext, NULL, 16); return VALUE; }

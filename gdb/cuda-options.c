@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -24,6 +24,9 @@
 #include "gdbcmd.h"
 
 #include "cuda-options.h"
+#include "cuda-state.h"
+#include "cuda-convvars.h"
+#include "cuda-packet-manager.h"
 
 /*List of set/show cuda commands */
 struct cmd_list_element *setcudalist;
@@ -102,16 +105,24 @@ cuda_show_debug_general (struct ui_file *file, int from_tty,
 }
 
 static void
+cuda_set_debug_general (char *args, int from_tty,
+                        struct cmd_list_element *c)
+{
+  if (cuda_remote)
+    cuda_remote_set_option ();
+}
+
+static void
 cuda_options_initialize_debug_general ()
 {
   cuda_debug_general = false;
 
-  add_setshow_zinteger_cmd ("general", class_maintenance, &cuda_debug_general,
-                            _("Set debug trace of the internal CUDA-specific functions"),
-                            _("Show debug trace of internal CUDA-specific functions."),
-                            _("When non-zero, internal CUDA debugging is enabled."),
-                            NULL, cuda_show_debug_general,
-                            &setdebugcudalist, &showdebugcudalist);
+  add_setshow_boolean_cmd ("general", class_maintenance, &cuda_debug_general,
+                           _("Set debug trace of the internal CUDA-specific functions"),
+                           _("Show debug trace of internal CUDA-specific functions."),
+                           _("When non-zero, internal CUDA debugging is enabled."),
+                           cuda_set_debug_general, cuda_show_debug_general,
+                           &setdebugcudalist, &showdebugcudalist);
 }
 
 int
@@ -133,16 +144,24 @@ cuda_show_debug_notifications (struct ui_file *file, int from_tty,
 }
 
 static void
+cuda_set_debug_notifications (char *args, int from_tty,
+                              struct cmd_list_element *c)
+{
+  if (cuda_remote)
+    cuda_remote_set_option ();
+}
+
+static void
 cuda_options_initialize_debug_notifications ()
 {
   cuda_debug_notifications = false;
 
-  add_setshow_zinteger_cmd ("notifications", class_maintenance, &cuda_debug_notifications,
-                            _("Set debug trace of the CUDA notification functions"),
-                            _("Show debug trace of the CUDA notification functions."),
-                            _("When non-zero, internal debugging of the CUDA notification functions is enabled."),
-                            NULL, cuda_show_debug_notifications,
-                            &setdebugcudalist, &showdebugcudalist);
+  add_setshow_boolean_cmd ("notifications", class_maintenance, &cuda_debug_notifications,
+                           _("Set debug trace of the CUDA notification functions"),
+                           _("Show debug trace of the CUDA notification functions."),
+                           _("When non-zero, internal debugging of the CUDA notification functions is enabled."),
+                           cuda_set_debug_notifications, cuda_show_debug_notifications,
+                           &setdebugcudalist, &showdebugcudalist);
 }
 
 bool
@@ -168,12 +187,12 @@ cuda_options_initialize_debug_textures ()
 {
   cuda_debug_textures = false;
 
-  add_setshow_zinteger_cmd ("textures", class_maintenance, &cuda_debug_textures,
-                            _("Set debug trace of CUDA texture accesses"),
-                            _("Show debug trace of CUDA texture accesses."),
-                            _("When non-zero, internal debugging of CUDA texture accesses is enabled."),
-                            NULL, cuda_show_debug_textures,
-                            &setdebugcudalist, &showdebugcudalist);
+  add_setshow_boolean_cmd ("textures", class_maintenance, &cuda_debug_textures,
+                           _("Set debug trace of CUDA texture accesses"),
+                           _("Show debug trace of CUDA texture accesses."),
+                           _("When non-zero, internal debugging of CUDA texture accesses is enabled."),
+                           NULL, cuda_show_debug_textures,
+                           &setdebugcudalist, &showdebugcudalist);
 }
 
 bool
@@ -196,16 +215,24 @@ cuda_show_debug_libcudbg (struct ui_file *file, int from_tty,
 }
 
 static void
+cuda_set_debug_libcudbg (char *args, int from_tty,
+                         struct cmd_list_element *c)
+{
+  if (cuda_remote)
+    cuda_remote_set_option ();
+}
+
+static void
 cuda_options_initialize_debug_libcudbg ()
 {
   cuda_debug_libcudbg = false;
 
-  add_setshow_zinteger_cmd ("libcudbg", class_maintenance, &cuda_debug_libcudbg,
-                            _("Set debug trace of the CUDA RPC client functions"),
-                            _("Show debug trace of the CUDA RPC client functions."),
-                            _("When non-zero, internal debugging of the CUDA RPC client functions is enabled."),
-                            NULL, cuda_show_debug_libcudbg,
-                            &setdebugcudalist, &showdebugcudalist);
+  add_setshow_boolean_cmd ("libcudbg", class_maintenance, &cuda_debug_libcudbg,
+                           _("Set debug trace of the CUDA RPC client functions"),
+                           _("Show debug trace of the CUDA RPC client functions."),
+                           _("When non-zero, internal debugging of the CUDA RPC client functions is enabled."),
+                           cuda_set_debug_libcudbg, cuda_show_debug_libcudbg,
+                           &setdebugcudalist, &showdebugcudalist);
 }
 
 bool
@@ -263,12 +290,12 @@ cuda_options_initialize_debug_api ()
 {
   cuda_debug_api = false;
 
-  add_setshow_zinteger_cmd ("api", class_maintenance, &cuda_debug_api,
-                            _("Set debug trace of the CUDA api functions"),
-                            _("Show debug trace of the CUDA api functions."),
-                            _("When non-zero, internal debugging of the CUDA api functions is enabled."),
-                            NULL, cuda_show_debug_api,
-                            &setdebugcudalist, &showdebugcudalist);
+  add_setshow_boolean_cmd ("api", class_maintenance, &cuda_debug_api,
+                           _("Set debug trace of the CUDA api functions"),
+                           _("Show debug trace of the CUDA api functions."),
+                           _("When non-zero, internal debugging of the CUDA api functions is enabled."),
+                           NULL, cuda_show_debug_api,
+                           &setdebugcudalist, &showdebugcudalist);
 }
 
 bool
@@ -280,33 +307,99 @@ cuda_options_debug_api ()
 /*
  * set debug cuda extra convenience variables
  */
-static int cuda_debug_convenience_vars;
+static char *cuda_debug_convenience_vars = NULL;
 
 static void
 cuda_show_debug_convenience_vars (struct ui_file *file, int from_tty,
-                               struct cmd_list_element *c, const char *value)
+                                  struct cmd_list_element *c, const char *value)
 {
-  fprintf_filtered (file, _("Use of extra convenience variables is %s.\n"), value);
+  fprintf_filtered (file, _("The following extra convenience variables are used: %s.\n"),
+                    value && *value != 0 ? value : "none");
 }
 
 static void
-cuda_options_initialize_debug_convenience_vars ()
+cuda_set_debug_convenience_vars (char *args, int from_tty,
+                                 struct cmd_list_element *c)
 {
-  cuda_debug_convenience_vars = false;
+  char *groups = NULL;
+  char *ptr,*grp;
+  int cnt, rc;
 
-  add_setshow_zinteger_cmd ("convenience_vars", class_maintenance, &cuda_debug_convenience_vars,
+  if (cuda_debug_convenience_vars)
+    groups = xstrdup (cuda_debug_convenience_vars);
+  /* Enable all variables*/
+  if (groups && (strcasecmp(groups,"all")==0 || atoi(groups)>0))
+    {
+      cuda_enable_convenience_variables_group (NULL, true);
+      xfree (groups);
+      return;
+    }
+
+  cuda_enable_convenience_variables_group (NULL, false);
+  if (!groups)
+     return;
+  if (groups && (strcmp(groups,"0")==0 || strcasecmp(groups,"none")==0))
+    {
+      xfree (groups);
+      return;
+    }
+  for (ptr=groups;ptr;)
+    {
+      grp = strsep(&ptr,",");
+      rc = cuda_enable_convenience_variables_group (grp, true);
+      if (!rc)
+        printf_unfiltered (_("Unknown variable group name \"%s\"\n"), grp);
+    }
+  xfree (groups);
+}
+
+void
+cuda_options_initialize_debug_convenience_vars (void)
+{
+
+  static char cv_help_string[1024];
+
+  cuda_build_covenience_variables_help_message ( cv_help_string, sizeof(cv_help_string));
+
+  add_setshow_string_cmd ("convenience_vars", class_maintenance, &cuda_debug_convenience_vars,
                             _("Set use of extra convenience variables used for debugging."),
                             _("Show use of extra convenience variables used for debugging."),
-                            _("When non-zero, extra convenience variables are available for debugging."),
-                            NULL, cuda_show_debug_convenience_vars,
+                            cv_help_string,
+                            cuda_set_debug_convenience_vars, cuda_show_debug_convenience_vars,
                             &setdebugcudalist, &showdebugcudalist);
 }
 
-bool
-cuda_options_debug_convenience_vars ()
+/*
+ * set debug cuda strict
+ */
+static int cuda_debug_strict;
+
+static void
+cuda_show_debug_strict (struct ui_file *file, int from_tty,
+                        struct cmd_list_element *c, const char *value)
 {
-  return cuda_debug_convenience_vars;
+  fprintf_filtered (file, _("The debugger strict execution mode is %s.\n"), value);
 }
+
+static void
+cuda_options_initialize_debug_strict ()
+{
+  cuda_debug_strict = false;
+
+  add_setshow_boolean_cmd ("strict", class_maintenance, &cuda_debug_strict,
+                           _("Set debugger execution mode to normal or strict."),
+                           _("Show the debugger execution mode."),
+                           _("When non-zero, the debugger will produce error messages instead of warnings. For testing purposes only."),
+                           NULL, cuda_show_debug_strict,
+                           &setdebugcudalist, &showdebugcudalist);
+}
+
+bool
+cuda_options_debug_strict ()
+{
+  return cuda_debug_strict;
+}
+
 /*
  * set cuda memcheck
  */
@@ -390,6 +483,60 @@ cuda_options_coalescing (void)
 }
 
 /*
+ * set cuda notify youngest|random
+ */
+const char  cuda_notify_youngest[]    = "youngest";
+const char  cuda_notify_random[]      = "random";
+
+const char *cuda_notify_enums[] = {
+  cuda_notify_youngest,
+  cuda_notify_random,
+  NULL
+};
+
+const char *cuda_notify;
+
+static void
+cuda_show_notify (struct ui_file *file, int from_tty,
+                  struct cmd_list_element *c, const char *value)
+{
+  printf_filtered ("CUDA notifications will be sent by default to thread: %s.\n", value);
+}
+
+static void
+cuda_set_notify (char *args, int from_tty, struct cmd_list_element *c)
+{
+}
+
+static void
+cuda_options_initialize_notify (void)
+{
+  cuda_notify = cuda_notify_youngest;
+
+  add_setshow_enum_cmd ("notify", class_cuda,
+                        cuda_notify_enums, &cuda_notify,
+                        _("Thread to notify about CUDA events when no other known candidate."),
+                        _("Show which thread will be notified when a CUDA event occurs and no other thread is specified."),
+                        _("When no thread is specified by CUDA event, the following thread will be notified:\n"
+                          "  youngest : the thread with the smallest thread id (default)\n"
+                          "  random   : the first valid thread cuda-gdb can find\n"),
+                        cuda_set_notify, cuda_show_notify,
+                        &setcudalist, &showcudalist);
+}
+
+bool
+cuda_options_notify_youngest (void)
+{
+  return cuda_notify == cuda_notify_youngest;
+}
+
+bool
+cuda_options_notify_random (void)
+{
+  return cuda_notify == cuda_notify_random;
+}
+
+/*
  * set cuda break_on_launch
  */
 const char  cuda_break_on_launch_none[]        = "none";
@@ -405,7 +552,8 @@ const char *cuda_break_on_launch_enums[] = {
   NULL
 };
 
-const char *cuda_break_on_launch;
+static const char *cuda_break_on_launch;
+static const char *cuda_show_kernel_events;
 
 static void
 cuda_show_break_on_launch (struct ui_file *file, int from_tty,
@@ -417,6 +565,13 @@ cuda_show_break_on_launch (struct ui_file *file, int from_tty,
 static void
 cuda_set_break_on_launch (char *args, int from_tty, struct cmd_list_element *c)
 {
+  /* Print warning if this change alters effective kernel_events policy */
+  if (cuda_break_on_launch != cuda_break_on_launch_none &&
+      strcmp ((char *)cuda_show_kernel_events, "show_async") == 0)
+    printf_filtered ("Warning: Becaus break_on_launch options is set to '%s'"
+                     " effective kernel_events policy would be show_sync.\n", cuda_show_kernel_events);
+
+  cuda_options_force_set_async_events_update ();
   // reset the auto breakpoints
   cuda_cleanup_auto_breakpoints (NULL);
 }
@@ -479,14 +634,15 @@ static void
 cuda_show_disassemble_from (struct ui_file *file, int from_tty,
                             struct cmd_list_element *c, const char *value)
 {
-  printf_filtered ("CUDA code is dissassembled from %s.\n", value);
+  printf_filtered ("CUDA code is disassembled from %s.\n", value);
 }
 
 static void
 cuda_set_disassemble_from (char *args, int from_tty, struct cmd_list_element *c)
 {
-  // XXX: flush all the disassembly caches
+  cuda_system_flush_disasm_cache ();
 }
+
 static void
 cuda_options_initialize_disassemble_from (void)
 {
@@ -540,12 +696,12 @@ cuda_options_initialize_hide_internal_frames ()
 {
   cuda_hide_internal_frames = 1;
 
-  add_setshow_zinteger_cmd ("hide_internal_frame", class_cuda, &cuda_hide_internal_frames,
-                            _("Set hiding of the internal CUDA frames when printing the call stack"),
-                            _("Show hiding of the internal CUDA frames when printing the call stack."),
-                            _("When non-zero, internal CUDA frames are omitted when printing the call stack."),
-                            cuda_set_hide_internal_frames, cuda_show_hide_internal_frames,
-                            &setcudalist, &showcudalist);
+  add_setshow_boolean_cmd ("hide_internal_frame", class_cuda, &cuda_hide_internal_frames,
+                           _("Set hiding of the internal CUDA frames when printing the call stack"),
+                           _("Show hiding of the internal CUDA frames when printing the call stack."),
+                           _("When non-zero, internal CUDA frames are omitted when printing the call stack."),
+                           cuda_set_hide_internal_frames, cuda_show_hide_internal_frames,
+                           &setcudalist, &showcudalist);
 }
 
 bool
@@ -557,25 +713,48 @@ cuda_options_hide_internal_frames (void)
 /*
  * set cuda show_kernel_events
  */
-int cuda_show_kernel_events;
+const char  cuda_show_kernel_events_hide[]       = "hide";
+const char  cuda_show_kernel_events_show[]       = "show_sync";
+const char  cuda_show_kernel_events_async[]      = "show_async";
+
+const char *cuda_show_kernel_events_enum[] = {
+  cuda_show_kernel_events_hide,
+  cuda_show_kernel_events_show,
+  cuda_show_kernel_events_async,
+  NULL
+};
 
 static void
 cuda_show_show_kernel_events (struct ui_file *file, int from_tty,
                                struct cmd_list_element *c, const char *value)
 {
-  fprintf_filtered (file, _("Show CUDA kernel events is %s.\n"), value);
+  fprintf_filtered (file, _("CUDA kernel events output message policy is %s.\n"), value);
+}
+
+static void
+cuda_set_show_kernel_events (char *args, int from_tty, struct cmd_list_element *c)
+{
+  if (cuda_break_on_launch != cuda_break_on_launch_none &&
+      cuda_show_kernel_events == cuda_show_kernel_events_async)
+    printf_filtered ("Warning: Becaus break_on_launch options is set to '%s'"
+                     " effective kernel_events policy would be show_sync.\n", cuda_show_kernel_events);
+  cuda_options_force_set_async_events_update ();
 }
 
 static void
 cuda_options_initialize_show_kernel_events (void)
 {
-  cuda_show_kernel_events = 1;
+  cuda_show_kernel_events = cuda_show_kernel_events_show;
 
-  add_setshow_zinteger_cmd ("kernel_events", class_cuda, &cuda_show_kernel_events,
-                            _("Turn on/off kernel events (launch/termination) output messages."),
+  add_setshow_enum_cmd ("kernel_events", class_cuda,
+                            cuda_show_kernel_events_enum, &cuda_show_kernel_events,
+                            _("Control kernel events (launch/termination) output message policy."),
                             _("Show kernel events."),
-                            _("When turned on, launch/termination kernel events are displayed."),
-                            NULL,
+                            _("When enabled, following policies applies to kernel events:\n"
+                              "  hide        : do not show kernel events\n"
+                              "  show_sync   : receive and display kernel events synchronously\n"
+                              "  show_async  : receive and display kernel events asynchronously\n"),
+                            cuda_set_show_kernel_events,
                             cuda_show_show_kernel_events,
                             &setcudalist, &showcudalist);
 }
@@ -583,7 +762,32 @@ cuda_options_initialize_show_kernel_events (void)
 bool
 cuda_options_show_kernel_events (void)
 {
-  return cuda_show_kernel_events;
+  return cuda_show_kernel_events != cuda_show_kernel_events_hide;
+}
+
+bool
+cuda_options_show_kernel_events_async (void)
+{
+  return cuda_show_kernel_events == cuda_show_kernel_events_async &&
+         cuda_break_on_launch == cuda_break_on_launch_none;
+}
+
+static bool cuda_needs_async_events_update = false;
+
+bool
+cuda_options_async_events_needs_updating (void)
+{
+  if (!cuda_needs_async_events_update)
+    return false;
+
+  cuda_needs_async_events_update = false;
+  return true;
+}
+
+void
+cuda_options_force_set_async_events_update (void)
+{
+  cuda_needs_async_events_update = true;
 }
 
 /*
@@ -603,13 +807,13 @@ cuda_options_initialize_show_context_events (void)
 {
   cuda_show_context_events = 1;
 
-  add_setshow_zinteger_cmd ("context_events", class_cuda, &cuda_show_context_events,
-                            _("Turn on/off context events (push/pop/create/destroy) output messages."),
-                            _("Show context events."),
-                            _("When turned on, push/pop/create/destroy context events are displayed."),
-                            NULL,
-                            cuda_show_show_context_events,
-                            &setcudalist, &showcudalist);
+  add_setshow_boolean_cmd ("context_events", class_cuda, &cuda_show_context_events,
+                           _("Turn on/off context events (push/pop/create/destroy) output messages."),
+                           _("Show context events."),
+                           _("When turned on, push/pop/create/destroy context events are displayed."),
+                           NULL,
+                           cuda_show_show_context_events,
+                           &setcudalist, &showcudalist);
 }
 
 bool
@@ -647,13 +851,13 @@ cuda_options_initialize_launch_blocking (void)
 {
   cuda_launch_blocking = 0;
 
-  add_setshow_zinteger_cmd ("launch_blocking", class_cuda, &cuda_launch_blocking,
-                            _("Turn on/off CUDA kernel launch blocking (effective starting from the next run)"),
-                            _("Show whether CUDA kernel launches are blocking."),
-                            _("When turned on, CUDA kernel launches are blocking (effective starting from the next run."),
-                            cuda_set_launch_blocking,
-                            cuda_show_launch_blocking,
-                            &setcudalist, &showcudalist);
+  add_setshow_boolean_cmd ("launch_blocking", class_cuda, &cuda_launch_blocking,
+                           _("Turn on/off CUDA kernel launch blocking (effective starting from the next run)"),
+                           _("Show whether CUDA kernel launches are blocking."),
+                           _("When turned on, CUDA kernel launches are blocking (effective starting from the next run."),
+                           cuda_set_launch_blocking,
+                           cuda_show_launch_blocking,
+                           &setcudalist, &showcudalist);
 }
 
 bool
@@ -780,6 +984,81 @@ cuda_options_api_failures_hide(void)
   return (cuda_api_failures_option == cuda_api_failures_option_hide);
 }
 
+/*
+ * set cuda software_preemption
+ */
+int cuda_software_preemption_auto;
+enum auto_boolean cuda_software_preemption;
+
+static void
+cuda_show_cuda_software_preemption (struct ui_file *file, int from_tty,
+                         struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("Software preemption debugging is %s.\n"), value);
+}
+
+static void
+cuda_options_initialize_software_preemption ()
+{
+  cuda_software_preemption = AUTO_BOOLEAN_AUTO;
+
+  add_setshow_auto_boolean_cmd ("software_preemption", class_cuda, &cuda_software_preemption,
+                                _("Turn on/off CUDA software preemption debugging the next time the inferior application is run."),
+                                _("Show if CUDA software preemption debugging is turned on/off."),
+                                _("When enabled, upon suspending the inferior application, the debugger frees the GPU for use by other applications.  This option is currently limited to devices with compute capability sm_35."),
+                                NULL, cuda_show_cuda_software_preemption,
+                                &setcudalist, &showcudalist);
+}
+
+bool
+cuda_options_software_preemption (void)
+{
+  struct gdb_environ *env = current_inferior ()->environment;
+
+  /* Software preemption auto value is determined by the
+     CUDA_DEBUGGER_SOFTWARE_PREEMPTION env var */
+  cuda_software_preemption_auto = env && !!get_in_environ (env, "CUDA_DEBUGGER_SOFTWARE_PREEMPTION");
+
+  return cuda_software_preemption == AUTO_BOOLEAN_TRUE ||
+        (cuda_software_preemption == AUTO_BOOLEAN_AUTO && cuda_software_preemption_auto);
+
+  return cuda_software_preemption == AUTO_BOOLEAN_TRUE;
+}
+
+/*
+ * set cuda gpu_busy_check
+ */
+enum auto_boolean cuda_gpu_busy_check;
+
+static void
+cuda_show_cuda_gpu_busy_check (struct ui_file *file, int from_tty,
+                         struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("GPU busy check is %s.\n"), value);
+}
+
+static void
+cuda_options_initialize_gpu_busy_check ()
+{
+  cuda_gpu_busy_check = AUTO_BOOLEAN_TRUE;
+
+  add_setshow_auto_boolean_cmd ("gpu_busy_check", class_cuda, &cuda_gpu_busy_check,
+                                _("Turn on/off GPU busy check the next time the inferior application is run. (Mac only)"),
+                                _("Show if GPU busy check on Darwin is turned on/off."),
+                                _("When enabled, cuda-gdb will attempt to detect if any GPU to be used is already used for graphics."),
+                                NULL, cuda_show_cuda_gpu_busy_check,
+                                &setcudalist, &showcudalist);
+}
+
+bool
+cuda_options_gpu_busy_check (void)
+{
+  return cuda_gpu_busy_check == AUTO_BOOLEAN_TRUE ||
+         cuda_gpu_busy_check == AUTO_BOOLEAN_AUTO;
+}
+
+
+
 /*Initialization */
 void
 cuda_options_initialize ()
@@ -793,6 +1072,7 @@ cuda_options_initialize ()
   cuda_options_initialize_debug_textures ();
   cuda_options_initialize_debug_api ();
   cuda_options_initialize_debug_convenience_vars ();
+  cuda_options_initialize_debug_strict ();
   cuda_options_initialize_memcheck ();
   cuda_options_initialize_coalescing ();
   cuda_options_initialize_break_on_launch ();
@@ -804,4 +1084,7 @@ cuda_options_initialize ()
   cuda_options_initialize_launch_blocking ();
   cuda_options_initialize_thread_selection ();
   cuda_options_initialize_copyright ();
+  cuda_options_initialize_notify ();
+  cuda_options_initialize_software_preemption ();
+  cuda_options_initialize_gpu_busy_check ();
 }

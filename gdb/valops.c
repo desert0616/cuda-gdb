@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -1346,7 +1346,7 @@ value_repeat (struct value *arg1, int count)
 
   /* CUDA - memory segments */
   {
-    CORE_ADDR addr = value_address (arg1) + value_offset (arg1);
+    CORE_ADDR addr = value_address (arg1);
     struct type *type = TYPE_TARGET_TYPE (value_enclosing_type (val));
     int len = TYPE_LENGTH (value_enclosing_type (val));
     cuda_read_memory (addr, val, type, len);

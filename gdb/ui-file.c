@@ -49,6 +49,9 @@ struct ui_file
     ui_file_rewind_ftype *to_rewind;
     ui_file_put_ftype *to_put;
     void *to_data;
+
+    /* CUDA: Allow multiple redirections on streams */
+    struct ui_file *next;
   };
 int ui_file_magic;
 
@@ -169,6 +172,13 @@ ui_file_data (struct ui_file *file)
   return file->to_data;
 }
 
+/* CUDA: Allow multiple redirections on streams */
+struct ui_file *
+ui_file_next (struct ui_file *file)
+{
+  return file->next;
+}
+
 void
 gdb_flush (struct ui_file *file)
 {
@@ -264,6 +274,13 @@ set_ui_file_data (struct ui_file *file, void *data,
 {
   file->to_data = data;
   file->to_delete = delete;
+}
+
+/* CUDA: Allow multiple redirections on streams */
+void
+set_ui_file_next (struct ui_file *file, struct ui_file *next)
+{
+  file->next = next;
 }
 
 /* ui_file utility function for converting a ``struct ui_file'' into

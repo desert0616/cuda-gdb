@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -33,7 +33,6 @@
 #include "cuda-state.h"
 
 
-#define TEXTURE_DIM_MAX    4
 #define EIFMT_SVAL         4
 #define EIATTR_IMAGE_SLOT  2
 #define EF_CUDA_SM_MASK    0xff
@@ -231,7 +230,6 @@ cuda_find_tex_id (cuda_tex_map_t *mapping,
   struct symbol *symbol = NULL;
   struct minimal_symbol *msymbol;
   const char *name = NULL;
-  uint32_t dev, sm, wp;
   uint64_t pc;
 
   gdb_assert (texid);
@@ -244,8 +242,7 @@ cuda_find_tex_id (cuda_tex_map_t *mapping,
 
   /* Get the current kernel's name. We want the mangled name,
      cuda_current_kernel_name gives demangled. */
-  cuda_coords_get_current_physical (&dev, &sm, &wp, NULL);
-  kernel = warp_get_kernel (dev, sm, wp);
+  kernel = cuda_current_kernel ();
   pc = kernel_get_virt_code_base (kernel);
   msymbol = lookup_minimal_symbol_by_pc (pc);
   symbol = find_pc_function (pc);
@@ -254,7 +251,7 @@ cuda_find_tex_id (cuda_tex_map_t *mapping,
       SYMBOL_VALUE_ADDRESS (msymbol) > BLOCK_START (SYMBOL_BLOCK_VALUE (symbol)))
       name = SYMBOL_LINKAGE_NAME (msymbol);
   else if (symbol)
-      name = SYMBOL_LINKAGE_NAME (symbol);
+      name = SYMBOL_CUDA_NAME (symbol);
   else if (msymbol != NULL)
       name = SYMBOL_LINKAGE_NAME (msymbol);
 

@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -26,12 +26,18 @@ void     cuda_system_initialize                   (void);
 void     cuda_system_finalize                     (void);
 uint32_t cuda_system_get_num_devices              (void);
 uint32_t cuda_system_get_num_kernels              (void);
+uint32_t cuda_system_get_num_present_kernels      (void);
 void     cuda_system_resolve_breakpoints          (void);
-void     cuda_system_update_kernels               (void);
 void     cuda_system_cleanup_breakpoints          (void);
 void     cuda_system_cleanup_contexts             (void);
 bool     cuda_system_is_broken                    (cuda_clock_t);
 uint32_t cuda_system_get_suspended_devices_mask   (void);
+void     cuda_system_flush_disasm_cache           (void);
+
+void     cuda_system_set_device_spec    (uint32_t, uint32_t, uint32_t,
+                                         uint32_t, uint32_t, char *, char *);
+
+context_t cuda_system_find_context_by_addr     (CORE_ADDR addr);
 
 /* Device State */
 const char* device_get_device_type         (uint32_t dev_id);
@@ -40,16 +46,16 @@ uint32_t    device_get_num_sms             (uint32_t dev_id);
 uint32_t    device_get_num_warps           (uint32_t dev_id);
 uint32_t    device_get_num_lanes           (uint32_t dev_id);
 uint32_t    device_get_num_registers       (uint32_t dev_id);
+uint32_t    device_get_num_kernels         (uint32_t dev_id);
 
 bool        device_is_valid                (uint32_t dev_id);
 bool        device_is_any_context_present  (uint32_t dev_id);
-kernels_t   device_get_kernels             (uint32_t dev_id);
+bool        device_is_active_context       (uint32_t dev_id, context_t context);
 uint64_t    device_get_active_sms_mask     (uint32_t dev_id);
 contexts_t  device_get_contexts            (uint32_t dev_id);
 
 context_t   device_find_context_by_id      (uint32_t dev_id, uint64_t context_id);
 context_t   device_find_context_by_addr    (uint32_t dev_id, CORE_ADDR addr);
-kernel_t    device_find_kernel_by_grid_id  (uint32_t dev_id, uint32_t grid_id);
 
 void        device_print      (uint32_t dev_id);
 void        device_resume     (uint32_t dev_id);
@@ -67,7 +73,7 @@ bool     warp_is_valid                 (uint32_t dev_id, uint32_t sm_id, uint32_
 bool     warp_is_broken                (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 kernel_t warp_get_kernel               (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 CuDim3   warp_get_block_idx            (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
-uint32_t warp_get_grid_id              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
+uint64_t warp_get_grid_id              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 uint32_t warp_get_valid_lanes_mask     (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 uint32_t warp_get_active_lanes_mask    (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 uint32_t warp_get_divergent_lanes_mask (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
@@ -75,6 +81,8 @@ uint32_t warp_get_lowest_active_lane   (uint32_t dev_id, uint32_t sm_id, uint32_
 uint64_t warp_get_active_pc            (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 uint64_t warp_get_active_virtual_pc    (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 cuda_clock_t warp_get_timestamp        (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
+void     warp_set_grid_id              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint64_t grid_id);
+void     warp_set_block_idx            (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, CuDim3 *block_idx);
 
 void     warp_single_step              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint64_t *single_stepped_warp_mask);
 
@@ -93,4 +101,5 @@ uint64_t         lane_get_virtual_return_address (uint32_t dev_id, uint32_t sm_i
 cuda_clock_t     lane_get_timestamp (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,uint32_t ln_id);
 uint64_t         lane_get_memcheck_error_address (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t ln_id);
 ptxStorageKind   lane_get_memcheck_error_address_segment (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t ln_id);
+void             lane_set_thread_idx (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t ln_id, CuDim3 *thread_idx);
 #endif

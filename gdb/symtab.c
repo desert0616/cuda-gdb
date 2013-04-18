@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -657,6 +657,15 @@ symbol_set_names (struct general_symbol_info *gsymbol,
     gsymbol->language_specific.cplus_specific.demangled_name = NULL;
 }
 
+/* CUDA - set CUDA symbol name */
+void
+symbol_set_cuda_name (struct general_symbol_info *gsymbol,
+                      const char *name, int len, struct objfile *objfile)
+{
+  gsymbol->cuda_name = obstack_alloc (&objfile->objfile_obstack, len + 1);
+  memcpy (gsymbol->cuda_name, name, len);
+  gsymbol->cuda_name[len] = '\0';
+}
 /* Return the source code name of a symbol.  In languages where
    demangling is necessary, this is the demangled name.  */
 
@@ -2824,7 +2833,7 @@ output_source_filename (const char *name, int *first)
 
 /* A callback for map_partial_symbol_filenames.  */
 static void
-output_partial_symbol_filename (const char *fullname, const char *filename,
+output_partial_symbol_filename (const char *filename, const char *fullname,
 				void *data)
 {
   output_source_filename (fullname ? fullname : filename, data);

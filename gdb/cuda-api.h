@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -35,10 +35,14 @@ typedef enum {
 } cuda_api_state_t;
 
 /* Initialization */
+void cuda_api_handle_initialization_error (CUDBGResult res);
+void cuda_api_handle_get_api_error (CUDBGResult res);
+void cuda_api_handle_finalize_api_error (CUDBGResult res);
 int  cuda_api_get_api (void);
 int  cuda_api_initialize (void);
 void cuda_api_initialize_attach_stub (void);
 void cuda_api_finalize (void);
+void cuda_api_clear_state (void);
 cuda_api_state_t cuda_api_get_state (void);
 
 /* Attach support */
@@ -55,9 +59,10 @@ void cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t
 /* Breakpoints */
 bool cuda_api_set_breakpoint (uint32_t dev, uint64_t addr);
 bool cuda_api_unset_breakpoint (uint32_t dev, uint64_t addr);
+void cuda_api_get_adjusted_code_address (uint32_t dev, uint64_t addr, uint64_t *adjusted_addr, CUDBGAdjAddrAction adj_action);
 
 /* Device State Inspection */
-void cuda_api_read_grid_id (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *grid_id);
+void cuda_api_read_grid_id (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *grid_id);
 void cuda_api_read_block_idx (uint32_t dev, uint32_t sm, uint32_t wp, CuDim3 *blockIdx);
 void cuda_api_read_thread_idx (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, CuDim3 *threadIdx);
 void cuda_api_read_broken_warps (uint32_t dev, uint32_t sm, uint64_t *brokenWarpsMask);
@@ -95,7 +100,8 @@ void cuda_api_get_block_dim (uint32_t dev, uint32_t sm, uint32_t wp, CuDim3 *blo
 void cuda_api_get_tid (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *tid);
 void cuda_api_get_elf_image (uint32_t dev, uint32_t sm, uint32_t wp, bool relocated, void **elfImage, uint64_t *size);
 void cuda_api_get_blocking (uint32_t dev, uint32_t sm, uint32_t wp, bool *blocking);
-void cuda_api_get_grid_status (uint32_t dev, uint32_t grid_id, CUDBGGridStatus *status);
+void cuda_api_get_grid_status (uint32_t dev, uint64_t grid_id, CUDBGGridStatus *status);
+void cuda_api_get_grid_info (uint32_t dev, uint64_t grid_id, CUDBGGridInfo *info);
 
 /* Device Properties */
 void cuda_api_get_device_type (uint32_t dev, char *buf, uint32_t sz);
@@ -112,10 +118,12 @@ void cuda_api_is_device_code_address (uint64_t addr, bool *is_device_address);
 bool cuda_api_lookup_device_code_symbol (char *name, uint64_t *addr);
 
 /* Events */
+void cuda_api_handle_set_callback_api_error (CUDBGResult res);
 void cuda_api_set_notify_new_event_callback (CUDBGNotifyNewEventCallback callback);
 void cuda_api_acknowledge_sync_events (void);
 void cuda_api_get_next_sync_event (CUDBGEvent *event);
 void cuda_api_get_next_async_event (CUDBGEvent *event);
+void cuda_api_set_async_launch_notifications (bool);
 
 /* Memcheck related */
 void cuda_api_memcheck_read_error_address(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint64_t *address, ptxStorageKind *storage);

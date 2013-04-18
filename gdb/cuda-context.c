@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -49,7 +49,6 @@ void
 context_delete (context_t this)
 {
   uint32_t dev_id;
-  kernels_t kernels;
 
   gdb_assert (this);
   gdb_assert (get_current_context () != this);
@@ -58,9 +57,8 @@ context_delete (context_t this)
               this->dev_id, this->context_id);
 
   dev_id = context_get_device_id(this);
-  kernels = device_get_kernels(dev_id);
 
-  modules_delete (context_get_modules (this), kernels);
+  modules_delete (context_get_modules (this));
   xfree (this);
 }
 
@@ -191,6 +189,7 @@ contexts_delete (contexts_t this)
   while (this->list)
     {
       context = context_remove_context_from_list (NULL, &this->list);
+      this->list_size--;
       context_delete (context);
     }
 
@@ -229,6 +228,7 @@ contexts_add_context (contexts_t this, context_t context)
 
   /* Add the element at the head of the list */
   this->list = elt;
+  this->list_size++;
 }
 
 static list_elt_t * 
@@ -270,6 +270,7 @@ contexts_remove_context (contexts_t this, context_t context)
 
   /* Remove context from the list of all device contexts */
   context_remove_context_from_list (context, &this->list);
+  this->list_size--;
 
   return context;
 }
@@ -407,6 +408,19 @@ contexts_is_any_context_present (contexts_t this)
   return (NULL != this->list);
 }
 
+bool
+contexts_is_active_context (contexts_t this, context_t context)
+{
+  uint32_t ctxtid;
+  gdb_assert (this);
+
+  for (ctxtid = 0; ctxtid < this->num_ctxtids; ++ctxtid)
+    if (context == this->stacks[ctxtid]->context)
+      return true;
+
+  return false;
+}
+
 void
 contexts_resolve_breakpoints (contexts_t this)
 {
@@ -449,6 +463,11 @@ contexts_cleanup_breakpoints (contexts_t this)
     }
 }
 
+uint32_t
+contexts_get_list_size (contexts_t this)
+{
+  return this->list_size;
+}
 
 /******************************************************************************
  *

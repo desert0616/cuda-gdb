@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -31,7 +31,7 @@ elf_image_t module_get_elf_image  (module_t module);
 
 
 modules_t  modules_new    (void);
-void       modules_delete (modules_t modules, kernels_t kernels);
+void       modules_delete (modules_t modules);
 void       modules_add    (modules_t modules, module_t module);
 void       modules_print  (modules_t modules);
 

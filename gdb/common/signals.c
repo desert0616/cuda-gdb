@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -245,6 +245,7 @@ static const struct {
   {"CUDA_EXCEPTION_11", "Lane Misaligned Address"},        /* cuda memcheck (future) */
   {"CUDA_EXCEPTION_12", "Warp Assert"},                    /* device side assert */
   {"CUDA_EXCEPTION_13", "Lane Syscall Error"},
+  {"CUDA_EXCEPTION_14", "Warp Illegal Address"},
 
   /* Last entry, used to check whether the table is the right size.  */
   {NULL, "TARGET_SIGNAL_MAGIC"}

@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -56,7 +56,7 @@ cuda_coords_set_current (cuda_coords_t *c)
 {
   kernel_t kernel;
   uint64_t kernelId;
-  uint32_t gridId;
+  uint64_t gridId;
   CuDim3 blockIdx;
   CuDim3 threadIdx;
 
@@ -87,10 +87,8 @@ cuda_coords_set_current (cuda_coords_t *c)
 
   current_coords = *c;
 
-  cuda_update_convenience_variables ();
-
   cuda_trace ("focus set to dev %u sm %u wp %u ln %u "
-              "kernel %"PRIu64" grid %u, block (%u,%u,%u), thread (%u,%u,%u)",
+              "kernel %"PRIu64" grid %"PRId64", block (%u,%u,%u), thread (%u,%u,%u)",
               c->dev, c->sm, c->wp, c->ln, c->kernelId, c->gridId,
               c->blockIdx.x, c->blockIdx.y, c->blockIdx.z,
               c->threadIdx.x, c->threadIdx.y, c->threadIdx.z);
@@ -99,7 +97,7 @@ cuda_coords_set_current (cuda_coords_t *c)
 }
 
 int
-cuda_coords_set_current_logical (uint64_t kernelId, uint32_t gridId, CuDim3 blockIdx, CuDim3 threadIdx)
+cuda_coords_set_current_logical (uint64_t kernelId, uint64_t gridId, CuDim3 blockIdx, CuDim3 threadIdx)
 {
   cuda_coords_t c;
 
@@ -154,7 +152,7 @@ cuda_coords_get_current (cuda_coords_t *coords)
 }
 
 int
-cuda_coords_get_current_logical (uint64_t *kernelId, uint32_t *gridId, CuDim3 *blockIdx, CuDim3 *threadIdx)
+cuda_coords_get_current_logical (uint64_t *kernelId, uint64_t *gridId, CuDim3 *blockIdx, CuDim3 *threadIdx)
 {
   if (!current_coords.valid)
     return 1;
@@ -185,6 +183,14 @@ cuda_coords_get_current_physical (uint32_t *dev, uint32_t *sm, uint32_t *wp, uin
   if (ln)
     *ln = current_coords.ln;
   return 0;
+}
+
+bool
+cuda_coords_is_current_logical (cuda_coords_t *c)
+{
+  return (c->valid &&
+          current_coords.valid &&
+          !cuda_coords_compare_logical (c, &current_coords));
 }
 
 bool
@@ -683,9 +689,8 @@ cuda_coords_check_fully_defined (cuda_coords_t *coords, bool accept_invalid,
 static void
 cuda_coords_initialized_wished_coords (cuda_coords_t *wished)
 {
-  cuda_coords_t current;
-  kernels_t     kernels;
-  kernel_t      kernel;
+  uint32_t  dev_id;
+  kernel_t  kernel;
 
   /* (gridId, blockIdx, threadIdx) is not enough to identify a single thread.
      The complete representation is (kernelId, blockIdx, threadIdx). But there
@@ -698,9 +703,8 @@ cuda_coords_initialized_wished_coords (cuda_coords_t *wished)
     {
       if (cuda_focus_is_device ())
         {
-          cuda_coords_get_current (&current);
-          kernels = device_get_kernels (current.dev);
-          kernel  = kernels_find_kernel_by_grid_id (kernels, wished->gridId);
+          dev_id = cuda_current_device ();
+          kernel  = kernels_find_kernel_by_grid_id (dev_id, wished->gridId);
           wished->kernelId = kernel_get_id (kernel);
         }
       else
@@ -716,7 +720,7 @@ cuda_coords_find_valid_exact (cuda_coords_t wished, cuda_coords_t *found, cuda_s
   uint32_t wp = wished.wp;
   uint32_t ln = wished.ln;
   uint64_t kernelId;
-  uint32_t gridId;
+  uint64_t gridId;
   CuDim3 blockIdx;
   CuDim3 threadIdx;
   bool at_breakpoint = select_mask & CUDA_SELECT_BKPT;
@@ -900,7 +904,9 @@ cuda_coords_update_current (bool breakpoint_hit, bool exception_hit)
       cuda_trace ("could not find exact valid coordinates, trying brute force");
       cuda_coords_find_valid (current_coords, coords, select_mask);
 
-      if (cuda_options_thread_selection_logical () && coords[CK_LOWEST_LOGICAL].valid)
+      if (cuda_options_software_preemption () && coords[CK_EXACT_LOGICAL].valid)
+        kind = CK_EXACT_LOGICAL;
+      else if (cuda_options_thread_selection_logical () && coords[CK_LOWEST_LOGICAL].valid)
         kind = CK_LOWEST_LOGICAL;
       else if (cuda_options_thread_selection_physical () && coords[CK_LOWEST_PHYSICAL].valid)
         kind = CK_LOWEST_PHYSICAL;
@@ -1109,3 +1115,16 @@ cuda_current_lane (void)
   return ln;
 }
 
+kernel_t
+cuda_current_kernel (void)
+{
+  uint32_t dev, sm, wp;
+  kernel_t kernel;
+
+  if (!cuda_focus_is_device ())
+    return NULL;
+
+  cuda_coords_get_current_physical (&dev, &sm, &wp, NULL);
+  kernel = warp_get_kernel (dev, sm, wp);
+  return kernel;
+}

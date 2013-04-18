@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -19,7 +19,7 @@
 
 #include "defs.h"
 #include "inferior.h"
-#ifdef __linux__
+#if defined(__linux__) && defined(GDB_NM_FILE)
 #include "linux-nat.h"
 #endif
 #include "source.h"
@@ -34,6 +34,12 @@
 #include "cuda-state.h"
 #include "cuda-tdep.h"
 #include "cuda-modules.h"
+#include "cuda-elf-image.h"
+#include "cuda-options.h"
+
+#ifdef __APPLE__
+bool cuda_darwin_compute_gpu_used_for_graphics (void);
+#endif
 
 static void
 cuda_event_create_context (uint32_t dev_id, uint64_t context_id, uint32_t tid)
@@ -56,6 +62,13 @@ cuda_event_create_context (uint32_t dev_id, uint64_t context_id, uint32_t tid)
   if (cuda_options_show_context_events ())
     printf_unfiltered (_("[Context Create of context 0x%"PRIx64" on Device %u]\n"),
                        context_id, dev_id);
+
+#ifdef __APPLE__
+  if (cuda_options_gpu_busy_check() && cuda_darwin_compute_gpu_used_for_graphics())
+    error (_("A device about to be used for compute may already be in use for graphics.\n"
+             "This is an unsupported scenario. Further debugging might be unsafe. Aborting.\n"
+             "Disable the ‘cuda gpu_busy_check’ option to bypass the checking mechanism." ));
+#endif
 }
 
 static void
@@ -142,6 +155,9 @@ cuda_event_pop_context (uint32_t dev_id, uint64_t context_id, uint32_t tid)
                        context_id, dev_id);
 }
 
+/* In native debugging, void *elf_image points to memory. In remote debugging, it
+   points to a string which is ELF image file path in the temp folder. Both cases 
+   will be handled by cuda_elf_image_new() differently. */
 static void
 cuda_event_load_elf_image (uint32_t dev_id, uint64_t context_id, uint64_t module_id,
                            void *elf_image, uint64_t elf_image_size)
@@ -172,7 +188,7 @@ cuda_event_load_elf_image (uint32_t dev_id, uint64_t context_id, uint64_t module
   cuda_resolve_breakpoints (module_get_elf_image (module));
 }
 
-#ifdef __linux__
+#if defined(__linux__) && defined(GDB_NM_FILE)
 static int
 find_lwp_callback (struct lwp_info *lp, void *data)
 {
@@ -186,24 +202,26 @@ find_lwp_callback (struct lwp_info *lp, void *data)
 
 static void
 cuda_event_kernel_ready (uint32_t dev_id, uint64_t context_id, uint64_t module_id,
-                         uint32_t grid_id, uint32_t tid, uint64_t virt_code_base,
-                         CuDim3 grid_dim, CuDim3 block_dim, CUDBGKernelType type)
+                         uint64_t grid_id, uint32_t tid, uint64_t virt_code_base,
+                         CuDim3 grid_dim, CuDim3 block_dim, CUDBGKernelType type,
+                         uint64_t parent_grid_id)
 {
-  kernels_t        kernels;
   ptid_t           previous_ptid = inferior_ptid;
-#if __linux__
+#if defined(__linux__) && defined(GDB_NM_FILE)
   struct lwp_info *lp            = NULL;
 #endif
   struct gdbarch  *gdbarch       = get_current_arch ();
 
   cuda_trace ("CUDBG_EVENT_KERNEL_READY dev_id=%u context=%"PRIx64
-              " module=%"PRIx64" grid_id=%u tid=%u type=%u\n",
-              dev_id, context_id, module_id, grid_id, tid, type);
+              " module=%"PRIx64" grid_id=%"PRIu64" tid=%u type=%u"
+              " parent_grid_id=%"PRIu64"\n",
+              dev_id, context_id, module_id, grid_id, tid, type,
+              parent_grid_id);
 
   if (tid == ~0U)
     error (_("A CUDA event reported an invalid thread id."));
 
-#if __linux__
+#if defined(__linux__) && defined(GDB_NM_FILE)
   //FIXME - CUDA MAC OS X
   lp = iterate_over_lwps (inferior_ptid, find_lwp_callback, &tid);
 
@@ -214,9 +232,8 @@ cuda_event_kernel_ready (uint32_t dev_id, uint64_t context_id, uint64_t module_i
     }
 #endif
 
-  kernels = device_get_kernels (dev_id);
-  kernels_start_kernel (kernels, grid_id, virt_code_base, context_id,
-                        module_id, grid_dim, block_dim, type);
+  kernels_start_kernel (dev_id, grid_id, virt_code_base, context_id,
+                        module_id, grid_dim, block_dim, type, parent_grid_id);
 
   if ((type == CUDBG_KNL_TYPE_APPLICATION &&
        cuda_options_break_on_launch_application ()) ||
@@ -224,28 +241,22 @@ cuda_event_kernel_ready (uint32_t dev_id, uint64_t context_id, uint64_t module_i
        cuda_options_break_on_launch_system ()))
     cuda_create_auto_breakpoint (virt_code_base, context_id);
 
-#if __linux__
+#if defined(__linux__) && defined(GDB_NM_FILE)
   if (lp)
     inferior_ptid = previous_ptid;
 #endif
 }
 
 static void
-cuda_event_kernel_finished (uint32_t dev_id, uint32_t grid_id)
+cuda_event_kernel_finished (uint32_t dev_id, uint64_t grid_id)
 {
-  kernels_t kernels;
   kernel_t  kernel;
 
-  cuda_trace ("CUDBG_EVENT_KERNEL_FINISHED dev_id=%u grid_id=%u\n",
+  cuda_trace ("CUDBG_EVENT_KERNEL_FINISHED dev_id=%u grid_id=%"PRIu64"\n",
               dev_id, grid_id);
 
-  /* No kernel if cuda_kernel_update already captured the kernel termination. */
-  kernels = device_get_kernels (dev_id);
-  kernel  = kernels_find_kernel_by_grid_id (kernels, grid_id);
-  if (!kernel)
-    return;
-
-  kernels_terminate_kernel (kernels, kernel);
+  kernel = kernels_find_kernel_by_grid_id (dev_id, grid_id);
+  kernels_terminate_kernel (kernel);
 
   clear_current_source_symtab_and_line ();
   clear_displays ();
@@ -270,31 +281,23 @@ cuda_event_timeout (void)
   cuda_trace ("CUDBG_EVENT_TIMEOUT\n");
 }
 
-static void
+void
 cuda_event_post_process (void)
 {
+
   /* Launch (kernel ready) events may require additional
      breakpoint handling (via remove/insert). */
-  remove_breakpoints ();
-  insert_breakpoints ();
+  cuda_remove_breakpoints ();
+  cuda_insert_breakpoints ();
+
+  if (cuda_options_async_events_needs_updating ())
+    cuda_api_set_async_launch_notifications (
+         cuda_options_show_kernel_events_async ());
 }
 
 void
 cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind)
 {
-  uint32_t dev_id;
-  uint32_t grid_id;
-  uint32_t tid;
-  uint64_t virt_code_base;
-  uint64_t context_id;
-  uint64_t module_id;
-  uint64_t elf_image_size;
-  void    *elf_image;
-  CuDim3   grid_dim;
-  CuDim3   block_dim;
-  CUDBGKernelType type;
-  CUDBGResult errorType;
-
   gdb_assert (event);
 
   /* Step 1:  Consume all events (synchronous and asynchronous).
@@ -303,7 +306,31 @@ cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind)
   for (; event->kind != CUDBG_EVENT_INVALID;
        (kind == CUDA_EVENT_SYNC) ? cuda_api_get_next_sync_event (event) :
                                    cuda_api_get_next_async_event (event))
-    {
+    cuda_process_event (event);
+
+  /* Step 2:  Post-process events after they've all been consumed. */
+  cuda_event_post_process ();
+}
+
+void
+cuda_process_event (CUDBGEvent *event)
+{
+  uint32_t dev_id;
+  uint64_t grid_id;
+  uint32_t tid;
+  uint64_t virt_code_base;
+  uint64_t context_id;
+  uint64_t module_id;
+  uint64_t elf_image_size;
+  uint64_t parent_grid_id;
+  void    *elf_image;
+  CuDim3   grid_dim;
+  CuDim3   block_dim;
+  CUDBGKernelType type;
+  CUDBGResult errorType;
+
+  gdb_assert (event);
+
       switch (event->kind)
         {
         case CUDBG_EVENT_ELF_IMAGE_LOADED:
@@ -322,21 +349,22 @@ cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind)
             dev_id         = event->cases.kernelReady.dev;
             context_id     = event->cases.kernelReady.context;
             module_id      = event->cases.kernelReady.module;
-            grid_id        = event->cases.kernelReady.gridId;
+            grid_id        = event->cases.kernelReady.gridId64;
             tid            = event->cases.kernelReady.tid;
             virt_code_base = event->cases.kernelReady.functionEntry;
             grid_dim       = event->cases.kernelReady.gridDim;
             block_dim      = event->cases.kernelReady.blockDim;
             type           = event->cases.kernelReady.type;
+            parent_grid_id = event->cases.kernelReady.parentGridId;
             cuda_event_kernel_ready (dev_id, context_id, module_id, grid_id,
                                      tid, virt_code_base, grid_dim, block_dim,
-                                     type);
+                                     type, parent_grid_id);
             break;
           }
         case CUDBG_EVENT_KERNEL_FINISHED:
           {
             dev_id  = event->cases.kernelFinished.dev;
-            grid_id = event->cases.kernelFinished.gridId;
+            grid_id = event->cases.kernelFinished.gridId64;
             cuda_event_kernel_finished (dev_id, grid_id);
             break;
           }
@@ -396,9 +424,5 @@ cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind)
         default:
           gdb_assert (0);
         }
-    }
-
-  /* Step 2:  Post-process events after they've all been consumed. */
-  cuda_event_post_process ();
 }
 

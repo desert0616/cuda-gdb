@@ -20,7 +20,7 @@
 */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -71,6 +71,7 @@
 #include <sys/proc.h>
 #include <libproc.h>
 #include <sys/syscall.h>
+#include <spawn.h>
 
 #include <mach/mach_error.h>
 #include <mach/mach_vm.h>
@@ -1426,6 +1427,9 @@ darwin_attach_pid (struct inferior *inf)
   push_target (darwin_ops);
 }
 
+
+
+
 static void
 darwin_init_thread_list (struct inferior *inf)
 {
@@ -1506,13 +1510,48 @@ darwin_ptrace_him (int pid)
   startup_inferior (START_INFERIOR_TRAPS_EXPECTED);
 }
 
+/* CUDA - backport of darwin_execvp from gdb-7.4 */
+static void
+darwin_execvp (const char *file, char * const argv[], char * const env[])
+{
+  posix_spawnattr_t attr;
+  short ps_flags = 0;
+  int res;
+
+  res = posix_spawnattr_init (&attr);
+  if (res != 0)
+    {
+      fprintf_unfiltered
+        (gdb_stderr, "Cannot initialize attribute for posix_spawn\n");
+      return;
+    }
+
+  /* Do like execve: replace the image.  */
+  ps_flags = POSIX_SPAWN_SETEXEC;
+
+  /* Disable ASLR.  The constant doesn't look to be available outside the
+     kernel include files.  */
+#ifndef _POSIX_SPAWN_DISABLE_ASLR
+#define _POSIX_SPAWN_DISABLE_ASLR 0x0100
+#endif
+  ps_flags |= _POSIX_SPAWN_DISABLE_ASLR;
+  res = posix_spawnattr_setflags (&attr, ps_flags);
+  if (res != 0)
+    {
+      fprintf_unfiltered (gdb_stderr, "Cannot set posix_spawn flags\n");
+      return;
+    }
+
+  posix_spawnp (NULL, argv[0], NULL, &attr, argv, env);
+}
+
 static void
 darwin_create_inferior (struct target_ops *ops, char *exec_file,
 			char *allargs, char **env, int from_tty)
 {
   /* Do the hard work.  */
   fork_inferior (exec_file, allargs, env, darwin_ptrace_me, darwin_ptrace_him,
-		 darwin_pre_ptrace, NULL);
+		 darwin_pre_ptrace, NULL, darwin_execvp);
 
   /* Return now in case of error.  */
   if (ptid_equal (inferior_ptid, null_ptid))

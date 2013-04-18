@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -26,6 +26,8 @@
 #include "cuda-iterator.h"
 #include "cuda-state.h"
 #include "cuda-utils.h"
+#include "cuda-packet-manager.h"
+#include "cuda-options.h"
 
 typedef struct {
   bool thread_idx_p;
@@ -53,7 +55,7 @@ typedef struct {
   bool     broken;
   CuDim3   block_idx;
   kernel_t kernel;
-  uint32_t grid_id;
+  uint64_t grid_id;
   uint32_t valid_lanes_mask;
   uint32_t active_lanes_mask;
   cuda_clock_t     timestamp;
@@ -86,7 +88,6 @@ typedef struct {
   uint32_t num_lanes;
   uint32_t num_registers;
   sm_state_t sm[CUDBG_MAX_SMS];
-  kernels_t kernels;
   contexts_t contexts;    // state for contexts associated with this device
 } device_state_t;
 
@@ -97,15 +98,15 @@ typedef struct {
   uint32_t suspended_devices_mask;
 } cuda_system_t;
 
-#define CACHED true // set to 0 to disable caching
+const bool CACHED = true; // set to false to disable caching
 typedef enum { RECURSIVE, NON_RECURSIVE } recursion_t;
 
 static void device_initialize          (uint32_t dev_id);
 static void device_finalize            (uint32_t dev_id);
-static void device_update_kernels      (uint32_t dev_id);
 static void device_cleanup_contexts    (uint32_t dev_id);
 static void device_cleanup_breakpoints (uint32_t dev_id);
 static void device_resolve_breakpoints (uint32_t dev_id);
+static void device_flush_disasm_cache  (uint32_t dev_id);
 static void sm_invalidate   (uint32_t dev_id, uint32_t sm_id, recursion_t);
 static void warp_invalidate (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
 static void lane_invalidate (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t ln_id);
@@ -119,7 +120,6 @@ static void lane_invalidate (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, ui
 
 static cuda_system_t cuda_system_info;
 
-
 void
 cuda_system_initialize (void)
 {
@@ -132,6 +132,7 @@ cuda_system_initialize (void)
 
   for (dev_id = 0; dev_id < cuda_system_get_num_devices (); ++dev_id)
      device_initialize (dev_id);
+  cuda_options_force_set_async_events_update ();
 }
 
 void
@@ -146,6 +147,35 @@ cuda_system_finalize (void)
      device_finalize (dev_id);
 
   memset (&cuda_system_info, 0, sizeof cuda_system_info);
+}
+
+void
+cuda_system_set_device_spec (uint32_t dev_id, uint32_t num_sms,
+                             uint32_t num_warps, uint32_t num_lanes,
+                             uint32_t num_registers, char *dev_type,
+                             char *sm_type)
+{
+  device_state_t *dev;
+
+  gdb_assert (cuda_remote);
+  gdb_assert (num_sms <= CUDBG_MAX_SMS);
+  gdb_assert (num_warps <= CUDBG_MAX_WARPS);
+  gdb_assert (num_lanes <= CUDBG_MAX_LANES);
+
+  dev = &cuda_system_info.dev[dev_id];
+  dev->num_sms         = num_sms;
+  dev->num_warps       = num_warps;
+  dev->num_lanes       = num_lanes;
+  dev->num_registers   = num_registers;
+  strcpy (dev->dev_type, dev_type);
+  strcpy (dev->sm_type, sm_type);
+
+  dev->num_sms_p       = CACHED;
+  dev->num_warps_p     = CACHED;
+  dev->num_lanes_p     = CACHED;
+  dev->num_registers_p = CACHED;
+  dev->dev_type_p      = CACHED;
+  dev->sm_type_p       = CACHED;
 }
 
 uint32_t
@@ -165,31 +195,19 @@ cuda_system_get_num_devices (void)
 }
 
 uint32_t
-cuda_system_get_num_kernels (void)
+cuda_system_get_num_present_kernels (void)
 {
-  uint32_t dev_id;
-  uint32_t kernel_count = 0;
+  kernel_t kernel;
+  uint32_t num_present_kernel = 0;
 
   if (!cuda_initialized)
     return 0;
 
-  for (dev_id = 0; dev_id < cuda_system_get_num_devices (); ++dev_id)
-    kernel_count += kernels_get_num_present_kernels (device_get_kernels (dev_id));
+  for (kernel = kernels_get_first_kernel (); kernel; kernel = kernels_get_next_kernel (kernel))
+    if (kernel_is_present (kernel))
+      ++num_present_kernel;
 
-  return kernel_count;
-}
-
-void
-cuda_system_update_kernels (void)
-{
-  uint32_t dev_id;
-
-  cuda_trace ("system: update kernels");
-
-  for (dev_id = 0; dev_id < cuda_system_get_num_devices (); ++dev_id)
-    {
-      device_update_kernels (dev_id);
-    }
+  return num_present_kernel;
 }
 
 /* Brute-force function to resolve all the CUDA breakpoints that can be resolved
@@ -245,6 +263,17 @@ cuda_system_cleanup_breakpoints (void)
     device_cleanup_breakpoints (dev_id);
 }
 
+void
+cuda_system_flush_disasm_cache (void)
+{
+  uint32_t dev_id;
+
+  cuda_trace ("system: flush disassembly cache");
+
+  for (dev_id = 0; dev_id < cuda_system_get_num_devices (); ++dev_id)
+    device_flush_disasm_cache (dev_id);
+}
+
 bool
 cuda_system_is_broken (cuda_clock_t clock)
 {
@@ -282,6 +311,22 @@ cuda_system_get_suspended_devices_mask (void)
   return cuda_system_info.suspended_devices_mask;
 }
 
+context_t
+cuda_system_find_context_by_addr (CORE_ADDR addr)
+{
+  uint32_t  dev_id;
+  context_t context;
+
+  for (dev_id = 0; dev_id < cuda_system_get_num_devices (); ++dev_id)
+    {
+      context = device_find_context_by_addr (dev_id, addr);
+      if (context)
+        return context;
+    }
+
+  return NULL;
+}
+
 /******************************************************************************
  *
  *                                  Device
@@ -297,7 +342,6 @@ device_initialize (uint32_t dev_id)
   gdb_assert (dev_id < cuda_system_get_num_devices ());
 
   dev = &cuda_system_info.dev[dev_id];
-  dev->kernels = kernels_new (dev_id);
   dev->contexts = contexts_new ();
 }
 
@@ -310,23 +354,19 @@ device_finalize (uint32_t dev_id)
   gdb_assert (dev_id < cuda_system_get_num_devices ());
 
   dev = &cuda_system_info.dev[dev_id];
-  kernels_delete (dev->kernels);
 }
 
 static void
-device_update_kernels (uint32_t dev_id)
+device_invalidate_kernels (uint32_t dev_id)
 {
   device_state_t *dev;
+  kernel_t        kernel;
 
-  cuda_trace ("device %u: update kernels", dev_id);
+  cuda_trace ("device %u: invalidate kernels", dev_id);
   gdb_assert (dev_id < cuda_system_get_num_devices ());
 
-  if (!device_is_any_context_present (dev_id))
-    return;
-
-  dev = &cuda_system_info.dev[dev_id];
-
-  kernels_update_kernels (dev->kernels);
+  for (kernel = kernels_get_first_kernel (); kernel; kernel = kernels_get_next_kernel (kernel))
+    kernel_invalidate (kernel);
 }
 
 void
@@ -340,6 +380,8 @@ device_invalidate (uint32_t dev_id)
 
   for (sm_id = 0; sm_id < device_get_num_sms (dev_id); ++sm_id)
     sm_invalidate (dev_id, sm_id, RECURSIVE);
+
+  device_invalidate_kernels(dev_id);
 
   dev = &cuda_system_info.dev[dev_id];
   dev->valid_p   = false;
@@ -374,6 +416,19 @@ device_cleanup_breakpoints (uint32_t dev_id)
   dev = &cuda_system_info.dev[dev_id];
   contexts = device_get_contexts (dev_id);
   contexts_cleanup_breakpoints (contexts);
+}
+
+static void
+device_flush_disasm_cache (uint32_t dev_id)
+{
+  device_state_t *dev;
+  kernel_t        kernel;
+
+  cuda_trace ("device %u: flush disassembly cache", dev_id);
+  gdb_assert (dev_id < cuda_system_get_num_devices ());
+
+  for (kernel = kernels_get_first_kernel (); kernel; kernel = kernels_get_next_kernel (kernel))
+    kernel_flush_disasm_cache (kernel);
 }
 
 static void
@@ -504,6 +559,21 @@ device_get_num_registers (uint32_t dev_id)
   return dev->num_registers;
 }
 
+uint32_t
+device_get_num_kernels (uint32_t dev_id)
+{
+  kernel_t kernel;
+  uint32_t num_kernels = 0;
+
+  gdb_assert (dev_id < cuda_system_get_num_devices ());
+
+  for (kernel = kernels_get_first_kernel (); kernel; kernel = kernels_get_next_kernel (kernel))
+    if (kernel_get_dev_id (kernel) == dev_id)
+      ++num_kernels;
+
+  return num_kernels;
+}
+
 bool
 device_is_any_context_present (uint32_t dev_id)
 {
@@ -514,6 +584,17 @@ device_is_any_context_present (uint32_t dev_id)
   contexts = device_get_contexts (dev_id);
 
   return contexts_is_any_context_present (contexts);
+}
+
+bool
+device_is_active_context (uint32_t dev_id, context_t context)
+{
+  contexts_t contexts;
+
+  gdb_assert (dev_id < cuda_system_get_num_devices ());
+  contexts = device_get_contexts (dev_id);
+
+  return contexts_is_active_context (contexts, context);
 }
 
 bool
@@ -544,17 +625,6 @@ device_is_valid (uint32_t dev_id)
 
   dev->valid_p = CACHED;
   return dev->valid;
-}
-
-kernels_t
-device_get_kernels (uint32_t dev_id)
-{
-  device_state_t *dev;
-
-  gdb_assert (dev_id < cuda_system_get_num_devices ());
-
-  dev = &cuda_system_info.dev[dev_id];
-  return dev->kernels;
 }
 
 uint64_t
@@ -624,22 +694,6 @@ device_find_context_by_addr (uint32_t dev_id, CORE_ADDR addr)
     return context;
 
   return NULL;
-}
-
-kernel_t
-device_find_kernel_by_grid_id (uint32_t dev_id, uint32_t grid_id)
-{
-  device_state_t *dev;
-  kernels_t       kernels;
-  kernel_t        kernel;
-
-  gdb_assert (dev_id < cuda_system_get_num_devices ());
-
-  dev     = &cuda_system_info.dev[dev_id];
-  kernels = dev->kernels;
-  kernel  = kernels_find_kernel_by_grid_id (kernels, grid_id);
-
-  return kernel;
 }
 
 void
@@ -837,16 +891,23 @@ warp_single_step (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,
   *single_stepped_warp_mask = 0ULL;
   cuda_api_single_step_warp (dev_id, sm_id, wp_id, single_stepped_warp_mask);
 
-  if (*single_stepped_warp_mask & ~(1ULL << wp_id))
-    warning ("Warp(s) other than the current warp had to be single-stepped.");
+  if (cuda_options_software_preemption ())
+    device_invalidate (dev_id);
+  else
+    {
+      if (*single_stepped_warp_mask & ~(1ULL << wp_id))
+        {
+          warning ("Warp(s) other than the current warp had to be single-stepped.");
+          device_invalidate (dev_id);
+        }
+      /* invalidate the cache for the warps that have been single-stepped. */
+      for (i = 0; i < device_get_num_warps (dev_id); ++i)
+        if ((1ULL << i) & *single_stepped_warp_mask)
+          warp_invalidate (dev_id, sm_id, i);
 
-  /* invalidate the cache for the warps that have been single-stepped. */
-  for (i = 0; i < device_get_num_warps (dev_id); ++i)
-    if ((1ULL << i) & *single_stepped_warp_mask)
-      warp_invalidate (dev_id, sm_id, i);
-
-  /* must invalidate the SM since that's where the warp valid mask lives */
-  sm_invalidate (dev_id, sm_id, NON_RECURSIVE);
+      /* must invalidate the SM since that's where the warp valid mask lives */
+      sm_invalidate (dev_id, sm_id, NON_RECURSIVE);
+    }
 }
 
 bool
@@ -881,17 +942,24 @@ warp_is_broken (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
   return broken;
 }
 
-uint32_t
+uint64_t
 warp_get_grid_id (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
 {
   warp_state_t *wp;
-  uint32_t grid_id;
+  uint64_t grid_id;
 
   wp = &cuda_system_info.dev[dev_id].sm[sm_id].wp[wp_id];
 
   gdb_assert (dev_id < cuda_system_get_num_devices ());
   gdb_assert (sm_id < device_get_num_sms (dev_id));
   gdb_assert (wp_id < device_get_num_warps (dev_id));
+
+  if (cuda_remote && !(wp->grid_id_p)
+      && sm_is_valid (dev_id, sm_id))
+    cuda_remote_update_grid_id_in_sm (dev_id, sm_id);
+
+  if (wp->grid_id_p)
+    return wp->grid_id;
 
   cuda_api_read_grid_id (dev_id, sm_id, wp_id, &grid_id);
 
@@ -905,8 +973,7 @@ kernel_t
 warp_get_kernel (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
 {
   warp_state_t *wp;
-  uint32_t      grid_id;
-  kernels_t     kernels;
+  uint64_t      grid_id;
   kernel_t      kernel;
 
   gdb_assert (dev_id < cuda_system_get_num_devices ());
@@ -919,8 +986,7 @@ warp_get_kernel (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
     return wp->kernel;
 
   grid_id = warp_get_grid_id (dev_id, sm_id, wp_id);
-  kernels = device_get_kernels (dev_id);
-  kernel  = kernels_find_kernel_by_grid_id (kernels, grid_id);
+  kernel  = kernels_find_kernel_by_grid_id (dev_id, grid_id);
 
   wp->kernel   = kernel;
   wp->kernel_p = CACHED;
@@ -939,6 +1005,10 @@ warp_get_block_idx (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
   gdb_assert (wp_id < device_get_num_warps (dev_id));
 
   wp = &cuda_system_info.dev[dev_id].sm[sm_id].wp[wp_id];
+
+  if (cuda_remote && !(wp->block_idx_p)
+      && sm_is_valid (dev_id, sm_id))
+    cuda_remote_update_block_idx_in_sm (dev_id, sm_id);
 
   if (wp->block_idx_p)
     return wp->block_idx;
@@ -1074,7 +1144,7 @@ warp_get_active_virtual_pc (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
   return pc;
 }
 
-  cuda_clock_t
+cuda_clock_t
 warp_get_timestamp (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
 {
   warp_state_t *wp;
@@ -1090,6 +1160,39 @@ warp_get_timestamp (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
 
   return wp->timestamp;
 }
+
+void
+warp_set_grid_id (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint64_t grid_id)
+{
+  warp_state_t *wp;
+
+  gdb_assert (cuda_remote);
+  gdb_assert (dev_id < cuda_system_get_num_devices ());
+  gdb_assert (sm_id < device_get_num_sms (dev_id));
+  gdb_assert (wp_id < device_get_num_warps (dev_id));
+  gdb_assert (warp_is_valid (dev_id, sm_id, wp_id));
+
+  wp = &cuda_system_info.dev[dev_id].sm[sm_id].wp[wp_id];
+  wp->grid_id = grid_id;
+  wp->grid_id_p = true;
+}
+
+void
+warp_set_block_idx (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, CuDim3 *block_idx)
+{
+  warp_state_t *wp;
+
+  gdb_assert (cuda_remote);
+  gdb_assert (dev_id < cuda_system_get_num_devices ());
+  gdb_assert (sm_id < device_get_num_sms (dev_id));
+  gdb_assert (wp_id < device_get_num_warps (dev_id));
+  gdb_assert (warp_is_valid (dev_id, sm_id, wp_id));
+
+  wp = &cuda_system_info.dev[dev_id].sm[sm_id].wp[wp_id];
+  wp->block_idx = *block_idx;
+  wp->block_idx_p = true;
+}
+
 /******************************************************************************
  *
  *                                   Lanes
@@ -1190,6 +1293,12 @@ lane_get_thread_idx (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t l
   gdb_assert (lane_is_valid (dev_id, sm_id, wp_id, ln_id));
 
   ln = &cuda_system_info.dev[dev_id].sm[sm_id].wp[wp_id].ln[ln_id];
+
+  /* In a remote session, we fetch the threadIdx of all valid thread in the warp using
+   * one rsp packet to reduce the amount of communication. */
+  if (cuda_remote && !(ln->thread_idx_p)
+      && warp_is_valid (dev_id, sm_id, wp_id))
+    cuda_remote_update_thread_idx_in_warp (dev_id, sm_id, wp_id);
 
   if (ln->thread_idx_p)
     return ln->thread_idx;
@@ -1430,4 +1539,22 @@ lane_get_memcheck_error_address_segment (uint32_t dev_id, uint32_t sm_id,
     cuda_api_memcheck_read_error_address (dev_id, sm_id, wp_id, ln_id,
                                           &address, &segment);
   return segment;
+}
+
+void
+lane_set_thread_idx (uint32_t dev_id, uint32_t sm_id,
+                     uint32_t wp_id, uint32_t ln_id, CuDim3 *thread_idx)
+{
+  lane_state_t *ln;
+
+  gdb_assert (cuda_remote);
+  gdb_assert (dev_id < cuda_system_get_num_devices ());
+  gdb_assert (sm_id < device_get_num_sms (dev_id));
+  gdb_assert (wp_id < device_get_num_warps (dev_id));
+  gdb_assert (ln_id < device_get_num_lanes (dev_id));
+  gdb_assert (lane_is_valid (dev_id, sm_id, wp_id, ln_id));
+
+  ln = &cuda_system_info.dev[dev_id].sm[sm_id].wp[wp_id].ln[ln_id];
+  ln->thread_idx = *thread_idx;
+  ln->thread_idx_p = true;
 }

@@ -68,6 +68,8 @@
 #include "ax.h"
 #include "ax-gdb.h"
 
+#include "remote-cuda.h"
+
 /* temp hacks for tracepoint encoding migration */
 static char *target_buf;
 static long target_buf_size;
@@ -764,7 +766,7 @@ show_remotebreak (struct ui_file *file, int from_tty,
 /* Descriptor for I/O to remote machine.  Initialize it to NULL so that
    remote_open knows that we don't have a file open when the program
    starts.  */
-static struct serial *remote_desc = NULL;
+struct serial *remote_desc = NULL;
 
 /* This variable sets the number of bits in an address that are to be
    sent in a memory ("M" or "m") packet.  Normally, after stripping
@@ -979,13 +981,6 @@ get_memory_read_packet_size (void)
 /* Generic configuration support for packets the stub optionally
    supports. Allows the user to specify the use of the packet as well
    as allowing GDB to auto-detect support in the remote stub.  */
-
-enum packet_support
-  {
-    PACKET_SUPPORT_UNKNOWN = 0,
-    PACKET_ENABLE,
-    PACKET_DISABLE
-  };
 
 struct packet_config
   {
@@ -1221,6 +1216,8 @@ enum {
   PACKET_bs,
   PACKET_TracepointSource,
   PACKET_QAllow,
+  /* CUDA - version handshake */
+  PACKET_CUDAVersion,
   PACKET_MAX
 };
 
@@ -1352,7 +1349,7 @@ static ptid_t continue_thread;
 /* Find out if the stub attached to PID (and hence GDB should offer to
    detach instead of killing it when bailing out).  */
 
-static int
+int
 remote_query_attached (int pid)
 {
   struct remote_state *rs = get_remote_state ();
@@ -2908,6 +2905,9 @@ remote_close (int quitting)
   serial_close (remote_desc);
   remote_desc = NULL;
 
+  /* CUDA - set cuda_remote flag to be false */
+  set_cuda_remote_flag (false);
+
   /* We don't have a connection to the remote stub anymore.  Get rid
      of all the inferiors and their threads we were controlling.  */
   discard_all_inferiors ();
@@ -3361,7 +3361,7 @@ remote_start_remote (struct ui_out *uiout, void *opaque)
   if (target_has_execution)
     {
       if (exec_bfd) 	/* No use without an exec file.  */
-	remote_check_symbols (symfile_objfile);
+          remote_check_symbols (symfile_objfile);
     }
 
   /* Possibly the target has been engaged in a trace run started
@@ -3527,33 +3527,6 @@ remote_set_permissions (void)
     warning ("Remote refused setting permissions with: %s", rs->buf);
 }
 
-/* This type describes each known response to the qSupported
-   packet.  */
-struct protocol_feature
-{
-  /* The name of this protocol feature.  */
-  const char *name;
-
-  /* The default for this protocol feature.  */
-  enum packet_support default_support;
-
-  /* The function to call when this feature is reported, or after
-     qSupported processing if the feature is not supported.
-     The first argument points to this structure.  The second
-     argument indicates whether the packet requested support be
-     enabled, disabled, or probed (or the default, if this function
-     is being called at the end of processing and this feature was
-     not reported).  The third argument may be NULL; if not NULL, it
-     is a NUL-terminated string taken from the packet following
-     this feature's name and an equals sign.  */
-  void (*func) (const struct protocol_feature *, enum packet_support,
-		const char *);
-
-  /* The corresponding packet for this feature.  Only used if
-     FUNC is remote_supported_packet.  */
-  int packet;
-};
-
 static void
 remote_supported_packet (const struct protocol_feature *feature,
 			 enum packet_support support,
@@ -3712,6 +3685,9 @@ static struct protocol_feature remote_protocol_features[] = {
     PACKET_TracepointSource },
   { "QAllow", PACKET_DISABLE, remote_supported_packet,
     PACKET_QAllow },
+  /* CUDA - version handshake */
+  { "CUDAVersion", PACKET_DISABLE, cuda_remote_version_handshake,
+    PACKET_CUDAVersion },
 };
 
 static char *remote_support_xml;
@@ -3976,6 +3952,8 @@ remote_open_1 (char *name, int from_tty, struct target_ops *target, int extended
       puts_filtered (name);
       puts_filtered ("\n");
     }
+  /* CUDA - set cuda_remote flag to be true */ 
+  set_cuda_remote_flag (true);
   push_target (target);		/* Switch to using remote target now.  */
 
   /* Register extra event sources in the event loop.  */
@@ -5200,9 +5178,25 @@ Packet: '%s'\n"),
 		ULONGEST upid;
 
 		p += sizeof ("process:") - 1;
-		unpack_varlen_hex (p, &upid);
+		p = unpack_varlen_hex (p, &upid);
 		pid = upid;
+                if (*p == ';')
+                  p++;
 	      }
+
+            /* CUDA - Process the return value of cuda_finalize. */
+            if (strncmp (p,
+                         "cuda_finalize:", sizeof ("cuda_finalize") - 1) == 0)
+              {
+                ULONGEST ures;
+                CUDBGResult res;
+                p += sizeof ("cuda_finalize:") - 1;
+
+                unpack_varlen_hex (p, &ures);
+                res = ures;
+                cuda_api_clear_state ();
+                cuda_api_handle_finalize_api_error (res);
+              }
 	    else
 	      error (_("unknown stop reply packet: %s"), buf);
 	  }
@@ -8379,6 +8373,15 @@ remote_rcmd (char *command,
   if (!remote_desc)
     error (_("remote rcmd is only available after target open"));
 
+  /* CUDA - cleanup on "monitor exit" command. */ 
+  if (strcmp (command, "exit") == 0)
+    {
+      cuda_api_finalize ();
+      cuda_cleanup ();
+      cuda_gdb_session_destroy ();
+      set_cuda_remote_flag (false);
+    }
+
   /* Send a NULL command across as an empty command.  */
   if (command == NULL)
     command = "";
@@ -8427,6 +8430,7 @@ remote_rcmd (char *command,
 	}
       break;
     }
+
 }
 
 static VEC(mem_region_s) *
@@ -10402,8 +10406,11 @@ show_remote_cmd (char *args, int from_tty)
 static void
 remote_new_objfile (struct objfile *objfile)
 {
-  if (remote_desc != 0)		/* Have a remote connection.  */
-    remote_check_symbols (objfile);
+  if (remote_desc == 0)
+    return;
+
+  /* Have a remote connection.  */
+  remote_check_symbols (objfile);
 }
 
 /* Pull all the tracepoints defined on the target and create local
@@ -10475,9 +10482,14 @@ _initialize_remote (void)
   rs->buf = xmalloc (rs->buf_size);
 
   init_remote_ops ();
-  add_target (&remote_ops);
-
   init_extended_remote_ops ();
+
+  /* CUDA - initialize remote target */
+  cuda_remote_add_target (&remote_ops);
+  /* CUDA - initialize remote target */
+  cuda_remote_add_target (&extended_remote_ops);
+
+  add_target (&remote_ops);
   add_target (&extended_remote_ops);
 
   /* Hook into new objfile notification.  */

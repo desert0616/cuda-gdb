@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -65,12 +65,19 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#ifdef GDBSERVER
+#include "cuda-tdep-server.h"
+#include "server.h"
+#else
 #include "defs.h"
 #include "cuda-options.h"
 #include "cuda-tdep.h"
 #include "gdb_assert.h"
 #include "gdbthread.h"
 #include "inferior.h"
+#include "cuda-options.h"
+#include "cuda-packet-manager.h"
+#endif
 
 #include "cuda-notifications.h"
 
@@ -90,16 +97,31 @@ static struct {
 void
 cuda_notification_trace (char *fmt, ...)
 {
+#ifdef GDBSERVER
+  struct cuda_trace_msg *msg;
+#endif
   va_list ap;
 
-  if (cuda_options_debug_notifications ())
-    {
-      va_start (ap, fmt);
-      fprintf (stderr, "[CUDAGDB] notifications -- ");
-      vfprintf (stderr, fmt, ap);
-      fprintf (stderr, "\n");
-      fflush (stderr);
-    }
+  if (!cuda_options_debug_notifications())
+    return;
+
+  va_start (ap, fmt);
+#ifdef GDBSERVER
+  msg = xmalloc (sizeof (*msg));
+  if (!cuda_first_trace_msg)
+    cuda_first_trace_msg = msg;
+  else
+    cuda_last_trace_msg->next = msg;
+  sprintf (msg->buf, "[CUDAGDB] notifications -- ");
+  vsnprintf (msg->buf + strlen (msg->buf), sizeof (msg->buf), fmt, ap);
+  msg->next = NULL;
+  cuda_last_trace_msg = msg;
+#else
+  fprintf (stderr, "[CUDAGDB] notifications -- ");
+  vfprintf (stderr, fmt, ap);
+  fprintf (stderr, "\n");
+  fflush (stderr);
+#endif
 }
 
 void
@@ -138,56 +160,174 @@ cuda_notification_release_lock (void)
 static int
 cuda_notification_notify_thread (int tid)
 {
-#ifdef HAVE_TKILL_SYSCALL
-  return syscall (SYS_tkill, tid , SIGTRAP);
-#else
-  /* CUDA - MAC OS X specific */
-  return kill (tid, SIGTRAP);
+#ifdef __linux__ 
+  {
+    static int tkill_failed;
+
+    if (!tkill_failed)
+      {
+        int ret;
+
+        errno = 0;
+        ret = syscall (__NR_tkill, tid, SIGTRAP);
+        if (errno != ENOSYS)
+          return ret;
+        tkill_failed = 1;
+      }
+  }
 #endif
 
-  return 1;
+  return kill (tid, SIGTRAP);
 }
 
 static int
-cuda_notification_notify_first_valid_thread (struct thread_info *tp, void *data)
+cuda_notification_notify_specific_thread (uint32_t tid)
 {
-  int ret, tid;
+  int err = 1;
 
+  err = cuda_notification_notify_thread (tid);
+
+  cuda_notification_trace ("sent specifically to the given host thread: tid %d -> %s",
+                           tid, err ? "FAILED" : "success");
+
+  return err;
+}
+
+#ifdef GDBSERVER
+static int
+find_and_notify_first_valid_thread (struct inferior_list_entry *tp, void *data)
+#else
+static int
+find_and_notify_first_valid_thread (struct thread_info *tp, void *data)
+#endif
+{
+  int err, tid;
+
+#ifdef GDBSERVER
+  tid = cuda_gdb_get_tid (tp->id);
+#else
   tid = cuda_gdb_get_tid (tp->ptid);
-  ret = cuda_notification_notify_thread (tid);
+#endif
 
-  return ret == 0;
+  err = cuda_notification_notify_thread (tid);
+
+  return err == 0;
+}
+
+static uint32_t
+cuda_notification_notify_first_valid_thread ()
+{
+  uint32_t tid;
+
+#ifdef GDBSERVER
+  struct inferior_list_entry *tp;
+  tp = find_inferior (&all_threads, find_and_notify_first_valid_thread, NULL);
+  tid = tp ? cuda_gdb_get_tid (tp->id) : 0;
+#else
+  struct thread_info *tp;
+  tp = iterate_over_threads (find_and_notify_first_valid_thread, NULL);
+  tid = tp ? cuda_gdb_get_tid (tp->ptid) : 0;
+#endif
+
+  cuda_notification_trace ("sent to the first valid thread: tid %ld -> %s",
+                           tid, tid ? "success" : "FAILED");
+
+  return tid;
+}
+
+static int
+cmp_thread_tid (const void *tid1, const void *tid2)
+{
+  return ((*(int*)tid1) > (*(int*)tid2));
+}
+
+#define MAX_YOUNG_THREADS 128
+typedef struct {
+  int   num;
+  int   tid[MAX_YOUNG_THREADS];
+} youngest_threads_t;
+
+#ifdef GDBSERVER
+static int
+build_threads (struct inferior_list_entry *tp, void *data)
+#else
+static int
+build_threads (struct thread_info *tp, void *data)
+#endif
+{
+  int tid;
+  youngest_threads_t *youngest_threads = (youngest_threads_t *)data;
+
+#ifdef GDBSERVER
+  tid = cuda_gdb_get_tid (tp->id);
+#else
+  tid = cuda_gdb_get_tid (tp->ptid);
+#endif
+
+  if (youngest_threads->num >= MAX_YOUNG_THREADS)
+    return 1;
+
+  youngest_threads->tid[youngest_threads->num] = tid;
+  youngest_threads->num++;
+
+  return 0;
+}
+
+static uint32_t
+cuda_notification_notify_youngest_thread ()
+{
+  int err = 1, i = 0, tid = 0;
+  youngest_threads_t youngest_threads;
+
+  cuda_notification_trace ("sending to the youngest valid thread");
+
+  youngest_threads.num = 0;
+
+#ifdef GDBSERVER
+  find_inferior (&all_threads, build_threads, &youngest_threads);
+#else
+  iterate_over_threads (build_threads, &youngest_threads);
+#endif
+
+  qsort (youngest_threads.tid, youngest_threads.num,
+         sizeof *youngest_threads.tid, cmp_thread_tid);
+
+  for (i = 0; err && i < youngest_threads.num; ++i)
+    {
+      tid = youngest_threads.tid[i];
+      err = cuda_notification_notify_specific_thread (youngest_threads.tid[i]);
+    }
+
+  return err ? 0 : tid;
 }
 
 static void
 cuda_notification_send (CUDBGEventCallbackData *data)
 {
-  struct thread_info *tp = NULL;
+  uint32_t tid = 0;
   int err = 1;
 
-  if (cuda_platform_supports_tid () && data && data->tid)
+  // use the host thread id if given to us
+  if (!tid && cuda_platform_supports_tid () && data && data->tid)
     {
-      // use the host thread id if given to us
-      err = cuda_notification_notify_thread (data->tid);
-      cuda_notification_trace ("sent specifically to the given host thread: tid %d -> %s",
-                                data->tid, err ? "FAILED" : "success");
+      err = cuda_notification_notify_specific_thread (data->tid);
       if (!err)
-        {
-          cuda_notification_info.tid = data->tid;
-          cuda_notification_info.sent = true;
-          return;
-        }
+        tid = data->tid;
     }
 
-  // otherwise, use the first valid host thread to send the notification to.
-  tp = iterate_over_threads (cuda_notification_notify_first_valid_thread, NULL);
-  cuda_notification_trace ("sent to the first valid thread: tid %ld -> %s",
-                            tp ? cuda_gdb_get_tid (tp->ptid) : 0, tp ? "success" : "FAILED");
-  if (tp)
+  // use the youngest thread if possible
+  if (!tid && cuda_options_notify_youngest ())
+    tid = cuda_notification_notify_youngest_thread ();
+
+  // otherwise, use any valid host thread to send the notification to.
+  if (!tid)
+    tid = cuda_notification_notify_first_valid_thread ();
+
+  if (tid)
     {
-      cuda_notification_info.tid = cuda_gdb_get_tid (tp->ptid);
+      cuda_notification_info.tid = tid;
       cuda_notification_info.sent = true;
-      return;;
+      return;
     }
 }
 
@@ -257,6 +397,11 @@ cuda_notification_aliased_event (void)
 {
   bool aliased_event;
 
+#ifndef GDBSERVER
+  if (cuda_remote)
+    cuda_remote_notification_aliased_event ();
+#endif
+
   cuda_notification_acquire_lock ();
 
   aliased_event = cuda_notification_info.aliased_event;
@@ -281,6 +426,11 @@ cuda_notification_pending (void)
 {
   bool pending;
 
+#ifndef GDBSERVER
+  if (cuda_remote)
+    return cuda_remote_notification_pending ();
+#endif
+
   cuda_notification_acquire_lock ();
 
   pending = cuda_notification_info.sent && !cuda_notification_info.received;
@@ -295,6 +445,11 @@ cuda_notification_received (void)
 {
   bool received;
 
+#ifndef GDBSERVER
+  if (cuda_remote)
+    return cuda_remote_notification_received ();
+#endif
+
   cuda_notification_acquire_lock ();
 
   received = cuda_notification_info.received;
@@ -305,9 +460,15 @@ cuda_notification_received (void)
 }
 
 void
-cuda_notification_analyze (ptid_t ptid, struct target_waitstatus *ws)
+cuda_notification_analyze (ptid_t ptid, struct target_waitstatus *ws, int trap_expected)
 {
-  struct thread_info *tp = inferior_thread ();
+#ifndef GDBSERVER
+  if (cuda_remote)
+    {
+      cuda_remote_notification_analyze ();
+      return;
+    }
+#endif
 
   cuda_notification_acquire_lock ();
 
@@ -317,7 +478,7 @@ cuda_notification_analyze (ptid_t ptid, struct target_waitstatus *ws)
       cuda_notification_info.tid == cuda_gdb_get_tid (ptid) &&
       ws->kind == TARGET_WAITKIND_STOPPED &&
       ws->value.sig == TARGET_SIGNAL_TRAP &&
-      !tp->trap_expected)
+      !trap_expected)
     {
       cuda_notification_trace ("received notification to thread %d", cuda_notification_info.tid);
       cuda_notification_info.received = true;
@@ -329,7 +490,13 @@ cuda_notification_analyze (ptid_t ptid, struct target_waitstatus *ws)
 void
 cuda_notification_mark_consumed (void)
 {
-  int status = 0, options = 0;
+#ifndef GDBSERVER
+  if (cuda_remote)
+    {
+      cuda_remote_notification_mark_consumed ();
+      return;
+    }
+#endif
 
   cuda_notification_acquire_lock ();
 
@@ -347,5 +514,13 @@ cuda_notification_mark_consumed (void)
 void
 cuda_notification_consume_pending (void)
 {
+#ifndef GDBSERVER
+  if (cuda_remote)
+    {
+      cuda_remote_notification_consume_pending ();
+      return;
+    }
+#endif
+
   cuda_notification_info.pending_send = false;
 }

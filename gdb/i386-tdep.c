@@ -19,6 +19,25 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
+/*
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
+ * Modified from the original GDB file referenced above by the CUDA-GDB 
+ * team at NVIDIA <cudatools@nvidia.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3 as
+ * published by the Free Software Foundation.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ */
+
+
 #include "defs.h"
 #include "opcode/i386.h"
 #include "arch-utils.h"
@@ -1575,6 +1594,14 @@ i386_unwind_pc (struct gdbarch *gdbarch, struct frame_info *next_frame)
 }
 
 
+
+/* CUDA - CFI is not available on Darwin */ 
+#ifdef __APPLE__
+static int cuda_host_arch_supports_cfi = 1;
+#else
+static int cuda_host_arch_supports_cfi = 0;
+#endif
+
 /* Normal frames.  */
 
 static struct i386_frame_cache *
@@ -1640,7 +1667,8 @@ i386_frame_cache (struct frame_info *this_frame, void **this_cache)
 	  /* This will be added back below.  */
 	  cache->saved_regs[I386_EIP_REGNUM] -= cache->base;
 	}
-      else if (cache->pc != 0
+      /* CUDA - CFI is not available on Darwin*/ 
+      else if (cuda_host_arch_supports_cfi || cache->pc != 0
 	       || target_read_memory (get_frame_pc (this_frame), buf, 1))
 	{
 	  /* We're in a known function, but did not find a frame

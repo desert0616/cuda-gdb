@@ -22,6 +22,40 @@
 
 struct target_desc;
 
+enum packet_support
+{
+  PACKET_SUPPORT_UNKNOWN = 0,
+  PACKET_ENABLE,
+  PACKET_DISABLE
+};
+
+/* This type describes each known response to the qSupported
+   packet.  */
+struct protocol_feature
+{
+  /* The name of this protocol feature.  */
+  const char *name;
+
+  /* The default for this protocol feature.  */
+  enum packet_support default_support;
+
+  /* The function to call when this feature is reported, or after
+     qSupported processing if the feature is not supported.
+     The first argument points to this structure.  The second
+     argument indicates whether the packet requested support be
+     enabled, disabled, or probed (or the default, if this function
+     is being called at the end of processing and this feature was
+     not reported).  The third argument may be NULL; if not NULL, it
+     is a NUL-terminated string taken from the packet following
+     this feature's name and an equals sign.  */
+  void (*func) (const struct protocol_feature *, enum packet_support,
+                const char *);
+
+  /* The corresponding packet for this feature.  Only used if
+     FUNC is remote_supported_packet.  */
+  int packet;
+};
+
 /* Read a packet from the remote machine, with error checking, and
    store it in *BUF.  Resize *BUF using xrealloc if necessary to hold
    the result, and update *SIZEOF_BUF.  If FOREVER, wait forever

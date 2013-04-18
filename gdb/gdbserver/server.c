@@ -18,6 +18,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "server.h"
+#include "../cuda-utils.h"
 
 #if HAVE_UNISTD_H
 #include <unistd.h>
@@ -115,6 +116,9 @@ struct vstop_notif
 
 /* The pending stop replies list head.  */
 static struct vstop_notif *notif_queue = NULL;
+
+/* Whether cuda-gdb should create a global lock file */
+extern int cuda_use_lockfile;
 
 /* Put a stop reply to the stop reply queue.  */
 
@@ -274,13 +278,12 @@ start_inferior (char **argv)
   if (wrapper_argv != NULL)
     {
       struct thread_resume resume_info;
-      ptid_t ptid;
 
       resume_info.thread = pid_to_ptid (signal_pid);
       resume_info.kind = resume_continue;
       resume_info.sig = 0;
 
-      ptid = mywait (pid_to_ptid (signal_pid), &last_status, 0, 0);
+      mywait (pid_to_ptid (signal_pid), &last_status, 0, 0);
 
       if (last_status.kind != TARGET_WAITKIND_STOPPED)
 	return signal_pid;
@@ -885,6 +888,13 @@ handle_query (char *own_buf, int packet_len, int *new_packet_len_p)
 {
   static struct inferior_list_entry *thread_ptr;
 
+  /* Handle all CUDA RSP packet */
+  if (strncmp ("qnv.", own_buf, 4) == 0)
+    {
+      handle_cuda_packet (own_buf);
+      return;
+    }
+
   /* Reply the current thread id.  */
   if (strcmp ("qC", own_buf) == 0 && !disable_packet_qC)
     {
@@ -1483,6 +1493,11 @@ handle_query (char *own_buf, int packet_len, int *new_packet_len_p)
 	  strcat (own_buf, ";qXfer:statictrace:read+");
 	}
 
+      /* CUDA - version handshake */
+      sprintf (own_buf + strlen (own_buf), ";CUDAVersion=%d.%d.%d",
+               CUDBG_API_VERSION_MAJOR, 
+               CUDBG_API_VERSION_MINOR,
+               CUDBG_API_VERSION_REVISION);
       return;
     }
 
@@ -2102,11 +2117,6 @@ queue_stop_reply_callback (struct inferior_list_entry *entry, void *arg)
      manage the thread's last_status field.  */
   if (the_target->thread_stopped == NULL)
     {
-      struct target_waitstatus status;
-
-      status.kind = TARGET_WAITKIND_STOPPED;
-      status.value.sig = TARGET_SIGNAL_TRAP;
-
       /* Pass the last stop reply back to GDB, but don't notify
 	 yet.  */
       queue_stop_reply (entry->id, &thread->last_status);
@@ -2202,7 +2212,12 @@ handle_status (char *own_buf)
 				all_threads.head->id, &status);
 	}
       else
-	strcpy (own_buf, "W00");
+        {
+	  strcpy (own_buf, "W00");
+
+          /* CUDA - Append the return value of api_finalize. */
+          cuda_append_api_finalize_res (own_buf + strlen (own_buf));
+        }
     }
 }
 
@@ -2230,7 +2245,12 @@ gdbserver_usage (FILE *stream)
 	   "  --debug               Enable general debugging output.\n"
 	   "  --remote-debug        Enable remote protocol debugging output.\n"
 	   "  --version             Display version information and exit.\n"
-	   "  --wrapper WRAPPER --  Run WRAPPER to start new programs.\n");
+	   "  --wrapper WRAPPER --  Run WRAPPER to start new programs.\n"
+	   "CUDA-specific options:\n"
+	   "\n"
+	   "  --cuda-use-lockfile=VALUE\n"
+	   "                     If VALUE == 0, don't create a lock file for cuda-gdb.\n"
+	   "                     Default behavior is to create a lock file.\n");
   if (REPORT_BUGS_TO[0] && stream == stdout)
     fprintf (stream, "Report bugs to \"%s\".\n", REPORT_BUGS_TO);
 }
@@ -2453,6 +2473,13 @@ main (int argc, char *argv[])
 		}
 	    }
 	}
+      else if (strncmp (*next_arg,
+			"--cuda-use-lockfile=",
+			sizeof ("--cuda-use-lockfile=") - 1) == 0)
+	{
+	  *next_arg += sizeof ("--cuda-use-lockfile=") - 1;
+	  cuda_use_lockfile = (atoi (*next_arg) != 0);
+	}
       else
 	{
 	  fprintf (stderr, "Unknown argument: %s\n", *next_arg);
@@ -2504,6 +2531,7 @@ main (int argc, char *argv[])
 
   initialize_inferiors ();
   initialize_async_io ();
+  initialize_cuda_remote ();
   initialize_low ();
   if (target_supports_tracepoints ())
     initialize_tracepoint ();
@@ -2596,6 +2624,11 @@ main (int argc, char *argv[])
       if (exit_requested)
 	{
 	  detach_or_kill_for_exit ();
+          /* CUDA - final cleanup before gdbserver quits. */
+          cuda_gdb_tmpdir_cleanup_self (NULL);
+          cuda_gdb_record_remove_all (NULL);
+          cuda_cleanup_trace_messages ();
+
 	  exit (0);
 	}
 
@@ -3070,6 +3103,12 @@ process_serial_event (void)
       if (!notif_queue)
 	{
 	  fprintf (stderr, "GDBserver exiting\n");
+
+          /* CUDA - final cleanup before gdbserver quits. */
+          cuda_gdb_tmpdir_cleanup_self (NULL);
+          cuda_gdb_record_remove_all (NULL);
+          cuda_cleanup_trace_messages ();
+
 	  remote_close ();
 	  exit (0);
 	}

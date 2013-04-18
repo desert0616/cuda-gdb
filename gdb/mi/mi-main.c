@@ -1230,6 +1230,27 @@ mi_cmd_data_evaluate_expression (char *command, char **argv, int argc)
   do_cleanups (old_chain);
 }
 
+/* CUDA - memory segments*/
+CORE_ADDR
+mi_parse_and_eval_address (char *exp, int *segment)
+{
+  struct expression *expr = parse_expression (exp);
+  struct value *val;
+  struct type *type;
+  CORE_ADDR addr;
+  struct cleanup *old_chain =
+    make_cleanup (free_current_contents, &expr);
+
+  val = evaluate_expression (expr);
+  type = value_type (val);
+  if (TYPE_CODE(type) == TYPE_CODE_PTR)
+      type = TYPE_TARGET_TYPE(type);
+  *segment = TYPE_CUDA_ALL(type);
+  addr = value_as_address (val);
+  do_cleanups (old_chain);
+  return addr;
+}
+
 /* DATA-MEMORY-READ:
 
    ADDR: start address of data to be dumped.
@@ -1255,6 +1276,7 @@ mi_cmd_data_read_memory (char *command, char **argv, int argc)
   struct gdbarch *gdbarch = get_current_arch ();
   struct cleanup *cleanups = make_cleanup (null_cleanup, NULL);
   CORE_ADDR addr;
+  struct type dummy_type;
   long total_bytes;
   long nr_cols;
   long nr_rows;
@@ -1301,7 +1323,7 @@ mi_cmd_data_read_memory (char *command, char **argv, int argc)
   /* Extract all the arguments. */
 
   /* Start address of the memory dump.  */
-  addr = parse_and_eval_address (argv[0]) + offset;
+  addr = mi_parse_and_eval_address (argv[0], &TYPE_INSTANCE_FLAGS(&dummy_type)) + offset;
   /* The format character to use when displaying a memory word.  See
      the ``x'' command. */
   word_format = argv[1][0];
@@ -1352,9 +1374,16 @@ mi_cmd_data_read_memory (char *command, char **argv, int argc)
 
   /* Dispatch memory reads to the topmost target, not the flattened
      current_target.  */
-  nr_bytes = target_read_until_error (current_target.beneath,
-				      TARGET_OBJECT_MEMORY, NULL, mbuf,
-				      addr, total_bytes);
+  if (TYPE_CUDA_ALL(&dummy_type))
+    {
+      int rc;
+      rc = cuda_read_memory_partial (addr, mbuf, total_bytes, &dummy_type);
+      nr_bytes = rc?-1:total_bytes;
+    }
+  else
+    nr_bytes = target_read_until_error (current_target.beneath,
+				        TARGET_OBJECT_MEMORY, NULL, mbuf,
+				        addr, total_bytes);
   if (nr_bytes <= 0)
     error ("Unable to read memory.");
 

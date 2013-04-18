@@ -19,7 +19,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2011 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -259,6 +259,7 @@ enum target_signal
     TARGET_SIGNAL_CUDA_LANE_MISALIGNED_ADDRESS,
     TARGET_SIGNAL_CUDA_WARP_ASSERT,
     TARGET_SIGNAL_CUDA_LANE_SYSCALL_ERROR,
+    TARGET_SIGNAL_CUDA_WARP_ILLEGAL_ADDRESS,
 
     /* If you are adding a new signal, add it just above this comment.  */
 

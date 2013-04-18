@@ -40,6 +40,9 @@
 #include <sys/stat.h>
 #include <sys/vfs.h>
 #include <sys/uio.h>
+#include "../cuda-notifications.h"
+bool cuda_has_resumed_devices (void);
+
 #ifndef ELFMAG0
 /* Don't include <linux/elf.h> here.  If it got included by gdb_proc_service.h
    then ELFMAG0 will have been defined.  If it didn't get included by
@@ -302,8 +305,10 @@ linux_add_process (int pid, int attached)
   return proc;
 }
 
+
 /* Wrapper function for waitpid which handles EINTR, and emulates
    __WALL for systems where that is not available.  */
+
 
 static int
 my_waitpid (int pid, int *status, int flags)
@@ -312,6 +317,10 @@ my_waitpid (int pid, int *status, int flags)
 
   if (debug_threads)
     fprintf (stderr, "my_waitpid (%d, 0x%x)\n", pid, flags);
+
+  /* CUDA - notifications */
+  if (cuda_has_resumed_devices())
+    cuda_notification_accept ();
 
   if (flags & __WALL)
     {
@@ -368,6 +377,10 @@ my_waitpid (int pid, int *status, int flags)
       while (ret == -1 && errno == EINTR);
       out_errno = errno;
     }
+
+  /* CUDA - notifications */
+  if (cuda_has_resumed_devices())
+    cuda_notification_block ();
 
   if (debug_threads)
     fprintf (stderr, "my_waitpid (%d, 0x%x): status(%x), %d\n",
@@ -769,7 +782,6 @@ linux_kill (int pid)
 {
   struct process_info *process;
   struct lwp_info *lwp;
-  struct thread_info *thread;
   int wstat;
   int lwpid;
 
@@ -786,7 +798,6 @@ linux_kill (int pid)
   /* See the comment in linux_kill_one_lwp.  We did not kill the first
      thread in the list, so do so now.  */
   lwp = find_lwp_pid (pid_to_ptid (pid));
-  thread = get_lwp_thread (lwp);
 
   if (debug_threads)
     fprintf (stderr, "lk_1: killing lwp %ld, for pid: %d\n",
@@ -1005,8 +1016,8 @@ linux_wait_for_lwp (ptid_t ptid, int *wstatp, int options)
   options |= __WALL;
 
 retry:
-
   ret = my_waitpid (to_wait_for, wstatp, options);
+
   if (ret == 0 || (ret == -1 && errno == ECHILD && (options & WNOHANG)))
     return NULL;
   else if (ret == -1)
@@ -1195,9 +1206,6 @@ linux_fast_tracepoint_collecting (struct lwp_info *lwp,
 static int
 maybe_move_out_of_jump_pad (struct lwp_info *lwp, int *wstat)
 {
-  struct thread_info *saved_inferior;
-
-  saved_inferior = current_inferior;
   current_inferior = get_lwp_thread (lwp);
 
   if ((wstat == NULL
@@ -1927,13 +1935,12 @@ linux_stabilize_threads (void)
     {
       struct target_waitstatus ourstatus;
       struct lwp_info *lwp;
-      ptid_t ptid;
       int wstat;
 
       /* Note that we go through the full wait even loop.  While
 	 moving threads out of jump pad, we need to be able to step
 	 over internal breakpoints and such.  */
-      ptid = linux_wait_1 (minus_one_ptid, &ourstatus, 0);
+      linux_wait_1 (minus_one_ptid, &ourstatus, 0);
 
       if (ourstatus.kind == TARGET_WAITKIND_STOPPED)
 	{
@@ -2502,7 +2509,7 @@ kill_lwp (unsigned long lwpid, int signo)
   /* Use tkill, if possible, in case we are using nptl threads.  If tkill
      fails, then we are not using nptl threads and we should be using kill.  */
 
-#ifdef __NR_tkill
+#ifdef __linux__
   {
     static int tkill_failed;
 
@@ -4676,7 +4683,7 @@ linux_qxfer_osdata (const char *annex,
    layout of the inferiors' architecture.  */
 
 static void
-siginfo_fixup (struct siginfo *siginfo, void *inf_siginfo, int direction)
+siginfo_fixup (siginfo_t *siginfo, void *inf_siginfo, int direction)
 {
   int done = 0;
 
@@ -4688,9 +4695,9 @@ siginfo_fixup (struct siginfo *siginfo, void *inf_siginfo, int direction)
   if (!done)
     {
       if (direction == 1)
-	memcpy (siginfo, inf_siginfo, sizeof (struct siginfo));
+	memcpy (siginfo, inf_siginfo, sizeof (siginfo));
       else
-	memcpy (inf_siginfo, siginfo, sizeof (struct siginfo));
+	memcpy (inf_siginfo, siginfo, sizeof (siginfo));
     }
 }
 
@@ -4699,8 +4706,8 @@ linux_xfer_siginfo (const char *annex, unsigned char *readbuf,
 		    unsigned const char *writebuf, CORE_ADDR offset, int len)
 {
   int pid;
-  struct siginfo siginfo;
-  char inf_siginfo[sizeof (struct siginfo)];
+  siginfo_t siginfo;
+  char inf_siginfo[sizeof (siginfo)];
 
   if (current_inferior == NULL)
     return -1;
@@ -5137,6 +5144,8 @@ initialize_low (void)
 {
   struct sigaction sigchld_action;
   memset (&sigchld_action, 0, sizeof (sigchld_action));
+  /* CUDA - initialize */
+  initialize_cuda_target_ops (&linux_target_ops);
   set_target_ops (&linux_target_ops);
   set_breakpoint_data (the_low_target.breakpoint,
 		       the_low_target.breakpoint_len);

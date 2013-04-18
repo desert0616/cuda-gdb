@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -83,6 +83,7 @@
 struct gdbarch *cuda_gdbarch = NULL;
 CuDim3 gridDim  = { 0, 0, 0};
 CuDim3 blockDim = { 0, 0, 0};
+bool cuda_remote = false;
 bool cuda_initialized = false;
 bool cuda_is_target_mourn_pending = false;
 static bool inferior_in_debug_mode = false;
@@ -227,7 +228,7 @@ cuda_inferior_word_size ()
 }
 
 char *
-cuda_find_kernel_name_from_pc (CORE_ADDR pc, bool demangle)
+cuda_find_function_name_from_pc (CORE_ADDR pc, bool demangle)
 {
   char *demangled = NULL, *name = NULL;
   static char *unknown = "??";
@@ -245,7 +246,7 @@ cuda_find_kernel_name_from_pc (CORE_ADDR pc, bool demangle)
     }
   else if (kernel)
     {
-      name = SYMBOL_LINKAGE_NAME (kernel);
+      name = SYMBOL_CUDA_NAME (kernel);
       lang = SYMBOL_LANGUAGE (kernel);
     }
   else if (msymbol != NULL)
@@ -310,495 +311,6 @@ cuda_breakpoint_hit_p (cuda_clock_t clock)
   cuda_iterator_destroy (itr);
 
   return breakpoint_hit;
-}
-
-bool
-cuda_exception_hit_p (cuda_exception_t *exception)
-{
-  CUDBGException_t exception_type = CUDBG_EXCEPTION_NONE;
-  cuda_coords_t c, filter = CUDA_WILDCARD_COORDS;
-  cuda_iterator itr;
-
-  itr = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter,
-                               CUDA_SELECT_VALID | CUDA_SELECT_EXCPT);
-
-  for (cuda_iterator_start (itr);
-       !cuda_iterator_end (itr);
-       cuda_iterator_next (itr))
-    {
-      c = cuda_iterator_get_current (itr);
-      exception_type = lane_get_exception (c.dev, c.sm, c.wp, c.ln);
-      break;
-    }
-
-  cuda_iterator_destroy (itr);
-
-  switch (exception_type)
-    {
-    case CUDBG_EXCEPTION_LANE_ILLEGAL_ADDRESS:
-      exception->value = TARGET_SIGNAL_CUDA_LANE_ILLEGAL_ADDRESS;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_LANE_USER_STACK_OVERFLOW:
-      exception->value = TARGET_SIGNAL_CUDA_LANE_USER_STACK_OVERFLOW;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_DEVICE_HARDWARE_STACK_OVERFLOW:
-      exception->value = TARGET_SIGNAL_CUDA_DEVICE_HARDWARE_STACK_OVERFLOW;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_WARP_ILLEGAL_INSTRUCTION:
-      exception->value = TARGET_SIGNAL_CUDA_WARP_ILLEGAL_INSTRUCTION;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_WARP_OUT_OF_RANGE_ADDRESS:
-      exception->value = TARGET_SIGNAL_CUDA_WARP_OUT_OF_RANGE_ADDRESS;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_WARP_MISALIGNED_ADDRESS:
-      exception->value = TARGET_SIGNAL_CUDA_WARP_MISALIGNED_ADDRESS;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_WARP_INVALID_ADDRESS_SPACE:
-      exception->value = TARGET_SIGNAL_CUDA_WARP_INVALID_ADDRESS_SPACE;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_WARP_INVALID_PC:
-      exception->value = TARGET_SIGNAL_CUDA_WARP_INVALID_PC;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_WARP_HARDWARE_STACK_OVERFLOW:
-      exception->value = TARGET_SIGNAL_CUDA_WARP_HARDWARE_STACK_OVERFLOW;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_DEVICE_ILLEGAL_ADDRESS:
-      exception->value = TARGET_SIGNAL_CUDA_DEVICE_ILLEGAL_ADDRESS;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_WARP_ASSERT:
-      exception->value = TARGET_SIGNAL_CUDA_WARP_ASSERT;
-      exception->valid = true;
-      exception->recoverable = true;
-      break;
-    case CUDBG_EXCEPTION_LANE_SYSCALL_ERROR:
-      exception->value = TARGET_SIGNAL_CUDA_LANE_SYSCALL_ERROR;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    case CUDBG_EXCEPTION_NONE:
-      break;
-    case CUDBG_EXCEPTION_UNKNOWN:
-    default:
-      /* If for some reason the device encounters an unknown exception, we
-         still need to halt the chip and allow state inspection.  Just emit
-         a warning indicating this is something that was unexpected, but
-         handle it as a normal device exception. */
-      warning ("Encountered unhandled device exception (%d)\n", exception_type);
-      exception->value = TARGET_SIGNAL_CUDA_UNKNOWN_EXCEPTION;
-      exception->valid = true;
-      exception->recoverable = false;
-      break;
-    }
-
-  return exception_type != CUDBG_EXCEPTION_NONE;
-}
-
-const char *
-cuda_exception_type_to_name (CUDBGException_t exception_type)
-{
-  switch (exception_type)
-    {
-    case CUDBG_EXCEPTION_LANE_ILLEGAL_ADDRESS:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_LANE_ILLEGAL_ADDRESS);
-    case CUDBG_EXCEPTION_LANE_USER_STACK_OVERFLOW:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_LANE_USER_STACK_OVERFLOW);
-    case CUDBG_EXCEPTION_DEVICE_HARDWARE_STACK_OVERFLOW:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_DEVICE_HARDWARE_STACK_OVERFLOW);
-    case CUDBG_EXCEPTION_WARP_ILLEGAL_INSTRUCTION:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_WARP_ILLEGAL_INSTRUCTION);
-    case CUDBG_EXCEPTION_WARP_OUT_OF_RANGE_ADDRESS:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_WARP_OUT_OF_RANGE_ADDRESS);
-    case CUDBG_EXCEPTION_WARP_MISALIGNED_ADDRESS:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_WARP_MISALIGNED_ADDRESS);
-    case CUDBG_EXCEPTION_WARP_INVALID_ADDRESS_SPACE:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_WARP_INVALID_ADDRESS_SPACE);
-    case CUDBG_EXCEPTION_WARP_INVALID_PC:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_WARP_INVALID_PC);
-    case CUDBG_EXCEPTION_WARP_HARDWARE_STACK_OVERFLOW:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_WARP_HARDWARE_STACK_OVERFLOW);
-    case CUDBG_EXCEPTION_DEVICE_ILLEGAL_ADDRESS:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_DEVICE_ILLEGAL_ADDRESS);
-    case CUDBG_EXCEPTION_WARP_ASSERT:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_WARP_ASSERT);
-    case CUDBG_EXCEPTION_LANE_SYSCALL_ERROR:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_LANE_SYSCALL_ERROR);
-    default:
-      return target_signal_to_string (TARGET_SIGNAL_CUDA_UNKNOWN_EXCEPTION);
-    }
-}
-
-/* To update the convenience variable error code for api_failures.
- * cuda_get_last_driver_api_error_code and cuda_get_last_driver_api_error_func_name
- * are not used for updating convenience variables as they throw false errors. 
- * convenience variable udpate can be called even if symbol values are not properly
- * initialized and can lead to false errors. cv_get_last_driver_api_error_code and
- * cv_get_last_driver_api_error_func_name ignore any such errors while updating variables.
- * */ 
-static uint64_t
-cv_get_last_driver_api_error_code ()
-{
-  CORE_ADDR error_code_addr;
-  uint64_t res;
-
-  error_code_addr = cuda_get_symbol_address (_STRING_(CUDBG_REPORTED_DRIVER_API_ERROR_CODE));
-  if (!error_code_addr)
-    {
-      return 0;
-    }
-
-  target_read_memory (error_code_addr, (char *)&res, sizeof (uint64_t));
-  return res;
-}
-
-static void
-cv_get_last_driver_api_error_func_name (char **name)
-{
-  CORE_ADDR error_func_name_core_addr;
-  uint64_t error_func_name_addr;
-  char *func_name = NULL;
-
-  error_func_name_core_addr = cuda_get_symbol_address (
-    _STRING_(CUDBG_REPORTED_DRIVER_API_ERROR_FUNC_NAME_ADDR));
-  if (!error_func_name_core_addr)
-    {
-      return;
-    }
-
-  target_read_memory (error_func_name_core_addr, (char *)&error_func_name_addr, sizeof (uint64_t));
-  *name = (char *)(uintptr_t)error_func_name_addr;
-}
-
-static struct value *
-cuda_convenience_convert_to_kernel_id_array_value (uint64_t *kernels,
-                                                   uint32_t num_kernels)
-{
-  struct type *type_uint32 = builtin_type (get_current_arch ())->builtin_uint32;
-  struct value *kernel_id_array_value;
-  struct value **kernel_id_values;
-  uint32_t i;
-
-  kernel_id_values = xmalloc (num_kernels * sizeof(*kernel_id_values));
-
-  for (i = 0; i < num_kernels; i++)
-    kernel_id_values[i] = value_from_longest (type_uint32, (LONGEST) kernels[i]);
-
-  kernel_id_array_value = value_array (1, num_kernels, kernel_id_values);
-
-  xfree (kernel_id_values);
-
-  return kernel_id_array_value;
-}
-
-static struct value *
-cuda_convenience_convert_to_block_idx_array_value (CuDim3 **blocks,
-                                                   uint32_t num_kernels,
-                                                   uint32_t max_blocks)
-{
-  struct type *type_uint32 = builtin_type (get_current_arch ())->builtin_uint32;
-  struct value **kernel_block_idx_array_value;
-  struct value *block_idx_array_value;
-  struct value **block_idx_values;
-  struct value *block_idx_value[3];
-  CuDim3 blockIdx;
-  uint32_t i, j;
-
-  kernel_block_idx_array_value = xmalloc (num_kernels * sizeof(*kernel_block_idx_array_value));
-
-  for (i = 0; i < num_kernels; i++)
-    {
-      block_idx_values = xmalloc (max_blocks * sizeof (*block_idx_values));
-
-      for (j = 0; j < max_blocks; j++)
-      {
-        blockIdx = blocks[i][j];
-        block_idx_value[0] = value_from_longest (type_uint32, (LONGEST) blockIdx.x);
-        block_idx_value[1] = value_from_longest (type_uint32, (LONGEST) blockIdx.y);
-        block_idx_value[2] = value_from_longest (type_uint32, (LONGEST) blockIdx.z);
-        block_idx_values[j] = value_array (1, 3, block_idx_value);
-      }
-
-      kernel_block_idx_array_value[i] = value_array (1, max_blocks, block_idx_values);
-      xfree (block_idx_values);
-    }
-
-  block_idx_array_value = value_array (1, num_kernels, kernel_block_idx_array_value);
-  xfree (kernel_block_idx_array_value);
-
-  return block_idx_array_value;
-}
-
-/* This function creates array values of present blocks and kernel IDs and
-   returns a number of active kernels */
-static uint32_t
-cuda_convenience_get_present_blocks_kernels(struct value **kernel_id_array_value,
-                                            struct value **block_idx_array_value)
-{
-  struct type *type_uint32 = builtin_type (get_current_arch ())->builtin_uint32;
-  struct type *type_array = lookup_array_range_type (type_uint32, 1, 0);
-  CuDim3 invalid_blockIdx = (CuDim3) { CUDA_INVALID, CUDA_INVALID, CUDA_INVALID };
-
-  cuda_coords_t c, filter;
-  cuda_iterator block_iter, kernel_iter;
-  uint32_t num_blocks, max_blocks, num_kernels;
-  uint64_t kernel_id, i, j;
-
-  CuDim3 **blocks;
-  uint64_t *kernels;
-
-  gdb_assert (kernel_id_array_value);
-  gdb_assert (block_idx_array_value);
-
-  /* compute num kernels and max blocks across all the kernels */
-  max_blocks = 0;
-  filter = CUDA_WILDCARD_COORDS;
-  kernel_iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_KERNELS, &filter, CUDA_SELECT_VALID);
-  num_kernels = cuda_iterator_get_size (kernel_iter);
-  for (cuda_iterator_start (kernel_iter); !cuda_iterator_end (kernel_iter); cuda_iterator_next (kernel_iter))
-    {
-      c  = cuda_iterator_get_current (kernel_iter);
-      kernel_id = c.kernelId;
-
-      filter = CUDA_WILDCARD_COORDS;
-      filter.kernelId = kernel_id;
-      block_iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_BLOCKS, &filter, CUDA_SELECT_VALID);
-      num_blocks = cuda_iterator_get_size (block_iter);
-      max_blocks = num_blocks > max_blocks ? num_blocks : max_blocks;
-      cuda_iterator_destroy (block_iter);
-    }
-  cuda_iterator_destroy (kernel_iter);
-
-  /* if no block or kernel, then return empty arrays */
-  if (max_blocks == 0)
-    {
-      *kernel_id_array_value = allocate_value (type_array);
-      *block_idx_array_value = allocate_value (type_array);
-      return 0;
-    }
-
-  /* fill up kernels and blocks */
-  kernels = xmalloc (num_kernels * sizeof(*kernels));
-  blocks  = xmalloc (num_kernels * sizeof(*blocks));
-
-  i = 0;
-  filter = CUDA_WILDCARD_COORDS;
-  kernel_iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_KERNELS, &filter, CUDA_SELECT_VALID);
-  for (cuda_iterator_start (kernel_iter); !cuda_iterator_end (kernel_iter); cuda_iterator_next (kernel_iter))
-    {
-      c  = cuda_iterator_get_current (kernel_iter);
-      kernel_id = c.kernelId;
-
-      kernels[i] = kernel_id;
-      blocks[i]  = xmalloc (max_blocks * sizeof(**blocks)); // max_blocks, yes.
-      for (j = 0; j < max_blocks; ++j)
-        blocks[i][j] = invalid_blockIdx;
-
-      j = 0;
-      filter = CUDA_WILDCARD_COORDS;
-      filter.kernelId = kernel_id;
-      block_iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_BLOCKS, &filter, CUDA_SELECT_VALID);
-      for (cuda_iterator_start (block_iter); !cuda_iterator_end (block_iter); cuda_iterator_next (block_iter))
-        {
-          c  = cuda_iterator_get_current (kernel_iter);
-          blocks[i][j] = c.blockIdx;
-          ++j;
-        }
-      cuda_iterator_destroy (block_iter);
-
-      ++i;
-    }
-    cuda_iterator_destroy (kernel_iter);
-
-  /* conversion */
-  *block_idx_array_value = cuda_convenience_convert_to_block_idx_array_value (blocks, num_kernels, max_blocks);
-  *kernel_id_array_value = cuda_convenience_convert_to_kernel_id_array_value (kernels, num_kernels);
-
-  /* cleanup */
-  for (i = 0; i < num_kernels; i++)
-    xfree (blocks[i]);
-  xfree (blocks);
-  xfree (kernels);
-
-  return num_kernels;
-}
-
-void
-cuda_update_convenience_variables (void)
-{
-  uint32_t num_dev, num_sm, num_wp, num_ln, num_reg, num_present_kernels, call_depth;
-  uint32_t syscall_call_depth, num_total_kernels;
-  uint64_t kernel_id, api_failure_return_code;
-  CuDim3 grid_dim;
-  CuDim3 block_dim;
-  cuda_coords_t current;
-  kernels_t kernels;
-  kernel_t kernel;
-  struct gdbarch *gdbarch = get_current_arch ();
-  struct type *type_uint32 = builtin_type (gdbarch)->builtin_uint32;
-  struct type *type_uint64 = builtin_type (gdbarch)->builtin_uint64;
-  struct type *type_data_ptr = builtin_type (gdbarch)->builtin_data_ptr;
-  struct value *mark = NULL;
-  bool valid = false;
-  bool active = false;
-  uint64_t pc = 0ULL;
-  uint32_t lineno = 0;
-  uint64_t memcheck_error_address = 0;
-  char *api_failure_func_name = " ";
-  ptxStorageKind memcheck_error_address_segment = ptxUNSPECIFIEDStorage;
-  struct value *kernel_array, *blocks_array;
-
-  if (!cuda_options_debug_convenience_vars ())
-    return;
-
-  num_total_kernels   = cuda_system_get_num_kernels ();
-  num_present_kernels = cuda_convenience_get_present_blocks_kernels (&kernel_array, &blocks_array);
-
-  if (cuda_focus_is_device ())
-    {
-      cuda_coords_get_current (&current);
-      kernels   = device_get_kernels (current.dev);
-      kernel    = warp_get_kernel (current.dev, current.sm, current.wp);
-
-      num_dev   = cuda_system_get_num_devices ();
-      num_sm    = device_get_num_sms (current.dev);
-      num_wp    = device_get_num_warps (current.dev);
-      num_ln    = device_get_num_lanes (current.dev);
-      num_reg   = device_get_num_registers (current.dev);
-      grid_dim  = kernel_get_grid_dim (kernel);
-      block_dim = kernel_get_block_dim (kernel);
-      kernel_id = kernel_get_id (kernel);
-      call_depth = lane_get_call_depth (current.dev, current.sm, current.wp, current.ln);
-      syscall_call_depth = lane_get_syscall_call_depth(current.dev, current.sm, current.wp, current.ln);
-      valid     = lane_is_valid (current.dev, current.sm, current.wp, current.ln);
-      active    = valid && lane_is_active (current.dev, current.sm, current.wp, current.ln);
-      pc        = lane_get_virtual_pc (current.dev, current.sm, current.wp, current.ln);
-      lineno    = find_pc_line (pc, 0).line;
-      memcheck_error_address = lane_get_memcheck_error_address (current.dev,
-                                       current.sm, current.wp, current.ln);
-      memcheck_error_address_segment = lane_get_memcheck_error_address_segment (current.dev,
-                                       current.sm, current.wp, current.ln);
-    }
-  else
-    {
-      num_dev   = CUDA_INVALID;
-      num_sm    = CUDA_INVALID;
-      num_wp    = CUDA_INVALID;
-      num_ln    = CUDA_INVALID;
-      num_reg   = CUDA_INVALID;
-      grid_dim  = (CuDim3){ CUDA_INVALID, CUDA_INVALID, CUDA_INVALID };
-      block_dim = (CuDim3){ CUDA_INVALID, CUDA_INVALID, CUDA_INVALID };
-      kernel_id = CUDA_INVALID;
-      current   = CUDA_INVALID_COORDS;
-      call_depth = CUDA_INVALID;
-      syscall_call_depth = CUDA_INVALID;
-      valid     = false;
-      active    = false;
-      pc        = 0ULL;
-      lineno    = 0;
-      memcheck_error_address = 0;
-      memcheck_error_address_segment = ptxUNSPECIFIEDStorage;
-    }
-  
-  api_failure_return_code = cv_get_last_driver_api_error_code ();
-  cv_get_last_driver_api_error_func_name (&api_failure_func_name);
-
-  mark = value_mark ();
-
-  set_internalvar (lookup_internalvar ("cuda_num_devices"),
-                   value_from_longest (type_uint32, (LONGEST) num_dev));
-  set_internalvar (lookup_internalvar ("cuda_num_sm"),
-                   value_from_longest (type_uint32, (LONGEST) num_sm));
-  set_internalvar (lookup_internalvar ("cuda_num_warps"),
-                   value_from_longest (type_uint32, (LONGEST) num_wp));
-  set_internalvar (lookup_internalvar ("cuda_num_lanes"),
-                   value_from_longest (type_uint32, (LONGEST) num_ln));
-  set_internalvar (lookup_internalvar ("cuda_num_registers"),
-                   value_from_longest (type_uint32, (LONGEST) num_reg));
-  set_internalvar (lookup_internalvar ("cuda_grid_dim_x"),
-                   value_from_longest (type_uint32, (LONGEST) grid_dim.x));
-  set_internalvar (lookup_internalvar ("cuda_grid_dim_y"),
-                   value_from_longest (type_uint32, (LONGEST) grid_dim.y));
-  set_internalvar (lookup_internalvar ("cuda_grid_dim_z"),
-                   value_from_longest (type_uint32, (LONGEST) grid_dim.z));
-  set_internalvar (lookup_internalvar ("cuda_block_dim_x"),
-                   value_from_longest (type_uint32, (LONGEST) block_dim.x));
-  set_internalvar (lookup_internalvar ("cuda_block_dim_y"),
-                   value_from_longest (type_uint32, (LONGEST) block_dim.y));
-  set_internalvar (lookup_internalvar ("cuda_block_dim_z"),
-                   value_from_longest (type_uint32, (LONGEST) block_dim.z));
-  set_internalvar (lookup_internalvar ("cuda_focus_device"),
-                   value_from_longest (type_uint32, (LONGEST) current.dev));
-  set_internalvar (lookup_internalvar ("cuda_focus_sm"),
-                   value_from_longest (type_uint32, (LONGEST) current.sm));
-  set_internalvar (lookup_internalvar ("cuda_focus_warp"),
-                   value_from_longest (type_uint32, (LONGEST) current.wp));
-  set_internalvar (lookup_internalvar ("cuda_focus_lane"),
-                   value_from_longest (type_uint32, (LONGEST) current.ln));
-  set_internalvar (lookup_internalvar ("cuda_focus_grid"),
-                   value_from_longest (type_uint32, (LONGEST) current.gridId));
-  set_internalvar (lookup_internalvar ("cuda_focus_kernel_id"),
-                   value_from_longest (type_uint64, (LONGEST) current.kernelId));
-  set_internalvar (lookup_internalvar ("cuda_focus_block_x"),
-                   value_from_longest (type_uint32, (LONGEST) current.blockIdx.x));
-  set_internalvar (lookup_internalvar ("cuda_focus_block_y"),
-                   value_from_longest (type_uint32, (LONGEST) current.blockIdx.y));
-  set_internalvar (lookup_internalvar ("cuda_focus_thread_z"),
-                   value_from_longest (type_uint32, (LONGEST) current.blockIdx.z));
-  set_internalvar (lookup_internalvar ("cuda_focus_thread_x"),
-                   value_from_longest (type_uint32, (LONGEST) current.threadIdx.x));
-  set_internalvar (lookup_internalvar ("cuda_focus_thread_y"),
-                   value_from_longest (type_uint32, (LONGEST) current.threadIdx.y));
-  set_internalvar (lookup_internalvar ("cuda_focus_thread_z"),
-                   value_from_longest (type_uint32, (LONGEST) current.threadIdx.z));
-  set_internalvar (lookup_internalvar ("cuda_num_present_kernels"),
-                   value_from_longest (type_uint32, (LONGEST) num_present_kernels));
-  set_internalvar (lookup_internalvar ("cuda_num_total_kernels"),
-                   value_from_longest (type_uint32, (LONGEST) num_total_kernels));
-  set_internalvar (lookup_internalvar ("cuda_call_depth"),
-                   value_from_longest (type_uint32, (LONGEST) call_depth));
-  set_internalvar (lookup_internalvar ("cuda_syscall_call_depth"),
-                   value_from_longest (type_uint32, (LONGEST) syscall_call_depth));
-  set_internalvar (lookup_internalvar ("cuda_thread_active"),
-                   value_from_longest (type_uint32, (LONGEST) active));
-  set_internalvar (lookup_internalvar ("cuda_thread_lineno"),
-                   value_from_longest (type_uint32, (LONGEST) lineno));
-  set_internalvar (lookup_internalvar ("cuda_latest_launched_kernel_id"),
-                   value_from_longest (type_uint32,
-                                       (LONGEST) cuda_latest_launched_kernel_id ()));
-  set_internalvar (lookup_internalvar ("cuda_memcheck_error_address"),
-                   value_from_longest (type_uint64, (LONGEST) memcheck_error_address));
-  set_internalvar (lookup_internalvar ("cuda_memcheck_error_address_segment"),
-                   value_from_longest (type_uint32, (LONGEST) memcheck_error_address_segment));
-  set_internalvar (lookup_internalvar ("cuda_api_failure_return_code"),
-                   value_from_longest (type_uint64, (LONGEST) api_failure_return_code));
-  set_internalvar (lookup_internalvar ("cuda_api_failure_func_name"),
-                   value_from_pointer (type_data_ptr, (CORE_ADDR) api_failure_func_name));
-  set_internalvar (lookup_internalvar ("cuda_present_kernel_ids"),
-                   kernel_array);
-  set_internalvar (lookup_internalvar ("cuda_present_block_idxs"),
-                   blocks_array);
-  
-  /* Free the temporary values */
-  value_free_to_mark (mark);
 }
 
 /* Return the name of register REGNUM. */
@@ -918,7 +430,6 @@ cuda_get_dwarf_register_string (reg_t reg, char *deviceReg, size_t sz)
 static regmap_t
 cuda_get_physical_register (char *reg_name)
 {
-  uint32_t dev_id, sm_id, wp_id;
   uint64_t start_pc, addr, virt_addr;
   kernel_t kernel;
   const char *func_name = NULL;
@@ -932,11 +443,10 @@ cuda_get_physical_register (char *reg_name)
 
   gdb_assert (cuda_focus_is_device ());
 
-  cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
   frame = get_selected_frame (NULL);
   virt_addr = get_frame_pc (frame);
 
-  kernel = warp_get_kernel (dev_id, sm_id, wp_id);
+  kernel = cuda_current_kernel ();
   module = kernel_get_module (kernel);
   elf_image = module_get_elf_image (module);
   objfile = cuda_elf_image_get_objfile (elf_image);
@@ -945,7 +455,7 @@ cuda_get_physical_register (char *reg_name)
   if (symbol)
     {
       find_pc_partial_function (virt_addr, NULL, &func_start, NULL);
-      func_name = SYMBOL_LINKAGE_NAME (symbol);
+      func_name = SYMBOL_CUDA_NAME (symbol);
       addr = virt_addr - func_start;
       regmap = regmap_table_search (objfile, func_name, reg_name, addr);
     }
@@ -1133,7 +643,6 @@ cuda_print_registers_info (struct gdbarch *gdbarch,
 void
 cuda_update_elf_images ()
 {
-  uint32_t dev_id, sm_id, wp_id;
   kernel_t kernel;
 
   // if no kernel running, just return - the image still needs to be active
@@ -1145,8 +654,7 @@ cuda_update_elf_images ()
   if (!cuda_focus_is_device ())
     return;
 
-  cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
-  kernel = warp_get_kernel (dev_id, sm_id, wp_id);
+  kernel = cuda_current_kernel ();
   kernel_load_elf_images (kernel);
 }
 
@@ -1157,7 +665,6 @@ cuda_print_insn (bfd_vma pc, disassemble_info *info)
   bool is_device_address;
   kernel_t kernel;
   const char * inst;
-  uint32_t dev_id, sm_id, wp_id;
 
   if (!cuda_focus_is_device ())
     return 1;
@@ -1168,8 +675,7 @@ cuda_print_insn (bfd_vma pc, disassemble_info *info)
     return 1;
 
   /* decode the instruction at the pc */
-  cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
-  kernel = warp_get_kernel (dev_id, sm_id, wp_id);
+  kernel = cuda_current_kernel ();
   inst = kernel_disassemble (kernel, pc, &inst_size);
 
   if (inst)
@@ -1248,7 +754,6 @@ cuda_current_active_elf_image_uses_abi (void)
   kernel_t    kernel;
   module_t    module;
   elf_image_t elf_image;
-  uint32_t    dev_id, sm_id, wp_id;
 
   if (!get_current_context ())
     return false;
@@ -1256,8 +761,7 @@ cuda_current_active_elf_image_uses_abi (void)
   if (!cuda_focus_is_device ())
     return false;
 
-  cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
-  kernel = warp_get_kernel (dev_id, sm_id, wp_id);
+  kernel    = cuda_current_kernel ();
   module    = kernel_get_module (kernel);
   elf_image = module_get_elf_image (module);
   gdb_assert (cuda_elf_image_is_loaded (elf_image));
@@ -1413,7 +917,7 @@ cuda_signal_handler (int signo)
   exit (1);
 }
 
-static void
+void
 cuda_signals_initialize (void)
 {
   signal (SIGSEGV, cuda_signal_handler);
@@ -1435,8 +939,13 @@ cuda_cleanup ()
   if (cuda_initialized)
     cuda_system_finalize ();
   cuda_sstep_reset (false);
-  cuda_notification_reset ();
-  cuda_api_finalize ();
+
+  /* In remote session, these functions are called on server side by cuda_linux_mourn() */
+  if (!cuda_remote)
+    {
+      cuda_notification_reset ();
+      cuda_api_finalize ();
+    }
 
   inferior_in_debug_mode = false;
   cuda_initialized = false;
@@ -1449,7 +958,7 @@ cuda_final_cleanup (void *unused)
     cuda_api_finalize ();
 }
 
-static void
+void
 cuda_initialize_driver_api_error_report ()
 {
   //CORE_ADDR functionAddr;
@@ -1471,7 +980,7 @@ cuda_initialize_driver_api_error_report ()
     warning (_("Cannot find function entry for driver API error report."));
 }
 
-static void
+void
 cuda_initialize_driver_internal_error_report ()
 {
   //CORE_ADDR functionAddr;
@@ -1498,16 +1007,14 @@ cuda_initialize_driver_internal_error_report ()
 static void
 cuda_initialize ()
 {
-  if (!cuda_initialized)
-    {
-      cuda_signals_initialize ();
-      cuda_api_set_notify_new_event_callback (cuda_notification_notify);
-      if (!cuda_api_initialize ())
-        {
-          cuda_initialized = true;
-          cuda_system_initialize ();
-        }
-    }
+  if (cuda_initialized)
+    return;
+
+  cuda_signals_initialize ();
+  cuda_api_set_notify_new_event_callback (cuda_notification_notify);
+  cuda_initialized = !cuda_api_initialize ();
+  if (cuda_initialized)
+    cuda_system_initialize ();
 }
 
 /* Tell the target application that it is being
@@ -1522,45 +1029,71 @@ cuda_initialize_target ()
   CORE_ADDR gdbPidAddr;
   CORE_ADDR apiClientRevAddr;
   CORE_ADDR sessionIdAddr;
+  CORE_ADDR memcheckAddr;
+  CORE_ADDR launchblockingAddr;
+  CORE_ADDR preemptionAddr;
+
   uint32_t pid;
   uint32_t apiClientRev = CUDBG_API_VERSION_REVISION;
   uint32_t sessionId = cuda_gdb_session_get_id ();
 
-  if (!inferior_in_debug_mode)
+  cuda_initialize ();
+  if (inferior_in_debug_mode)
+    return;
+
+  debugFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_IPC_FLAG_NAME));
+  if (!debugFlagAddr)
+    return;
+
+  /* When attaching or detaching, cuda_nat_attach() and
+     cuda_nat_detach() control the setting of this flag,
+     so don't touch it here. */
+  if (CUDA_ATTACH_STATE_IN_PROGRESS != cuda_api_get_attach_state () &&
+      CUDA_ATTACH_STATE_DETACHING != cuda_api_get_attach_state ())
+    target_write_memory (debugFlagAddr, &one, 1);
+
+  pid = getpid ();
+  rpcFlagAddr        = cuda_get_symbol_address (_STRING_(CUDBG_RPC_ENABLED));
+  gdbPidAddr         = cuda_get_symbol_address (_STRING_(CUDBG_APICLIENT_PID));
+  apiClientRevAddr   = cuda_get_symbol_address (_STRING_(CUDBG_APICLIENT_REVISION));
+  sessionIdAddr      = cuda_get_symbol_address (_STRING_(CUDBG_SESSION_ID));
+  memcheckAddr       = cuda_get_symbol_address (_STRING_(CUDBG_ENABLE_INTEGRATED_MEMCHECK));
+  launchblockingAddr = cuda_get_symbol_address (_STRING_(CUDBG_ENABLE_LAUNCH_BLOCKING));
+  preemptionAddr     = cuda_get_symbol_address (_STRING_(CUDBG_ENABLE_PREEMPTION_DEBUGGING));
+
+  if (!(rpcFlagAddr && gdbPidAddr && apiClientRevAddr &&
+      sessionIdAddr && memcheckAddr && launchblockingAddr &&
+      preemptionAddr))
     {
-      debugFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_IPC_FLAG_NAME));
-      if (debugFlagAddr)
-        {
-          /* When attaching or detaching, cuda_nat_attach() and
-             cuda_nat_detach() control the setting of this flag,
-             so don't touch it here. */
-          if (CUDA_ATTACH_STATE_IN_PROGRESS != cuda_api_get_attach_state () &&
-              CUDA_ATTACH_STATE_DETACHING != cuda_api_get_attach_state ())
-            target_write_memory (debugFlagAddr, &one, 1);
-          rpcFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_RPC_ENABLED));
-          pid = getpid ();
-          gdbPidAddr = cuda_get_symbol_address (_STRING_(CUDBG_APICLIENT_PID));
-          apiClientRevAddr = cuda_get_symbol_address (_STRING_(CUDBG_APICLIENT_REVISION));
-          sessionIdAddr = cuda_get_symbol_address (_STRING_(CUDBG_SESSION_ID));
-          if (rpcFlagAddr && gdbPidAddr && apiClientRevAddr && sessionIdAddr)
-            {
-              target_write_memory (gdbPidAddr, (char*)&pid, sizeof (pid));
-              target_write_memory (rpcFlagAddr, &one, 1);
-              target_write_memory (apiClientRevAddr, (char*)&apiClientRev, sizeof(apiClientRev));
-              target_write_memory (sessionIdAddr, (char*)&sessionId, sizeof(sessionId));
-              inferior_in_debug_mode = true;
-            }
-          else
-            {
-              kill (inferior_ptid.lwp, SIGKILL);
-              error (_("CUDA application cannot be debugged:  driver incompatibility."));
-            }
-          cuda_initialize_driver_api_error_report ();
-          cuda_initialize_driver_internal_error_report ();
-        }
+#ifdef __APPLE__
+      kill (inferior_ptid.pid, SIGKILL);
+#else
+      kill (inferior_ptid.lwp, SIGKILL);
+#endif
+      error (_("CUDA application cannot be debugged. The CUDA driver is not compatible."));
+      return;
     }
 
-  cuda_initialize ();
+  target_write_memory (gdbPidAddr             , (char*)&pid, sizeof (pid));
+  target_write_memory (rpcFlagAddr            , &one, 1);
+  target_write_memory (apiClientRevAddr       , (char*)&apiClientRev, sizeof(apiClientRev));
+  target_write_memory (sessionIdAddr          , (char*)&sessionId, sizeof(sessionId));
+  if (cuda_options_memcheck ())
+    target_write_memory (memcheckAddr         , &one, 1);
+  else
+    target_write_memory (memcheckAddr         , &zero, 1);
+  if (cuda_options_launch_blocking ())
+    target_write_memory (launchblockingAddr   , &one, 1);
+  else
+    target_write_memory (launchblockingAddr   , &zero, 1);
+  if (cuda_options_software_preemption ())
+    target_write_memory (preemptionAddr       , &one, 1);
+  else
+    target_write_memory (preemptionAddr       , &zero, 1);
+
+  inferior_in_debug_mode = true;
+  cuda_initialize_driver_api_error_report ();
+  cuda_initialize_driver_internal_error_report ();
 }
 
 bool
@@ -1990,7 +1523,7 @@ static struct {
   uint32_t dev_id;
   uint32_t sm_id;
   uint32_t wp_id;
-  uint32_t grid_id;
+  uint64_t grid_id;
   uint64_t warp_mask;
 } cuda_sstep_info;
 
@@ -2013,8 +1546,29 @@ cuda_sstep_dev_id (void)
   gdb_assert (cuda_sstep_info.active);
   return cuda_sstep_info.dev_id;
 }
- 
+
 uint32_t
+cuda_sstep_sm_id (void)
+{
+  gdb_assert (cuda_sstep_info.active);
+  return cuda_sstep_info.sm_id;
+}
+
+uint32_t
+cuda_sstep_wp_id (void)
+{
+  gdb_assert (cuda_sstep_info.active);
+  return cuda_sstep_info.wp_id;
+}
+
+uint64_t
+cuda_sstep_wp_mask (void)
+{
+  gdb_assert (cuda_sstep_info.active);
+  return cuda_sstep_info.warp_mask;
+}
+
+uint64_t
 cuda_sstep_grid_id (void)
 {
   gdb_assert (cuda_sstep_info.active);
@@ -2031,9 +1585,9 @@ cuda_sstep_set_ptid (ptid_t ptid)
 void
 cuda_sstep_execute (ptid_t ptid)
 {
-  uint32_t dev_id, sm_id, wp_id, grid_id, wp;
+  uint32_t dev_id, sm_id, wp_id, wp;
   kernel_t kernel;
-  uint64_t warp_mask, stepped_warp_mask;
+  uint64_t grid_id, warp_mask, stepped_warp_mask;
   bool     sstep_other_warps;
 
   gdb_assert (!cuda_sstep_info.active);
@@ -2107,7 +1661,8 @@ cuda_sstep_reset (bool sstep)
 bool
 cuda_sstep_kernel_has_terminated (void)
 {
-  uint32_t dev_id, sm_id, wp_id, grid_id;
+  uint32_t dev_id, sm_id, wp_id;
+  uint64_t grid_id;
   cuda_iterator itr;
   cuda_coords_t filter = CUDA_WILDCARD_COORDS;
   bool found_valid_warp;
@@ -2308,27 +1863,30 @@ cuda_dwarf2_func_baseaddr (struct objfile *objfile, char *func_name)
   return 0;
 }
 
-/* Given a raw function name (string), find if there is a function for it.
-   If so, return the function's base (prologue adjusted, if necessary)
-   in func_addr.  Returns true if the function is found, false otherwise. */
+/* Given an address string (function_name or filename:function_name or filename:lineno),
+   find if there is matching address for it. If so, return it
+   (prologue adjusted, if necessary) in func_addr.
+   Returns true if the function is found, false otherwise. */
 bool
-cuda_find_function_pc_from_objfile (struct objfile *objfile,
-                                    char *func_name,
-                                    CORE_ADDR *func_addr)
+cuda_find_pc_from_address_string (struct objfile *objfile,
+                                  char *func_name,
+                                  CORE_ADDR *func_addr)
 {
   CORE_ADDR addr = 0;
   bool found = false;
   struct block *b;
   struct blockvector *bv;
   struct symtab *s = NULL;
+  struct symtab *symtab_scope = NULL;
   struct minimal_symbol *msymbol = NULL;
   char *sym_name = NULL;
   char *tmp_func_name = NULL;
   struct gdbarch *gdbarch = get_current_arch ();
   const struct language_defn *lang = current_language;
   int dmgl_options = DMGL_ANSI | DMGL_PARAMS;
-  struct cleanup *cleanup = NULL;
+  struct cleanup *cleanup_chain = NULL;
   char * demangled = NULL;
+  bool is_lineno = false;
 
   gdb_assert (objfile);
   gdb_assert (func_name);
@@ -2337,11 +1895,42 @@ cuda_find_function_pc_from_objfile (struct objfile *objfile,
   if (!cuda_is_bfd_cuda (objfile->obfd))
     return false;
 
+  cleanup_chain = make_cleanup (null_cleanup, NULL);
+
+  /* Test if a space exist in the function name
+     If so, it's likely to be a pending conditional,
+     so we going to ignore everything after the space */
+  if (strchr(func_name, ' ')!= NULL)
+    {
+      tmp_func_name = xstrdup (func_name);
+      if (tmp_func_name)
+        {
+          func_name = tmp_func_name;
+          make_cleanup (xfree, func_name);
+          tmp_func_name = strchr(tmp_func_name, ' ');
+          if (tmp_func_name)
+            *tmp_func_name = 0;
+       }
+    }
+
   /* Test if a colon exists in the function name string.
-     If so, then we need to ignore everything before it
+     If so, name might be limited to symtab scope
+     otherwise we can ignore everything before it
      so that we can search using the function name directly. */
   if ((tmp_func_name = strrchr (func_name, ':')))
-    func_name = tmp_func_name + 1;
+    {
+      unsigned long len = (unsigned long)tmp_func_name - (unsigned long)func_name;
+      ALL_OBJFILE_SYMTABS (objfile, s)
+          if ( s->filename && strncmp(s->filename, func_name, len) == 0)
+            {
+              symtab_scope = s;
+              break;
+            }
+      func_name = tmp_func_name + 1;
+      /* If all characters after colon are digits - it's a line number */
+      while ( isdigit (*++tmp_func_name));
+      is_lineno = *tmp_func_name == 0;
+    }
 
   /* We need to find the fully-qualified symbol name that func_name
      corresponds to (if any).  This will handle mangled symbol names,
@@ -2351,7 +1940,7 @@ cuda_find_function_pc_from_objfile (struct objfile *objfile,
   else if ((demangled = language_demangle (lang, func_name, dmgl_options)))
     {
       sym_name = demangled;
-      cleanup = make_cleanup (xfree, sym_name);
+      make_cleanup (xfree, sym_name);
     }
   else
     sym_name = func_name;
@@ -2361,6 +1950,22 @@ cuda_find_function_pc_from_objfile (struct objfile *objfile,
   ALL_OBJFILE_SYMTABS (objfile, s)
     {
       int i;
+
+      /* Check the symtab scope*/
+      if (symtab_scope != NULL && s != symtab_scope)
+        continue;
+
+      /* If address is a line number try to find its pc from lineinfo */
+      if (symtab_scope && is_lineno)
+        {
+          i = atoi (func_name);
+          if (find_line_pc (s, i, &addr))
+            {
+               found = true;
+               break;
+            }
+        }
+
       bv = BLOCKVECTOR (s);
       for (i = 0; i < BLOCKVECTOR_NBLOCKS (bv); i++)
         {
@@ -2397,8 +2002,7 @@ cuda_find_function_pc_from_objfile (struct objfile *objfile,
     }
 
   /* Clean up before exiting. */
-  if (cleanup)
-    do_cleanups (cleanup);
+  do_cleanups (cleanup_chain);
 
   /* If we found the symbol, return its address in func_addr
      and return true. */
@@ -2450,24 +2054,6 @@ cuda_find_func_text_vma_from_objfile (struct objfile *objfile,
   /* Not found */
   xfree (text_seg_name);
   return false;
-}
-
-/* expensive: traverse all the objfiles to see if addr corresponds to
-   any of them. Return the context if found, 0 otherwise. */
-context_t
-cuda_find_context_by_addr (CORE_ADDR addr)
-{
-  uint32_t  dev_id;
-  context_t context;
-
-  for (dev_id = 0; dev_id < CUDBG_MAX_DEVICES; ++dev_id)
-    {
-      context = device_find_context_by_addr (dev_id, addr);
-      if (context)
-        return context;
-    }
-
-  return NULL;
 }
 
 /* Returns 1 when a value is stored in more than one register (long, double).
@@ -2564,6 +2150,19 @@ static const gdb_byte *
 cuda_breakpoint_from_pc (struct gdbarch *gdbarch, CORE_ADDR *pc, int *len)
 {
   return NULL;
+}
+
+static CORE_ADDR
+cuda_adjust_breakpoint_address (struct gdbarch *gdbarch, CORE_ADDR bpaddr)
+{
+  uint64_t adjusted_addr = bpaddr;
+
+  context_t context = cuda_system_find_context_by_addr (bpaddr);
+
+  if (context)
+    cuda_api_get_adjusted_code_address (context_get_device_id (context),
+                                        bpaddr, &adjusted_addr, CUDBG_ADJ_CURRENT_ADDRESS);
+  return (CORE_ADDR)adjusted_addr;
 }
 
 static struct gdbarch *
@@ -2683,11 +2282,12 @@ cuda_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   set_gdbarch_print_insn (gdbarch, cuda_print_insn);
   set_gdbarch_relocate_instruction (gdbarch, NULL);
   set_gdbarch_breakpoint_from_pc   (gdbarch, cuda_breakpoint_from_pc);
+  set_gdbarch_adjust_breakpoint_address (gdbarch, cuda_adjust_breakpoint_address);
 
   /* CUDA - no address space management */
   set_gdbarch_has_global_breakpoints (gdbarch, 1);
 
-  // We hijack the linux siginfo type for the CUDA target on both Mac & Linux
+  /* We hijack the linux siginfo type for the CUDA target on both Mac & Linux */
   set_gdbarch_get_siginfo_type (gdbarch, linux_get_siginfo_type);
 
   return gdbarch;
@@ -2777,5 +2377,18 @@ const char *
 cuda_gdb_session_get_dir (void)
 {
     return cuda_gdb_session_dir;
+}
+
+/* Find out if the provided address is a GPU address, and if so adjust it. */
+void
+cuda_adjust_device_code_address (CORE_ADDR original_addr, CORE_ADDR *adjusted_addr)
+{
+  context_t context = cuda_system_find_context_by_addr (original_addr);
+  uint64_t addr = original_addr;
+
+  if (context)
+    cuda_api_get_adjusted_code_address (context_get_device_id (context),
+                                        original_addr, &addr, CUDBG_ADJ_CURRENT_ADDRESS);
+  *adjusted_addr = (CORE_ADDR)addr;
 }
 

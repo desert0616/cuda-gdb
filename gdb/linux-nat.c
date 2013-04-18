@@ -19,7 +19,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -74,6 +74,7 @@
 #include "terminal.h"
 #include <sys/vfs.h>
 #include "solib.h"
+#include "cuda-exceptions.h"
 #include "cuda-notifications.h"
 #include "cuda-tdep.h"
 
@@ -233,7 +234,7 @@ static void (*linux_nat_new_thread) (ptid_t);
 /* The method to call, if any, when the siginfo object needs to be
    converted between the layout returned by ptrace, and the layout in
    the architecture of the inferior.  */
-static int (*linux_nat_siginfo_fixup) (struct siginfo *,
+static int (*linux_nat_siginfo_fixup) (siginfo_t *,
 				       gdb_byte *,
 				       int);
 
@@ -3864,7 +3865,7 @@ linux_nat_kill (struct target_ops *ops)
   /* CUDA - exceptions */
   /* If a CUDA exception was received, we are not ready to mourn yet because
      GDB core does not know that the threads have terminated for some reason. */
-  if (!cuda_exception.valid)
+  if (!cuda_exception_is_valid (cuda_exception))
     target_mourn_inferior ();
   else
     cuda_is_target_mourn_pending = true;
@@ -3889,7 +3890,7 @@ linux_nat_mourn_inferior (struct target_ops *ops)
    layout of the inferiors' architecture.  */
 
 static void
-siginfo_fixup (struct siginfo *siginfo, gdb_byte *inf_siginfo, int direction)
+siginfo_fixup (siginfo_t *siginfo, gdb_byte *inf_siginfo, int direction)
 {
   int done = 0;
 
@@ -3901,9 +3902,9 @@ siginfo_fixup (struct siginfo *siginfo, gdb_byte *inf_siginfo, int direction)
   if (!done)
     {
       if (direction == 1)
-	memcpy (siginfo, inf_siginfo, sizeof (struct siginfo));
+	memcpy (siginfo, inf_siginfo, sizeof (siginfo));
       else
-	memcpy (inf_siginfo, siginfo, sizeof (struct siginfo));
+	memcpy (inf_siginfo, siginfo, sizeof (siginfo));
     }
 }
 
@@ -3913,8 +3914,8 @@ linux_xfer_siginfo (struct target_ops *ops, enum target_object object,
 		    const gdb_byte *writebuf, ULONGEST offset, LONGEST len)
 {
   int pid;
-  struct siginfo siginfo;
-  gdb_byte inf_siginfo[sizeof (struct siginfo)];
+  siginfo_t siginfo;
+  gdb_byte inf_siginfo[sizeof (siginfo)];
 
   gdb_assert (object == TARGET_OBJECT_SIGNAL_INFO);
   gdb_assert (readbuf || writebuf);
@@ -5693,7 +5694,7 @@ linux_nat_set_new_thread (struct target_ops *t, void (*new_thread) (ptid_t))
    inferior.  */
 void
 linux_nat_set_siginfo_fixup (struct target_ops *t,
-			     int (*siginfo_fixup) (struct siginfo *,
+			     int (*siginfo_fixup) (siginfo_t *,
 						   gdb_byte *,
 						   int))
 {
@@ -5702,7 +5703,7 @@ linux_nat_set_siginfo_fixup (struct target_ops *t,
 }
 
 /* Return the saved siginfo associated with PTID.  */
-struct siginfo *
+siginfo_t *
 linux_nat_get_siginfo (ptid_t ptid)
 {
   struct lwp_info *lp = find_lwp_pid (ptid);

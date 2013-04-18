@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -848,11 +848,7 @@ print_frame (struct frame_info *frame, int print_level,
   /* CUDA - kernel dimensions */
   if (cuda_frame_outermost_p (get_next_frame (frame)))
     {
-      uint32_t dev_id, sm_id, wp_id;
-      kernel_t kernel;
-
-      cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
-      kernel = warp_get_kernel (dev_id, sm_id, wp_id);
+      kernel_t kernel = cuda_current_kernel ();
       ui_out_text (uiout, kernel_get_dimensions (kernel));
     }
 

@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -19,12 +19,13 @@
 #define _CUDA_COORDS_H 1
 
 #include "defs.h"
+#include "cuda-defs.h"
 #include "cudadebugger.h"
 
 typedef struct {
   bool valid;
   uint64_t kernelId;
-  uint32_t gridId;
+  uint64_t gridId;
   CuDim3 blockIdx;
   CuDim3 threadIdx;
   uint32_t dev;
@@ -32,6 +33,12 @@ typedef struct {
   uint32_t wp;
   uint32_t ln;
 } cuda_coords_t;
+
+typedef struct {
+  bool valid;
+  ptid_t ptid;
+  cuda_coords_t coords;
+} cuda_focus_t;
 
 typedef enum {
   CK_EXACT_LOGICAL,
@@ -56,6 +63,7 @@ typedef enum {
   CUDA_SELECT_VALID = 0x001,
   CUDA_SELECT_BKPT  = 0x002,
   CUDA_SELECT_EXCPT = 0x004,
+  CUDA_SELECT_SNGL  = 0x008,
 } cuda_select_t;
 
 #define CUDA_INVALID_COORDS ((cuda_coords_t)                             \
@@ -78,15 +86,17 @@ bool  cuda_focus_is_device (void);
 void  cuda_coords_update_current (bool breakpoint_hit, bool exception_hit);
 void  cuda_coords_invalidate_current (void);
 int   cuda_coords_set_current (cuda_coords_t *c);
-int   cuda_coords_set_current_logical (uint64_t kernelId, uint32_t gridId, CuDim3 blockIdx, CuDim3 threadIdx);
+int   cuda_coords_set_current_logical (uint64_t kernelId, uint64_t gridId, CuDim3 blockIdx, CuDim3 threadIdx);
 int   cuda_coords_set_current_physical (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln);
 int   cuda_coords_get_current (cuda_coords_t *c);
-int   cuda_coords_get_current_logical (uint64_t *kernelId, uint32_t *gridId, CuDim3 *blockIdx, CuDim3 *threadIdx);
+int   cuda_coords_get_current_logical (uint64_t *kernelId, uint64_t *gridId, CuDim3 *blockIdx, CuDim3 *threadIdx);
 int   cuda_coords_get_current_physical (uint32_t *dev, uint32_t *sm, uint32_t *wp, uint32_t *ln);
 bool  cuda_coords_is_current (cuda_coords_t *c);
+bool  cuda_coords_is_current_logical (cuda_coords_t *c);
 void  cuda_coords_find_valid (cuda_coords_t wished, cuda_coords_t found[CK_MAX], cuda_select_t select_mask);
-void  cuda_save_focus (void);
-void  cuda_restore_focus (void);
+void  cuda_focus_init (cuda_focus_t *focus);
+void  cuda_focus_save (cuda_focus_t *focus);
+void  cuda_focus_restore (cuda_focus_t *focus);
 void  cuda_coords_increment_block (cuda_coords_t *c, CuDim3 grid_dim);
 void  cuda_coords_increment_thread (cuda_coords_t *c, CuDim3 grid_dim, CuDim3 block_dim);
 
@@ -94,6 +104,7 @@ uint32_t cuda_current_device (void);
 uint32_t cuda_current_sm (void);
 uint32_t cuda_current_warp (void);
 uint32_t cuda_current_lane (void);
+kernel_t cuda_current_kernel (void);
 
 /*Coordinates Manipulation */
 bool  cuda_coords_equal (cuda_coords_t *c1, cuda_coords_t *c2);

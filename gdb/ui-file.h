@@ -59,6 +59,9 @@ extern void set_ui_file_data (struct ui_file *stream, void *data, ui_file_delete
 
 extern void *ui_file_data (struct ui_file *file);
 
+/* CUDA: Allow multiple redirections on streams */
+extern void set_ui_file_next (struct ui_file *file, struct ui_file *next);
+extern struct ui_file *ui_file_next (struct ui_file *file);
 
 extern void gdb_flush (struct ui_file *);
 

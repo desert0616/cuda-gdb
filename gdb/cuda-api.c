@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -16,6 +16,7 @@
  */
 
 #include <signal.h>
+#include "cuda-api.h"
 #include <execinfo.h>
 
 #include "defs.h"
@@ -25,8 +26,8 @@
 #include "gdbcore.h"
 
 #include "cuda-options.h"
-#include "cuda-api.h"
 #include "cuda-tdep.h"
+#include "cuda-packet-manager.h"
 
 static void
 cuda_api_trace (char *fmt, ...)
@@ -68,11 +69,18 @@ cuda_api_get_api (void)
                      CUDBG_API_VERSION_REVISION,
                      &cudbgAPI);
   cuda_api_print_api_call_result (res);
+  cuda_api_handle_get_api_error (res);
 
+  return (res != CUDBG_SUCCESS);
+}
+
+void
+cuda_api_handle_get_api_error (CUDBGResult res)
+{
   switch (res)
     {
       case CUDBG_SUCCESS:
-        return 0;
+        return;
 
       case CUDBG_ERROR_INITIALIZATION_FAILURE:
         fprintf_unfiltered (gdb_stderr,
@@ -88,17 +96,24 @@ cuda_api_get_api (void)
     }
 
   fprintf_unfiltered (gdb_stderr, "[CUDA Debugging is disabled]\n");
-  return 1;
 }
 
 static void
 cuda_api_fatal (const char *msg, CUDBGResult res)
 {
-  /* Finalize API */
-  cudbgAPI->finalize ();
+  if (cuda_remote)
+    {
+      cuda_remote_api_finalize ();
+      target_kill ();
+    }
+  else
+    {
+      /* Finalize API */
+      cudbgAPI->finalize ();
 
-  /* Kill inferior */
-  kill (cuda_gdb_get_tid (inferior_ptid), SIGKILL);
+      /* Kill inferior */
+      kill (cuda_gdb_get_tid (inferior_ptid), SIGKILL);
+    }
 
   /* Report error */
   fatal (_("fatal:  %s (error code = %d)"), msg, res);
@@ -112,21 +127,33 @@ cuda_api_initialize (void)
   if (api_initialized)
     return 0;
 
-  res = cudbgAPI->initialize ();
+  if (cuda_remote)
+    res = cuda_remote_api_initialize ();
+  else
+    res = cudbgAPI->initialize ();
   cuda_api_print_api_call_result (res);
+  cuda_api_handle_initialization_error (res);
+
+  return (res != CUDBG_SUCCESS && res != CUDBG_ERROR_SOME_DEVICES_WATCHDOGGED);
+}
+
+void
+cuda_api_handle_initialization_error (CUDBGResult res)
+{
+  uint32_t major, minor, revision;
 
   switch (res)
     {
     case CUDBG_SUCCESS:
       api_initialized = true;
-      return 0;
+      break;
 
     case CUDBG_ERROR_SOME_DEVICES_WATCHDOGGED:
       warning (_("One or more CUDA devices are made unavailable to the application "
                  "because they are used for display and cannot be used while debugging. "
                  "This may change the application behavior."));
       api_initialized = true;
-      return 0;
+      break;
 
     case CUDBG_ERROR_UNINITIALIZED:
       /* Not ready yet. Will try later. */
@@ -138,6 +165,18 @@ cuda_api_initialize (void)
       break;
 
     case CUDBG_ERROR_INCOMPATIBLE_API:
+      if (cudbgGetAPIVersion (&major, &minor, &revision) == CUDBG_SUCCESS)
+        {
+          char msg[1024];
+          snprintf(msg, sizeof(msg),
+                 "Incompatible CUDA driver version."
+                 " Expected %d.%d.%d or later and found %d.%d.%d instead.",
+                 CUDBG_API_VERSION_MAJOR,
+                 CUDBG_API_VERSION_MINOR,
+                 CUDBG_API_VERSION_REVISION,
+                 (int)major, (int)minor, (int)revision);
+         cuda_api_fatal (msg, res);
+       }
       cuda_api_fatal ("Incompatible CUDA driver version.", res);
       break;
 
@@ -149,10 +188,7 @@ cuda_api_initialize (void)
       cuda_api_fatal ("The CUDA driver initialization failed.", res);
       break;
     }
-
-  return 1;
 }
-
 
 void
 cuda_api_finalize ()
@@ -162,13 +198,30 @@ cuda_api_finalize ()
   if (!api_initialized)
     return;
 
+  cuda_api_clear_state ();
+  if (cuda_remote)
+    res = cuda_remote_api_finalize ();
+  else
+    res = cudbgAPI->finalize ();
+  cuda_api_handle_finalize_api_error (res);
+}
+
+void
+cuda_api_clear_state ()
+{
   /* Mark the API as not initialized as early as possible. If the finalize()
    * call fails, we won't try to do anything stupid afterwards. */
   api_initialized = false;
 
   attach_state = CUDA_ATTACH_STATE_NOT_STARTED;
+}
 
-  res = cudbgAPI->finalize ();
+void
+cuda_api_handle_finalize_api_error (CUDBGResult res)
+{
+  if (!api_initialized)
+    return;
+
   cuda_api_print_api_call_result (res);
 
   /* Only emit a warning in case of a failure, because cuda_api_finalize () can
@@ -206,7 +259,10 @@ cuda_api_resume_device (uint32_t dev)
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->resumeDevice (dev);
+  if (cuda_remote)
+    res = cuda_remote_api_resume_device (dev);
+  else
+    res = cudbgAPI->resumeDevice (dev);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_RUNNING_DEVICE)
     error (_("Error: Failed to resume device (dev=%u, error=%u).\n"),
@@ -221,7 +277,10 @@ cuda_api_suspend_device (uint32_t dev)
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->suspendDevice (dev);
+  if (cuda_remote)
+    res = cuda_remote_api_suspend_device (dev);
+  else
+    res = cudbgAPI->suspendDevice (dev);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_SUSPENDED_DEVICE)
     error (_("Error: Failed to suspend device (dev=%u, error=%u).\n"),
@@ -238,7 +297,10 @@ cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *war
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->singleStepWarp (dev, sm, wp, warp_mask);
+  if (cuda_remote)
+    res = cuda_remote_api_single_step_warp (dev, sm, wp, warp_mask);
+  else
+    res = cudbgAPI->singleStepWarp (dev, sm, wp, warp_mask);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to single-step the warp "
@@ -254,7 +316,10 @@ cuda_api_set_breakpoint (uint32_t dev, uint64_t addr)
   if (!api_initialized)
     return true;
 
-  res = cudbgAPI->setBreakpoint (dev, addr);
+  if (cuda_remote)
+    res = cuda_remote_api_set_breakpoint (dev, addr);
+  else
+    res = cudbgAPI->setBreakpoint (dev, addr);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_INVALID_ADDRESS)
     error (_("Error: Failed to set a breakpoint on device %u at address 0x%"PRIx64
@@ -270,7 +335,10 @@ cuda_api_unset_breakpoint (uint32_t dev, uint64_t addr)
   if (!api_initialized)
     return true;
 
-  res = cudbgAPI->unsetBreakpoint (dev, addr);
+  if (cuda_remote)
+    res = cuda_remote_api_unset_breakpoint (dev, addr);
+  else
+    res = cudbgAPI->unsetBreakpoint (dev, addr);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_INVALID_ADDRESS)
     error (_("Error: Failed to unset a breakpoint on device %u at address 0x%"PRIx64
@@ -279,14 +347,17 @@ cuda_api_unset_breakpoint (uint32_t dev, uint64_t addr)
 }
 
 void
-cuda_api_read_grid_id (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *grid_id)
+cuda_api_read_grid_id (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *grid_id)
 {
   CUDBGResult res;
 
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readGridId (dev, sm, wp, grid_id);
+  if (cuda_remote)
+    res = cuda_remote_api_read_grid_id (dev, sm, wp, grid_id);
+  else
+    res = cudbgAPI->readGridId (dev, sm, wp, grid_id);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read the grid index "
@@ -302,7 +373,10 @@ cuda_api_read_block_idx (uint32_t dev, uint32_t sm, uint32_t wp, CuDim3 *blockId
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readBlockIdx (dev, sm, wp, blockIdx);
+  if (cuda_remote)
+    res =  cuda_remote_api_read_block_idx (dev, sm, wp, blockIdx);
+  else
+    res = cudbgAPI->readBlockIdx (dev, sm, wp, blockIdx);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read the block index "
@@ -318,7 +392,10 @@ cuda_api_read_thread_idx (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, C
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readThreadIdx (dev, sm, wp, ln, threadIdx);
+  if (cuda_remote)
+    res = cuda_remote_api_read_thread_idx (dev, sm, wp, ln, threadIdx);
+  else
+    res = cudbgAPI->readThreadIdx (dev, sm, wp, ln, threadIdx);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read the thread index "
@@ -334,7 +411,10 @@ cuda_api_read_broken_warps (uint32_t dev, uint32_t sm, uint64_t *brokenWarpsMask
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readBrokenWarps (dev, sm, brokenWarpsMask);
+  if (cuda_remote)
+    res = cuda_remote_api_read_broken_warps (dev, sm, brokenWarpsMask);
+  else
+    res = cudbgAPI->readBrokenWarps (dev, sm, brokenWarpsMask);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read the broken warps mask "
@@ -350,7 +430,10 @@ cuda_api_read_valid_warps (uint32_t dev, uint32_t sm, uint64_t *valid_warps)
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readValidWarps (dev, sm, valid_warps);
+  if (cuda_remote)
+    res = cuda_remote_api_read_valid_warps (dev, sm, valid_warps);
+  else
+    res = cudbgAPI->readValidWarps (dev, sm, valid_warps);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read the valid warps mask "
@@ -366,7 +449,10 @@ cuda_api_read_valid_lanes (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *val
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readValidLanes (dev, sm, wp, valid_lanes);
+  if (cuda_remote)
+    res = cuda_remote_api_read_valid_lanes (dev, sm, wp, valid_lanes);
+  else
+    res = cudbgAPI->readValidLanes (dev, sm, wp, valid_lanes);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read the valid lanes mask "
@@ -382,7 +468,10 @@ cuda_api_read_active_lanes (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *ac
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readActiveLanes (dev, sm, wp, active_lanes);
+  if (cuda_remote)
+    res = cuda_remote_api_read_active_lanes (dev, sm, wp, active_lanes);
+  else
+    res = cudbgAPI->readActiveLanes (dev, sm, wp, active_lanes);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read the active lanes mask "
@@ -398,7 +487,10 @@ cuda_api_read_code_memory (uint32_t dev, uint64_t addr, void *buf, uint32_t sz)
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readCodeMemory (dev, addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_read_code_memory (dev, addr, buf, sz);
+  else
+    res = cudbgAPI->readCodeMemory (dev, addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read code memory at address 0x%"PRIx64
@@ -413,7 +505,10 @@ cuda_api_read_const_memory (uint32_t dev, uint64_t addr, void *buf, uint32_t sz)
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readConstMemory (dev, addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_read_const_memory (dev, addr, buf, sz);
+  else
+    res = cudbgAPI->readConstMemory (dev, addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read const memory at address 0x%"PRIx64
@@ -429,7 +524,10 @@ cuda_api_read_global_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readGlobalMemory (dev, sm, wp, ln, addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_read_global_memory (dev, sm, wp, ln, addr, buf, sz);
+  else
+    res = cudbgAPI->readGlobalMemory (dev, sm, wp, ln, addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_ADDRESS_NOT_IN_DEVICE_MEM)
     error (_("Error: Failed to read global memory at address 0x%"PRIx64
@@ -437,10 +535,13 @@ cuda_api_read_global_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln
 
   if (res == CUDBG_ERROR_ADDRESS_NOT_IN_DEVICE_MEM)
     {
-      res = cudbgAPI->getHostAddrFromDeviceAddr (dev, addr, &hostaddr);
+      if (cuda_remote)
+        res = cuda_remote_api_get_host_addr_from_device_addr (dev, addr, &hostaddr);
+      else
+        res = cudbgAPI->getHostAddrFromDeviceAddr (dev, addr, &hostaddr);
       cuda_api_print_api_call_result (res);
       if (res != CUDBG_SUCCESS)
-          error (_("Error:  Failed to translate device VA to host VA (error=%u)."), res);
+        error (_("Error:  Failed to translate device VA to host VA (error=%u)."), res);
       read_memory (hostaddr, buf, sz);
     }
 }
@@ -453,7 +554,10 @@ cuda_api_read_pinned_memory (uint64_t addr, void *buf, uint32_t sz)
   if (!api_initialized)
     return false;
 
-  res = cudbgAPI->readPinnedMemory (addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_read_pinned_memory (addr, buf, sz);
+  else
+    res = cudbgAPI->readPinnedMemory (addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_MEMORY_MAPPING_FAILED)
     error (_("Error: Failed to read pinned memory at address 0x%"PRIx64
@@ -469,7 +573,10 @@ cuda_api_read_param_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t add
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readParamMemory (dev, sm, wp, addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_read_param_memory (dev, sm, wp, addr, buf, sz); 
+  else
+    res = cudbgAPI->readParamMemory (dev, sm, wp, addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read param memory at address 0x%"PRIx64
@@ -484,7 +591,10 @@ cuda_api_read_shared_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t ad
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readSharedMemory (dev, sm, wp, addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_read_shared_memory (dev, sm, wp, addr, buf, sz); 
+  else
+    res = cudbgAPI->readSharedMemory (dev, sm, wp, addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read shared memory at address 0x%"PRIx64
@@ -499,7 +609,10 @@ cuda_api_read_texture_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t i
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readTextureMemory (dev, sm, wp, id, dim, coords, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_read_texture_memory (dev, sm, wp, id, dim, coords, buf, sz); 
+  else
+    res = cudbgAPI->readTextureMemory (dev, sm, wp, id, dim, coords, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read texture memory of texture %u dim %u coords %u"
@@ -514,7 +627,10 @@ cuda_api_read_texture_memory_bindless (uint32_t dev, uint32_t sm, uint32_t wp, u
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readTextureMemoryBindless (dev, sm, wp, tex_symtab_index, dim, coords, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_read_texture_memory_bindless (dev, sm, wp, tex_symtab_index, dim, coords, buf, sz);
+  else
+    res = cudbgAPI->readTextureMemoryBindless (dev, sm, wp, tex_symtab_index, dim, coords, buf, sz);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read texture memory of texture %u dim %u coords %u"
              " on device %u sm %u warp %u (error=%u)."), tex_symtab_index, dim, *coords, dev, sm, wp, res);
@@ -528,7 +644,10 @@ cuda_api_read_local_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln,
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readLocalMemory (dev, sm, wp, ln, addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_read_local_memory (dev, sm, wp, ln, addr, buf, sz);
+  else
+    res = cudbgAPI->readLocalMemory (dev, sm, wp, ln, addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read local memory at address 0x%"PRIx64
@@ -544,7 +663,10 @@ cuda_api_read_register (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln,
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readRegister (dev, sm, wp, ln, regno, val);
+  if (cuda_remote)
+    res = cuda_remote_api_read_register (dev, sm, wp, ln, regno, val);
+  else
+    res = cudbgAPI->readRegister (dev, sm, wp, ln, regno, val);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
       error (_("Error: Failed to read register %d "
@@ -560,7 +682,10 @@ cuda_api_read_pc (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint64_t 
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readPC (dev, sm, wp, ln, pc);
+  if (cuda_remote)
+    res = cuda_remote_api_read_pc (dev, sm, wp, ln, pc);
+  else
+    res = cudbgAPI->readPC (dev, sm, wp, ln, pc);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Failed to read the program counter on CUDA device %u (error=%u).\n"), dev, res);
@@ -574,7 +699,10 @@ cuda_api_read_virtual_pc (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, u
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readVirtualPC (dev, sm, wp, ln, pc);
+  if (cuda_remote)
+    res = cuda_remote_api_read_virtual_pc (dev, sm, wp, ln, pc);
+  else
+    res = cudbgAPI->readVirtualPC (dev, sm, wp, ln, pc);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Failed to read the virtual PC on CUDA device %u (error=%u).\n"), dev, res);
@@ -588,7 +716,10 @@ cuda_api_read_lane_exception (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t l
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readLaneException (dev, sm, wp, ln, exception);
+  if (cuda_remote)
+    res = cuda_remote_api_read_lane_exception (dev, sm, wp, ln, exception);
+  else
+    res = cudbgAPI->readLaneException (dev, sm, wp, ln, exception);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
       error (_("Error: Failed to read the lane exception "
@@ -606,7 +737,10 @@ cuda_api_read_call_depth (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, i
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readCallDepth (dev, sm, wp, ln, &api_call_depth);
+  if (cuda_remote)
+    res = cuda_remote_api_read_call_depth (dev, sm, wp, ln, &api_call_depth); 
+  else
+    res = cudbgAPI->readCallDepth (dev, sm, wp, ln, &api_call_depth);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     {
@@ -627,7 +761,10 @@ cuda_api_read_syscall_call_depth (uint32_t dev, uint32_t sm, uint32_t wp, uint32
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readSyscallCallDepth (dev, sm, wp, ln, &api_syscall_call_depth);
+  if (cuda_remote)
+    res = cuda_remote_api_read_syscall_call_depth (dev, sm, wp, ln, &api_syscall_call_depth);
+  else
+    res = cudbgAPI->readSyscallCallDepth (dev, sm, wp, ln, &api_syscall_call_depth);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     {
@@ -649,10 +786,14 @@ cuda_api_read_virtual_return_address (uint32_t dev, uint32_t sm, uint32_t wp, ui
   gdb_assert (level >= 0);
 
   api_call_level = (uint32_t) level;
+
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readVirtualReturnAddress (dev, sm, wp, ln, api_call_level, ra);
+  if (cuda_remote)
+    res = cuda_remote_api_read_virtual_return_address (dev, sm, wp, ln, api_call_level, ra); 
+  else
+    res = cudbgAPI->readVirtualReturnAddress (dev, sm, wp, ln, api_call_level, ra);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     {
@@ -676,7 +817,10 @@ cuda_api_write_global_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t l
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->writeGlobalMemory (dev, sm, wp, ln, addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_write_global_memory (dev, sm, wp, ln, addr, buf, sz);
+  else
+    res = cudbgAPI->writeGlobalMemory (dev, sm, wp, ln, addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_ADDRESS_NOT_IN_DEVICE_MEM)
     error (_("Error: Failed to write global memory at address 0x%"PRIx64
@@ -684,7 +828,10 @@ cuda_api_write_global_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t l
 
   if (res == CUDBG_ERROR_ADDRESS_NOT_IN_DEVICE_MEM)
     {
-      res = cudbgAPI->getHostAddrFromDeviceAddr (dev, addr, &hostaddr);
+      if (cuda_remote)
+        res = cuda_remote_api_get_host_addr_from_device_addr (dev, addr, &hostaddr);
+      else
+        res = cudbgAPI->getHostAddrFromDeviceAddr (dev, addr, &hostaddr);
       cuda_api_print_api_call_result (res);
       if (res != CUDBG_SUCCESS)
         error (_("Error:  Failed to translate device VA to host VA (error=%u)."), res);
@@ -700,7 +847,10 @@ cuda_api_write_pinned_memory (uint64_t addr, const void *buf, uint32_t sz)
   if (!api_initialized)
     return false;
 
-  res = cudbgAPI->writePinnedMemory (addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_write_pinned_memory (addr, buf, sz);
+  else
+    res = cudbgAPI->writePinnedMemory (addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_MEMORY_MAPPING_FAILED)
     error (_("Error: Failed to write pinned memory at address 0x%"PRIx64
@@ -716,7 +866,10 @@ cuda_api_write_param_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t ad
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->writeParamMemory (dev, sm, wp, addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_write_param_memory (dev, sm, wp, addr, buf, sz);
+  else
+    res = cudbgAPI->writeParamMemory (dev, sm, wp, addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to write param memory at address 0x%"PRIx64
@@ -731,7 +884,10 @@ cuda_api_write_shared_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t a
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->writeSharedMemory (dev, sm, wp, addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_write_shared_memory (dev, sm, wp, addr, buf, sz);
+  else
+    res = cudbgAPI->writeSharedMemory (dev, sm, wp, addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to write shared memory at address 0x%"PRIx64
@@ -746,7 +902,10 @@ cuda_api_write_local_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->writeLocalMemory (dev, sm, wp, ln, addr, buf, sz);
+  if (cuda_remote)
+    res = cuda_remote_api_write_local_memory (dev, sm, wp, ln, addr, buf, sz);
+  else
+    res = cudbgAPI->writeLocalMemory (dev, sm, wp, ln, addr, buf, sz);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to write local memory at address 0x%"PRIx64
@@ -761,7 +920,10 @@ cuda_api_write_register (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, ui
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->writeRegister (dev, sm, wp, ln, regno, val);
+  if (cuda_remote)
+    res = cuda_remote_api_write_register (dev, sm, wp, ln, regno, val);
+  else
+    res = cudbgAPI->writeRegister (dev, sm, wp, ln, regno, val);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
       error (_("Error: Failed to write register %d "
@@ -801,7 +963,7 @@ cuda_api_get_block_dim (uint32_t dev, uint32_t sm, uint32_t wp, CuDim3 *block_di
            dev, sm, wp, res);
 }
 
- void
+void
 cuda_api_get_blocking (uint32_t dev, uint32_t sm, uint32_t wp, bool *blocking)
 {
   CUDBGResult res;
@@ -893,7 +1055,10 @@ cuda_api_get_num_devices (uint32_t *numDev)
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->getNumDevices (numDev);
+  if (cuda_remote)
+    res = cuda_remote_api_get_num_devices (numDev);
+  else
+    res = cudbgAPI->getNumDevices (numDev);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to get the number of devices"
@@ -972,10 +1137,10 @@ cuda_api_is_device_code_address (uint64_t addr, bool *is_device_address)
       return;
     }
 
-  if (!api_initialized)
-    return;
-
-  res = cudbgAPI->isDeviceCodeAddress (addr, is_device_address);
+  if (cuda_remote)
+    res = cuda_remote_api_is_device_code_address (addr, is_device_address);
+  else
+    res = cudbgAPI->isDeviceCodeAddress (addr, is_device_address);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
       error (_("Error: Failed to determine if address 0x%"PRIx64" corresponds "
@@ -1014,6 +1179,12 @@ cuda_api_set_notify_new_event_callback (CUDBGNotifyNewEventCallback callback)
 
   res = cudbgAPI->setNotifyNewEventCallback (callback);
   cuda_api_print_api_call_result (res);
+  cuda_api_handle_set_callback_api_error (res);
+}
+
+void
+cuda_api_handle_set_callback_api_error (CUDBGResult res)
+{
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to set the new event callback (error=%u)."), res);
 }
@@ -1041,7 +1212,10 @@ cuda_api_acknowledge_sync_events (void)
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->acknowledgeSyncEvents ();
+  if (cuda_remote)
+    res = cuda_remote_api_acknowledge_sync_events ();
+  else
+    res = cudbgAPI->acknowledgeSyncEvents ();
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to acknowledge a sync CUDA event (error=%u)."), res);
@@ -1070,7 +1244,10 @@ cuda_api_disassemble (uint32_t dev, uint64_t addr, uint32_t *instSize, char *buf
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->disassemble (dev, addr, instSize, buf, bufSize);
+  if (cuda_remote)
+    res = cuda_remote_api_disassemble (dev, addr, instSize, buf, bufSize);
+  else
+    res = cudbgAPI->disassemble (dev, addr, instSize, buf, bufSize);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to disassemble instruction at address 0x%"PRIx64
@@ -1080,11 +1257,16 @@ cuda_api_disassemble (uint32_t dev, uint64_t addr, uint32_t *instSize, char *buf
 void
 cuda_api_set_attach_state (cuda_attach_state_t state)
 {
-  CUDBGResult res = CUDBG_SUCCESS;
+  CUDBGResult res;
 
   attach_state = state;
 
-  if (state == CUDA_ATTACH_STATE_DETACHING)
+  if (state != CUDA_ATTACH_STATE_DETACHING)
+    return;
+
+  if (cuda_remote)
+    res = cuda_remote_api_clear_attach_state ();
+  else
     res = cudbgAPI->clearAttachState ();
 
   if (res != CUDBG_SUCCESS)
@@ -1094,6 +1276,7 @@ cuda_api_set_attach_state (cuda_attach_state_t state)
 cuda_attach_state_t
 cuda_api_get_attach_state (void)
 {
+
   return attach_state;
 }
 
@@ -1102,7 +1285,10 @@ cuda_api_request_cleanup_on_detach (void)
 {
   CUDBGResult res = CUDBG_SUCCESS;
 
-  res = cudbgAPI->requestCleanupOnDetach ();
+  if (cuda_remote)
+    res = cuda_remote_api_request_cleanup_on_detach();
+  else
+    res = cudbgAPI->requestCleanupOnDetach ();
 
   if (res != CUDBG_SUCCESS)
     warning (_("Failed to clear attach state (error=%u).\n"), res);
@@ -1110,14 +1296,17 @@ cuda_api_request_cleanup_on_detach (void)
 
 void
 cuda_api_memcheck_read_error_address (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln,
-                        uint64_t *address, ptxStorageKind *storage)
+                                      uint64_t *address, ptxStorageKind *storage)
 {
   CUDBGResult res;
 
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->memcheckReadErrorAddress (dev, sm, wp, ln, address, storage);
+  if (cuda_remote)
+    res = cuda_remote_api_memcheck_read_error_address (dev, sm, wp, ln, address, storage);
+  else
+    res = cudbgAPI->memcheckReadErrorAddress (dev, sm, wp, ln, address, storage);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to read error address "
@@ -1133,18 +1322,39 @@ cuda_api_get_state ()
 }
 
 void
-cuda_api_get_grid_status (uint32_t dev, uint32_t grid_id, CUDBGGridStatus *status)
+cuda_api_get_grid_status (uint32_t dev, uint64_t grid_id, CUDBGGridStatus *status)
 {
   CUDBGResult res;
 
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->getGridStatus (dev, grid_id, status);
+  if (cuda_remote)
+    res = cuda_remote_api_get_grid_status (dev, grid_id, status);
+  else
+    res = cudbgAPI->getGridStatus (dev, grid_id, status);
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     error (_("Error: Failed to get grid status "
-             "(dev=%u, grid_id=%d, error=%u).\n"),
+             "(dev=%u, grid_id=%"PRId64", error=%u).\n"),
+           dev, grid_id, res);
+}
+
+void
+cuda_api_get_grid_info (uint32_t dev, uint64_t grid_id, CUDBGGridInfo *info)
+{
+  CUDBGResult res;
+
+  if (!api_initialized)
+    return;
+
+  if (cuda_remote)
+    res = cuda_remote_api_get_grid_info (dev, grid_id, info);
+  else
+    res = cudbgAPI->getGridInfo(dev, grid_id, info);
+  cuda_api_print_api_call_result (res);
+  if (res != CUDBG_SUCCESS)
+    error (_("Error: Failed to get grid info (dev=%u, grid_id=%"PRId64", error=%u).\n"),
            dev, grid_id, res);
 }
 
@@ -1153,4 +1363,34 @@ cuda_api_attach_or_detach_in_progress (void)
 {
   return (attach_state == CUDA_ATTACH_STATE_DETACHING ||
           attach_state == CUDA_ATTACH_STATE_IN_PROGRESS);
+}
+
+void
+cuda_api_get_adjusted_code_address (uint32_t dev, uint64_t addr, uint64_t *adjusted_addr, CUDBGAdjAddrAction adj_action)
+{
+  CUDBGResult res;
+
+  if (!api_initialized)
+    return;
+
+  if (cuda_remote)
+    res = cuda_remote_api_get_adjusted_code_address (dev, addr, adjusted_addr, adj_action);
+  else
+    res = cudbgAPI->getAdjustedCodeAddress (dev, addr, adjusted_addr, adj_action);
+  cuda_api_print_api_call_result (res);
+  if (res != CUDBG_SUCCESS)
+    error (_("Error: Failed to get adjusted code address "
+             "(dev=%u, addr=0x%"PRIx64", error=%u).\n"),
+             dev, addr, res);
+}
+
+void
+cuda_api_set_async_launch_notifications(bool enabled)
+{
+  if (!api_initialized)
+    return;
+  if (cuda_remote)
+    cuda_remote_api_set_async_launch_notifications (enabled);
+  else
+    cudbgAPI->setAsyncLaunchNotifications (enabled);
 }

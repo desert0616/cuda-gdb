@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -25,10 +25,17 @@
 #include <limits.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+
+#ifdef GDBSERVER
+#include <server.h>
+#include <cuda-tdep-server.h>
+#else
 #include <defs.h>
 #include <gdb_assert.h>
 #include <cuda-options.h>
 #include <cuda-tdep.h>
+#endif
+
 #include <cuda-utils.h>
 #include <libcudbg.h>
 #include <libcudbgipc.h>
@@ -41,6 +48,7 @@ static void cudbgipc_trace(char *fmt, ...);
 CUDBGIPC_t commOut;
 CUDBGIPC_t commIn;
 CUDBGIPC_t commCB;
+extern pthread_t cudagdbMainThreadHandle;
 
 static CUDBGResult
 cudbgipcCreate(CUDBGIPC_t *ipc, int from, int to, int flags)
@@ -121,7 +129,7 @@ cudbgipcDestroy(CUDBGIPC_t *ipc)
     ipc->to = 0;
     ipc->initialized = false;
 
-    return CUDBG_SUCCESS; 
+    return CUDBG_SUCCESS;
 }
 
 CUDBGResult
@@ -190,6 +198,10 @@ cudbgipcPush(CUDBGIPC_t *out)
     for (offset = 0, writeCount = 0; offset < out->dataSize; offset += writeCount) {
         writeCount = write(out->fd, buf + offset, out->dataSize - offset);
         if (writeCount < 0) {
+            /* Forward SIGINT received during syscall to main thread signal handler */
+            if (errno == EINTR)
+              pthread_kill (cudagdbMainThreadHandle, SIGINT);
+
             if (errno != EAGAIN && errno != EINTR) {
                 cudbgipc_trace("Fifo write error (from=%u, to=%u, out->datSize=%u, offset=%u, errno=%d)",
                                out->from, out->to, out->dataSize, offset, errno);
@@ -198,8 +210,8 @@ cudbgipcPush(CUDBGIPC_t *out)
             writeCount = 0;
         }
     }
-    
-    memset(out->data, 0, sizeof(out->dataSize));    
+
+    memset(out->data, 0, sizeof(out->dataSize));
     out->dataSize = sizeof(out->dataSize);
     return CUDBG_SUCCESS;
 }
@@ -219,6 +231,10 @@ cudbgipcRead(CUDBGIPC_t *in, void *buf, uint32_t size)
             return CUDBG_ERROR_COMMUNICATION_FAILURE;
         }
         if (readCount < 0) {
+            /* Forward SIGINT received during syscall to main thread signal handler */
+            if (errno == EINTR)
+              pthread_kill (cudagdbMainThreadHandle, SIGINT);
+
             if (errno != EAGAIN && errno != EINTR) {
                 cudbgipc_trace("Fifo read error (from=%u, to=%u, size=%u, offset=%u, errno=%d)",
                                in->from, in->to, size, offset, errno);
@@ -277,6 +293,10 @@ cudbgipcWait(CUDBGIPC_t *in)
    FD_SET(in->fd, &errFDS);
    do {
        ret = select(in->fd + 1, &readFDS, NULL, &errFDS, NULL);
+
+       /* Forward SIGINT received during syscall to main thread signal handler */
+       if (ret < 0 && errno == EINTR)
+         pthread_kill (cudagdbMainThreadHandle, SIGINT);
    } while (ret == -1 && errno == EINTR);
 
    if (ret == -1) {
@@ -324,7 +344,7 @@ cudbgipcAppend(void *d, uint32_t size)
         if (res != CUDBG_SUCCESS)
             return res;
     }
-   
+
     dataSize = commOut.dataSize + size;
     if ((data = realloc(commOut.data, dataSize)) == NULL)
         return CUDBG_ERROR_COMMUNICATION_FAILURE;
@@ -361,7 +381,7 @@ cudbgipcRequest(void **d)
     }
 
     *(uintptr_t **)d = (uintptr_t *)commIn.data;
-        
+
     return CUDBG_SUCCESS;
 }
 
@@ -377,7 +397,7 @@ cudbgipcCBWaitForData(void *d, uint32_t size)
             return res;
         }
     }
- 
+
     res = cudbgipcWait(&commCB);
     if (res != CUDBG_SUCCESS) {
         cudbgipc_trace("CB wait for data failed (res=%d)", res);
@@ -389,20 +409,35 @@ cudbgipcCBWaitForData(void *d, uint32_t size)
         cudbgipc_trace("CB read data failed (res=%d)", res);
         return res;
     }
-        
+
     return CUDBG_SUCCESS;
 }
 
 void cudbgipc_trace(char *fmt, ...)
 {
+#ifdef GDBSERVER
+  struct cuda_trace_msg *msg;
+#endif
   va_list ap;
 
-  if (cuda_options_debug_libcudbg())
-    {
-      va_start (ap, fmt);
-      fprintf (stderr, "[CUDAGDB] libcudbg ipc ");
-      vfprintf (stderr, fmt, ap);
-      fprintf (stderr, "\n");
-      fflush (stderr);
-    }
+  if (!cuda_options_debug_libcudbg())
+    return;
+
+  va_start (ap, fmt);
+#ifdef GDBSERVER
+  msg = xmalloc (sizeof (*msg));
+  if (!cuda_first_trace_msg)
+    cuda_first_trace_msg = msg;
+  else
+    cuda_last_trace_msg->next = msg;
+  sprintf (msg->buf, "[CUDAGDB] libcudbg ipc");
+  vsnprintf (msg->buf + strlen (msg->buf), sizeof (msg->buf), fmt, ap);
+  msg->next = NULL;
+  cuda_last_trace_msg = msg;
+#else
+  fprintf (stderr, "[CUDAGDB] libcudbg ipc");
+  vfprintf (stderr, fmt, ap);
+  fprintf (stderr, "\n");
+  fflush (stderr);
+#endif
 }

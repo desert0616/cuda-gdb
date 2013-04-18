@@ -21,7 +21,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -70,6 +70,8 @@ struct mi_cmd mi_cmds[] =
   { "cuda-info-kernels", { NULL, 0 }, mi_cmd_cuda_info_kernels},
   { "cuda-info-blocks", { NULL, 0 }, mi_cmd_cuda_info_blocks},
   { "cuda-info-threads", { NULL, 0 }, mi_cmd_cuda_info_threads},
+  { "cuda-info-launch-trace", { NULL, 0 }, mi_cmd_cuda_info_launch_trace},
+  { "cuda-info-contexts", { NULL, 0 }, mi_cmd_cuda_info_contexts},
   { "cuda-focus-query", {NULL, 0 }, mi_cmd_cuda_focus_query},
   { "cuda-focus-switch", {NULL, 0 }, mi_cmd_cuda_focus_switch},
   { "data-disassemble", { NULL, 0 }, mi_cmd_disassemble},

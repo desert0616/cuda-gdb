@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -98,6 +98,7 @@
 #include "cuda-autostep.h"
 #include "cuda-elf-image.h"
 #include "cuda-options.h"
+#include "cuda-convvars.h"
 
 /* Arguments to pass as context to some catch command handlers.  */
 #define CATCH_PERMANENT ((void *) (uintptr_t) 0)
@@ -328,6 +329,21 @@ show_pending_break_support (struct ui_file *file, int from_tty,
 {
   fprintf_filtered (file, _("\
 Debugger's behavior regarding pending breakpoints is %s.\n"),
+		    value);
+}
+
+/* If AUTO_BOOLEAN_FALSE, gdb will not attempt to create pending breakpoints conditionals.
+   If AUTO_BOOLEAN_TRUE, gdb will automatically create pending breakpoints
+   for unrecognized breakpoint conditionals.
+   If AUTO_BOOLEAN_AUTO, gdb will query when breakpoints are unrecognized.  */
+static enum auto_boolean conditional_pending_break_support;
+static void
+show_conditional_pending_break_support (struct ui_file *file, int from_tty,
+			    struct cmd_list_element *c,
+			    const char *value)
+{
+  fprintf_filtered (file, _("\
+Conditional breakpoints will always be pending if the condition cannot be evaluated is %s.\n"),
 		    value);
 }
 
@@ -1925,6 +1941,21 @@ insert_breakpoints (void)
     insert_breakpoint_locations ();
 }
 
+void
+cuda_insert_breakpoints (void)
+{
+  struct breakpoint *bpt;
+
+  update_global_location_list (1);
+
+  /* update_global_location_list does not insert breakpoints when
+     always_inserted_mode is not enabled.  Explicitly insert them
+     now.  */
+  if (!breakpoints_always_inserted_mode ())
+    insert_breakpoint_locations ();
+}
+
+
 /* insert_breakpoints is used when starting or continuing the program.
    remove_breakpoints is used when the program stops.
    Both return zero if successful,
@@ -2039,6 +2070,22 @@ remove_breakpoints (void)
 
   ALL_BP_LOCATIONS (b, bp_tmp)
   {
+    if (b->inserted)
+      val |= remove_breakpoint (b, mark_uninserted);
+  }
+  return val;
+}
+
+int
+cuda_remove_breakpoints (void)
+{
+  struct bp_location *b, **bp_tmp;
+  int val = 0;
+
+  ALL_BP_LOCATIONS (b, bp_tmp)
+  {
+    if (b->loc_type == bp_loc_hardware_watchpoint)
+      continue;
     if (b->inserted)
       val |= remove_breakpoint (b, mark_uninserted);
   }
@@ -3592,8 +3639,10 @@ cuda_breakpoint_cond_eval (void *data)
   struct value *mark = value_mark ();
   cuda_coords_t coords = CUDA_INVALID_COORDS, current = CUDA_INVALID_COORDS;
   cuda_coords_t filter = CUDA_WILDCARD_COORDS;
+  cuda_focus_t focus;
 
-  cuda_save_focus ();
+  cuda_focus_init (&focus);
+  cuda_focus_save (&focus);
   iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter,
                                CUDA_SELECT_VALID | CUDA_SELECT_BKPT);
 
@@ -3612,7 +3661,7 @@ cuda_breakpoint_cond_eval (void *data)
     }
 
   cuda_iterator_destroy (iter);
-  cuda_restore_focus ();
+  cuda_focus_restore (&focus);
 
   if (coords.valid)
     {
@@ -3627,6 +3676,47 @@ cuda_breakpoint_cond_eval (void *data)
 
   value_free_to_mark (mark);
   return !coords.valid;
+}
+
+/* CUDA - breakpoints */
+/* For a valid thread, check if it hits a cuda breakpoint B_NUMBER.
+   It checks all cuda breakpoints when B_NUMBER == 0  */
+bool
+cuda_eval_thread_at_breakpoint (uint64_t pc, cuda_coords_t *c, int b_number)
+{
+  struct bp_location *bl, **bl_tmp;
+  struct address_space *aspace = target_thread_address_space (inferior_ptid);
+  cuda_coords_t prev_coords;
+  bool cond_eval_result = false;
+
+  gdb_assert (lane_is_valid (c->dev, c->sm, c->wp, c->ln));
+
+  ALL_BP_LOCATIONS (bl, bl_tmp)
+    {
+      if (!breakpoint_enabled (bl->owner) ||
+          !bl->owner->cuda_breakpoint ||
+          bl->owner->number < 0 ||
+          !cuda_breakpoint_address_match (bl->owner->gdbarch, bl->pspace->aspace,
+                                          bl->address, aspace, pc))
+        continue;
+
+      if (b_number > 0 && b_number != bl->owner->number)
+        continue;
+
+      /* Hit a non-conditional breakpoint. */
+      if (!bl->cond)
+        return true;
+
+      /* Hit a conditional breakpoint. Evaluate the condition for this thread. */
+      cuda_coords_get_current (&prev_coords);
+      switch_to_cuda_thread (c);
+      cond_eval_result = value_true (evaluate_expression (bl->cond));
+      switch_to_cuda_thread (&prev_coords);
+      if (cond_eval_result)
+        return true;
+    }
+
+  return false;
 }
 
 /* Allocate a new bpstat and chain it to the current one.  */
@@ -4453,23 +4543,38 @@ bpstat_what (bpstat bs)
           break;
         /* CUDA - breakpoint for error reporting */
         case bp_cuda_driver_api_error:
-          if (cuda_options_api_failures_stop ())
-            /* Stop and show info about the error. */
-            this_action = BPSTAT_WHAT_STOP_NOISY;
-          else 
-            {
-              if (cuda_options_api_failures_ignore ())
-                {
-                    /* Don't stop, just show a warning */
-                    char* func_name = NULL;
-                    uint64_t res = cuda_get_last_driver_api_error_code ();
-                    cuda_get_last_driver_api_error_func_name (&func_name);
-                    warning (_("Cuda API error detected: %s returned (0x%"PRIx64")\n"), func_name, res);
-                    xfree(func_name);
-                }
+          {
+            char* func_name = NULL;
+            uint64_t error_code = 0ULL;
+            bool runtime_api_error = false;
+
+            error_code = cuda_get_last_driver_api_error_code ();
+            cuda_get_last_driver_api_error_func_name (&func_name);
+            runtime_api_error = func_name && strlen (func_name) > 4 && !strncmp (func_name, "cuda", 4);
+
+            if ((runtime_api_error && error_code == 34  /* cudaErrorNotReady */) ||
+                (!runtime_api_error && error_code == 600 /* CUDA_ERROR_NOT_READY */))
+              {
+                /* Ignore non errors */
                 this_action = BPSTAT_WHAT_SINGLE;
-            }
-          break;
+              }
+            else if (cuda_options_api_failures_stop ())
+              {
+                /* Stop and show info about the error. */
+                this_action = BPSTAT_WHAT_STOP_NOISY;
+              }
+            else
+              {
+                if (cuda_options_api_failures_ignore ())
+                  /* Don't stop, just show a warning */
+                  warning (_("Cuda API error detected: %s returned (0x%"PRIx64")\n"),
+                           func_name, error_code);
+                this_action = BPSTAT_WHAT_SINGLE;
+              }
+
+            xfree(func_name);
+            break;
+          }
         case bp_cuda_driver_internal_error:
           /* Stop and show info about the error. */
           this_action = BPSTAT_WHAT_STOP_NOISY;
@@ -4645,7 +4750,7 @@ static void print_breakpoint_location (struct breakpoint *b,
   if (loc != NULL)
     set_current_program_space (loc->pspace);
 
-  if (b->source_file && loc)
+  if (loc && loc->source_file)
     {
       /* CUDA - breakpoints */
       if (loc && loc->cuda.function_name[0])
@@ -4668,7 +4773,7 @@ static void print_breakpoint_location (struct breakpoint *b,
               ui_out_text (uiout, " at ");
             }
 	}
-      ui_out_field_string (uiout, "file", b->source_file);
+      ui_out_field_string (uiout, "file", loc->source_file);
       ui_out_text (uiout, ":");
       
       if (ui_out_is_mi_like_p (uiout))
@@ -4684,7 +4789,7 @@ static void print_breakpoint_location (struct breakpoint *b,
       if (loc && loc->cuda.line_number)
         ui_out_field_int (uiout, "line", loc->cuda.line_number);
       else
-        ui_out_field_int (uiout, "line", b->line_number);
+        ui_out_field_int (uiout, "line", loc->line_number);
     }
   else if (loc)
     {
@@ -5679,21 +5784,39 @@ static void free_bp_location (struct bp_location *loc)
 
   if (loc->function_name)
     xfree (loc->function_name);
-  
+
+  if (loc->source_file)
+    xfree (loc->source_file);
+
   xfree (loc);
 }
 
-/* Helper to set_raw_breakpoint below.  Creates a breakpoint
-   that has type BPTYPE and has no locations as yet.  */
-/* This function is used in gdbtk sources and thus can not be made static.  */
-
-static struct breakpoint *
-set_raw_breakpoint_without_location (struct gdbarch *gdbarch,
-				     enum bptype bptype)
+static void
+add_to_breakpoint_chain (struct breakpoint *b)
 {
-  struct breakpoint *b, *b1;
+  struct breakpoint *b1;
 
-  b = (struct breakpoint *) xmalloc (sizeof (struct breakpoint));
+  /* Add this breakpoint to the end of the chain so that a list of
+     breakpoints will come out in order of increasing numbers.  */
+
+  b1 = breakpoint_chain;
+  if (b1 == 0)
+    breakpoint_chain = b;
+  else
+    {
+      while (b1->next)
+	b1 = b1->next;
+      b1->next = b;
+    }
+}
+
+/* Initializes breakpoint B with type BPTYPE and no locations yet.  */
+
+static void
+init_raw_breakpoint_without_location (struct breakpoint *b,
+				      struct gdbarch *gdbarch,
+				      enum bptype bptype)
+{
   memset (b, 0, sizeof (*b));
 
   b->type = bptype;
@@ -5717,20 +5840,22 @@ set_raw_breakpoint_without_location (struct gdbarch *gdbarch,
   b->cuda_autostep_length_type = cuda_autostep_insts;
   /* CUDA - device breakpoints */
   b->cuda_breakpoint = 0;
+}
 
-  /* Add this breakpoint to the end of the chain
-     so that a list of breakpoints will come out in order
-     of increasing numbers.  */
+/* Helper to set_raw_breakpoint below.  Creates a breakpoint
+   that has type BPTYPE and has no locations as yet.  */
+/* This function is used in gdbtk sources and thus can not be made static.  */
 
-  b1 = breakpoint_chain;
-  if (b1 == 0)
-    breakpoint_chain = b;
-  else
-    {
-      while (b1->next)
-	b1 = b1->next;
-      b1->next = b;
-    }
+static struct breakpoint *
+set_raw_breakpoint_without_location (struct gdbarch *gdbarch,
+				     enum bptype bptype)
+{
+  struct breakpoint *b;
+
+  b = (struct breakpoint *) xmalloc (sizeof (struct breakpoint));
+
+  init_raw_breakpoint_without_location (b, gdbarch, bptype);
+  add_to_breakpoint_chain (b);
   return b;
 }
 
@@ -5764,28 +5889,22 @@ get_sal_arch (struct symtab_and_line sal)
   return NULL;
 }
 
-/* set_raw_breakpoint is a low level routine for allocating and
-   partially initializing a breakpoint of type BPTYPE.  The newly
-   created breakpoint's address, section, source file name, and line
-   number are provided by SAL.  The newly created and partially
-   initialized breakpoint is added to the breakpoint chain and
-   is also returned as the value of this function.
+/* Low level routine for partially initializing a breakpoint of type
+   BPTYPE.  The newly created breakpoint's address, section, source
+   file name, and line number are provided by SAL.
 
    It is expected that the caller will complete the initialization of
    the newly created breakpoint struct as well as output any status
-   information regarding the creation of a new breakpoint.  In
-   particular, set_raw_breakpoint does NOT set the breakpoint
-   number!  Care should be taken to not allow an error to occur
-   prior to completing the initialization of the breakpoint.  If this
-   should happen, a bogus breakpoint will be left on the chain.  */
+   information regarding the creation of a new breakpoint.  */
 
-struct breakpoint *
-set_raw_breakpoint (struct gdbarch *gdbarch,
-		    struct symtab_and_line sal, enum bptype bptype)
+static void
+init_raw_breakpoint (struct breakpoint *b, struct gdbarch *gdbarch,
+		     struct symtab_and_line sal, enum bptype bptype)
 {
-  struct breakpoint *b = set_raw_breakpoint_without_location (gdbarch, bptype);
   CORE_ADDR adjusted_address;
   struct gdbarch *loc_gdbarch;
+
+  init_raw_breakpoint_without_location (b, gdbarch, bptype);
 
   loc_gdbarch = get_sal_arch (sal);
   if (!loc_gdbarch)
@@ -5813,16 +5932,41 @@ set_raw_breakpoint (struct gdbarch *gdbarch,
   b->pspace = sal.pspace;
 
   if (sal.symtab == NULL)
-    b->source_file = NULL;
+    b->loc->source_file = NULL;
   else
-    b->source_file = xstrdup (sal.symtab->filename);
+    b->loc->source_file = xstrdup (sal.symtab->filename);
   b->loc->section = sal.section;
-  b->line_number = sal.line;
+  b->loc->line_number = sal.line;
 
   set_breakpoint_location_function (b->loc);
 
   breakpoints_changed ();
+}
+/* set_raw_breakpoint is a low level routine for allocating and
+   partially initializing a breakpoint of type BPTYPE.  The newly
+   created breakpoint's address, section, source file name, and line
+   number are provided by SAL.  The newly created and partially
+   initialized breakpoint is added to the breakpoint chain and
+   is also returned as the value of this function.
 
+   It is expected that the caller will complete the initialization of
+   the newly created breakpoint struct as well as output any status
+   information regarding the creation of a new breakpoint.  In
+   particular, set_raw_breakpoint does NOT set the breakpoint
+   number!  Care should be taken to not allow an error to occur
+   prior to completing the initialization of the breakpoint.  If this
+   should happen, a bogus breakpoint will be left on the chain.  */
+
+struct breakpoint *
+set_raw_breakpoint (struct gdbarch *gdbarch,
+		    struct symtab_and_line sal, enum bptype bptype)
+{
+  struct breakpoint *b;
+
+  b = (struct breakpoint *) xmalloc (sizeof (struct breakpoint));
+
+  init_raw_breakpoint (b, gdbarch, sal, bptype);
+  add_to_breakpoint_chain (b);
   return b;
 }
 
@@ -5976,7 +6120,7 @@ cuda_create_auto_breakpoint (CORE_ADDR address, uint64_t context_id)
   cuda_gdbarch = cuda_get_gdbarch ();
   if (!cuda_gdbarch)
     {
-      warning (_("Could not set CUDA auto breakpoint at %p\n"), (void *)address);
+      warning (_("Could not set CUDA auto breakpoint at 0x%llx\n"), (unsigned long long)address);
       return NULL;
     }
 
@@ -6118,7 +6262,7 @@ cuda_add_location (struct breakpoint *b, elf_image_t elf_image)
     return NULL;
 
   /* see if we can map the string to an actual address */
-  found = cuda_find_function_pc_from_objfile (objfile, b->addr_string, &addr);
+  found = cuda_find_pc_from_address_string (objfile, b->addr_string, &addr);
   if (!found)
     return NULL;
 
@@ -6143,6 +6287,9 @@ cuda_add_location (struct breakpoint *b, elf_image_t elf_image)
   if (symbol)
     strncpy (loc->cuda.function_name, SYMBOL_PRINT_NAME (symbol),
              sizeof loc->cuda.function_name);
+
+  loc->address = adjust_breakpoint_address (b->gdbarch, loc->address,
+                                            loc->cuda.type);
 
   /* the location has been created. No need to to do more. */
   cuda_trace ("added CUDA breakpoint location: breakpoint %d address %p",
@@ -6197,7 +6344,7 @@ cuda_promote_location (struct bp_location* loc, elf_image_t elf_image)
       bp_type = cuda_bp_runtime_api;
 
       /* check if breakpoint was set on a symbol */
-      found = cuda_find_function_pc_from_objfile (objfile, b->addr_string, &addr);
+      found = cuda_find_pc_from_address_string (objfile, b->addr_string, &addr);
 
       /* If no symbol found, then the breakpoint was set on a file:lineno
        * and the address is a host address. Nothing to do. */
@@ -6232,6 +6379,9 @@ cuda_promote_location (struct bp_location* loc, elf_image_t elf_image)
     strncpy (loc->cuda.function_name, SYMBOL_PRINT_NAME (symbol),
              sizeof loc->cuda.function_name);
 
+  loc->address = adjust_breakpoint_address (b->gdbarch, loc->address,
+                                            loc->cuda.type);
+
   cuda_trace ("promoted CUDA breakpoint location: breakpoint %d addr %p",
               b->number, loc->address);
   return loc;
@@ -6262,7 +6412,7 @@ cuda_clean_shadow_host_breakpoints (struct breakpoint *b, elf_image_t elf_image)
     return;
 
   /* check that the breakpoint is explicitly set on a line number */
-  if (cuda_find_function_pc_from_objfile (objfile, b->addr_string, &addr))
+  if (cuda_find_pc_from_address_string (objfile, b->addr_string, &addr))
     return;
 
   /* uninsert the existing breakpoint on the host locations */
@@ -6317,6 +6467,9 @@ cuda_resolve_breakpoints (elf_image_t elf_image)
 
   gdb_assert (cuda_elf_image_is_loaded (elf_image));
 
+  /* conditional breakpoints might rely on cudart symbols */
+  cuda_update_cudart_symbols();
+
   ALL_BREAKPOINTS_SAFE (b, tmp)
     {
       /* skip disabled breakpoints */
@@ -6325,6 +6478,13 @@ cuda_resolve_breakpoints (elf_image_t elf_image)
 
       /* skip internal breakpoints others than CUDA auto breakpoints */
       if (b->number < 0 && b->type != bp_cuda_auto)
+        continue;
+
+      /* skip watchpoints */
+      if (b->type == bp_watchpoint || 
+          b->type == bp_hardware_watchpoint || 
+          b->type == bp_read_watchpoint ||
+          b->type == bp_access_watchpoint)
         continue;
 
       /* make sure we already have the locations with the addresses if available */
@@ -6357,6 +6517,7 @@ cuda_resolve_breakpoints (elf_image_t elf_image)
         if (!loc->section)
           b->loc->section = find_pc_section (loc->address);
     }
+
 }
 
 /* CUDA - cuda breakpoints */
@@ -7359,13 +7520,13 @@ clone_momentary_breakpoint (struct breakpoint *orig)
   copy->loc->address = orig->loc->address;
   copy->loc->section = orig->loc->section;
   copy->loc->pspace = orig->loc->pspace;
+  copy->loc->line_number = orig->loc->line_number;
 
-  if (orig->source_file == NULL)
-    copy->source_file = NULL;
+  if (orig->loc->source_file == NULL)
+    copy->loc->source_file = NULL;
   else
-    copy->source_file = xstrdup (orig->source_file);
+    copy->loc->source_file = xstrdup (orig->loc->source_file);
 
-  copy->line_number = orig->line_number;
   copy->frame_id = orig->frame_id;
   copy->thread = orig->thread;
   copy->pspace = orig->pspace;
@@ -7535,15 +7696,15 @@ mention (struct breakpoint *b)
 	}
       else
 	{
-	  if (opts.addressprint || b->source_file == NULL)
+	  if (opts.addressprint || b->loc->source_file == NULL)
 	    {
 	      printf_filtered (" at ");
 	      fputs_filtered (paddress (b->loc->gdbarch, b->loc->address),
 			      gdb_stdout);
 	    }
-	  if (b->source_file)
+	  if (b->loc->source_file)
 	    printf_filtered (": file %s, line %d.",
-			     b->source_file, b->line_number);
+			     b->loc->source_file, b->loc->line_number);
 	  
 	  if (b->loc->next)
 	    {
@@ -7581,6 +7742,10 @@ add_location_to_breakpoint (struct breakpoint *b,
   loc->pspace = sal->pspace;
   gdb_assert (loc->pspace != NULL);
   loc->section = sal->section;
+
+  if (sal->symtab != NULL)
+    loc->source_file = xstrdup (sal->symtab->filename);
+  loc->line_number = sal->line;
 
   set_breakpoint_location_function (loc);
   return loc;
@@ -7630,26 +7795,26 @@ bp_loc_is_permanent (struct bp_location *loc)
 
 
 
+
 /* Create a breakpoint with SAL as location.  Use ADDR_STRING
    as textual description of the location, and COND_STRING
    as condition expression.  */
 
 static void
-create_breakpoint_sal (struct gdbarch *gdbarch,
+init_breakpoint_sal (struct breakpoint *b, struct gdbarch *gdbarch,
 		       struct symtabs_and_lines sals, char *addr_string,
 		       char *cond_string,
 		       enum bptype type, enum bpdisp disposition,
 		       int thread, int task, int ignore_count,
 		       struct breakpoint_ops *ops, int from_tty, int enabled)
 {
-  struct breakpoint *b = NULL;
   int i;
 
   if (type == bp_hardware_breakpoint)
     {
       int i = hw_breakpoint_used_count ();
-      int target_resources_ok = 
-	target_can_use_hardware_watchpoint (bp_hardware_breakpoint, 
+      int target_resources_ok =
+	target_can_use_hardware_watchpoint (bp_hardware_breakpoint,
 					    i + 1, 0);
       if (target_resources_ok == 0)
 	error (_("No hardware breakpoint support in the target."));
@@ -7676,12 +7841,10 @@ create_breakpoint_sal (struct gdbarch *gdbarch,
 
       if (i == 0)
 	{
-	  b = set_raw_breakpoint (gdbarch, sal, type);
-	  set_breakpoint_count (breakpoint_count + 1);
-	  b->number = breakpoint_count;
+	  init_raw_breakpoint (b, gdbarch, sal, type);
 	  b->thread = thread;
 	  b->task = task;
-  
+
 	  b->cond_string = cond_string;
 	  b->ignore_count = ignore_count;
 	  b->enable_state = enabled ? bp_enabled : bp_disabled;
@@ -7757,7 +7920,7 @@ Couldn't determine the static tracepoint marker to probe"));
 	  if (*arg)
               error (_("Garbage %s follows condition"), arg);
 	}
-    }   
+    }
 
   if (addr_string)
     b->addr_string = addr_string;
@@ -7768,6 +7931,33 @@ Couldn't determine the static tracepoint marker to probe"));
       = xstrprintf ("*%s", paddress (b->loc->gdbarch, b->loc->address));
 
   b->ops = ops;
+}
+
+static void
+create_breakpoint_sal (struct gdbarch *gdbarch,
+		       struct symtabs_and_lines sals, char *addr_string,
+		       char *cond_string,
+		       enum bptype type, enum bpdisp disposition,
+		       int thread, int task, int ignore_count,
+		       struct breakpoint_ops *ops, int from_tty, int enabled)
+{
+  struct breakpoint *b = NULL;
+  struct cleanup *old_chain;
+
+  b = (struct breakpoint *) xmalloc (sizeof (struct breakpoint));
+  old_chain = make_cleanup (xfree, b);
+
+  init_breakpoint_sal (b, gdbarch,
+		       sals, addr_string,
+		       cond_string,
+		       type, disposition,
+		       thread, task, ignore_count,
+		       ops, from_tty, enabled);
+  discard_cleanups (old_chain);
+
+  add_to_breakpoint_chain (b);
+  set_breakpoint_count (breakpoint_count + 1);
+  b->number = breakpoint_count;
   mention (b);
 }
 
@@ -8218,7 +8408,7 @@ create_breakpoint (struct gdbarch *gdbarch,
 		   int from_tty,
 		   int enabled)
 {
-  struct gdb_exception e;
+  volatile struct gdb_exception e;
   struct symtabs_and_lines sals;
   struct symtab_and_line pending_sal;
   char *copy_arg;
@@ -8351,21 +8541,77 @@ create_breakpoint (struct gdbarch *gdbarch,
                re-parse it in context of each sal.  */
             cond_string = NULL;
             thread = -1;
-            find_condition_and_thread (arg, sals.sals[0].pc, &cond_string,
-                                       &thread, &task);
-            if (cond_string)
-                make_cleanup (xfree, cond_string);
-        }
-      else
-        {
-            /* Create a private copy of condition string.  */
-            if (cond_string)
-            {
-                cond_string = xstrdup (cond_string);
-                make_cleanup (xfree, cond_string);
-            }
-        }
 
+            /* CUDA: Conditional breakpoints set inside device code
+               can not be evaluated until it is loaded to GPU*/
+            TRY_CATCH (e, RETURN_MASK_ALL)
+            {
+              find_condition_and_thread (arg, sals.sals[0].pc, &cond_string,
+                                         &thread, &task);
+            }
+
+            if (e.reason < 0)
+              {
+                if (pending_break_support == AUTO_BOOLEAN_FALSE ||
+                    conditional_pending_break_support == AUTO_BOOLEAN_FALSE)
+                  throw_exception (e);
+
+                if (conditional_pending_break_support != AUTO_BOOLEAN_TRUE)
+                  exception_print (gdb_stderr, e);
+
+                /* If pending breakpoint support is auto query and the user
+                   selects no, then simply return the error code.  */
+                if (conditional_pending_break_support == AUTO_BOOLEAN_AUTO
+                    && !nquery ("Make conditional breakpoint pending on future shared library load? "))
+                  {
+                    do_cleanups (old_chain);
+                    return 0;
+                  }
+
+                /*Mark breakpoint pending*/
+                bkpt_chain = make_cleanup (null_cleanup, 0);
+                copy_arg = xstrdup (addr_start);
+                addr_string = &copy_arg;
+                pending = 1;
+              }
+        }
+      /* Create a private copy of condition string.  */
+      else if (cond_string)
+        cond_string = xstrdup (cond_string);
+
+      if (cond_string)
+        make_cleanup (xfree, cond_string);
+    }
+
+  if (pending)
+    {
+      struct breakpoint *b;
+
+      make_cleanup (xfree, copy_arg);
+
+      b = set_raw_breakpoint_without_location (gdbarch, type_wanted);
+      set_breakpoint_count (breakpoint_count + 1);
+      b->number = breakpoint_count;
+      b->thread = -1;
+      b->addr_string = addr_string[0];
+      b->cond_string = NULL;
+      b->ignore_count = ignore_count;
+      b->disposition = tempflag ? disp_del : disp_donttouch;
+      b->condition_not_parsed = 1;
+      b->ops = ops;
+      b->enable_state = enabled ? bp_enabled : bp_disabled;
+      b->pspace = current_program_space;
+
+      if (enabled && b->pspace->executing_startup
+          && (b->type == bp_breakpoint
+          || b->type == bp_cuda_autostep /* CUDA - autostep */
+          || b->type == bp_hardware_breakpoint))
+        b->enable_state = bp_startup_disabled;
+
+      mention (b);
+    }
+  else
+    {
       /* If the user is creating a static tracepoint by marker id
 	 (strace -m MARKER_ID), then store the sals index, so that
 	 breakpoint_re_set can try to match up which of the newly
@@ -8415,35 +8661,8 @@ create_breakpoint (struct gdbarch *gdbarch,
 				thread, task, ignore_count, ops, from_tty,
 				enabled);
     }
-  else
-    {
-      struct breakpoint *b;
 
-      make_cleanup (xfree, copy_arg);
-
-      b = set_raw_breakpoint_without_location (gdbarch, type_wanted);
-      set_breakpoint_count (breakpoint_count + 1);
-      b->number = breakpoint_count;
-      b->thread = -1;
-      b->addr_string = addr_string[0];
-      b->cond_string = NULL;
-      b->ignore_count = ignore_count;
-      b->disposition = tempflag ? disp_del : disp_donttouch;
-      b->condition_not_parsed = 1;
-      b->ops = ops;
-      b->enable_state = enabled ? bp_enabled : bp_disabled;
-      b->pspace = current_program_space;
-
-      if (enabled && b->pspace->executing_startup
-	  && (b->type == bp_breakpoint
-        || b->type == bp_cuda_autostep /* CUDA - autostep */
-	      || b->type == bp_hardware_breakpoint))
-	b->enable_state = bp_startup_disabled;
-
-      mention (b);
-    }
-  
-  if (sals.nelts > 1)
+  if (!pending && sals.nelts > 1)
     {
       warning (_("Multiple breakpoints were set.\n"
 		 "Use the \"delete\" command to delete unwanted breakpoints."));
@@ -9966,11 +10185,11 @@ clear_command (char *arg, int from_tty)
 		    && (!section_is_overlay (loc->section)
 			|| loc->section == sal.section);
 		  int line_match = ((default_match || (0 == sal.pc))
-				    && b->source_file != NULL
+				    && loc->source_file != NULL
 				    && sal.symtab != NULL
 				    && sal.pspace == loc->pspace
-				    && strcmp (b->source_file, sal.symtab->filename) == 0
-				    && b->line_number == sal.line);
+				    && strcmp (loc->source_file, sal.symtab->filename) == 0
+				    && loc->line_number == sal.line);
 		  if (pc_match || line_match)
 		    {
 		      match = 1;
@@ -10525,7 +10744,6 @@ delete_breakpoint (struct breakpoint *bpt)
   xfree (bpt->exp);
   xfree (bpt->exp_string);
   value_free (bpt->val);
-  xfree (bpt->source_file);
   xfree (bpt->exec_pathname);
   clean_up_filters (&bpt->syscalls_to_be_caught);
 
@@ -10781,17 +10999,21 @@ update_static_tracepoint (struct breakpoint *b, struct symtab_and_line sal)
 	  ui_out_field_int (uiout, "line", sal.line);
 	  ui_out_text (uiout, "\n");
 
-	  b->line_number = sal.line;
 
-	  xfree (b->source_file);
-	  if (sym)
-	    b->source_file = xstrdup (sal.symtab->filename);
-	  else
-	    b->source_file = NULL;
+          if (b->loc)
+	    {
+	      b->loc->line_number = sal.line;
+	      if (b->loc->source_file)
+	        xfree (b->loc->source_file);
+	      if (sym)
+	        b->loc->source_file = xstrdup (sal.symtab->filename);
+	      else
+	        b->loc->source_file = NULL;
+	    }
 
 	  xfree (b->addr_string);
 	  b->addr_string = xstrprintf ("%s:%d",
-				       sal.symtab->filename, b->line_number);
+				       sal.symtab->filename, sal.line);
 
 	  /* Might be nice to check if function changed, and warn if
 	     so.  */
@@ -10853,15 +11075,12 @@ update_breakpoint_locations (struct breakpoint *b,
 	    }
 	}
 
-      if (b->source_file != NULL)
-	xfree (b->source_file);
       if (sals.sals[i].symtab == NULL)
-	b->source_file = NULL;
+	new_loc->source_file = NULL;
       else
-	b->source_file = xstrdup (sals.sals[i].symtab->filename);
+	new_loc->source_file = xstrdup (sals.sals[i].symtab->filename);
 
-      if (b->line_number == 0)
-	b->line_number = sals.sals[i].line;
+      new_loc->line_number = sals.sals[i].line;
     }
 
   /* Update locations of permanent breakpoints.  */
@@ -11036,8 +11255,20 @@ breakpoint_re_set_one (void *bint)
 	      int thread = -1;
 	      int task = 0;
 
-	      find_condition_and_thread (s, sals.sals[0].pc,
-					 &cond_string, &thread, &task);
+              TRY_CATCH (e, RETURN_MASK_ALL)
+              {
+                find_condition_and_thread (s, sals.sals[0].pc,
+                                           &cond_string, &thread, &task);
+              }
+
+              if (e.reason < 0 )
+              {
+                if (conditional_pending_break_support != AUTO_BOOLEAN_TRUE)
+                  throw_exception (e);
+                do_cleanups (cleanups);
+                return 0;
+              }
+
 	      if (cond_string)
 		b->cond_string = cond_string;
 	      b->thread = thread;
@@ -13048,5 +13279,20 @@ No argument means enable all autosteps."),
 Equivalent to ``delete breakpoints''."),
 	   &deletelist);
   
+  add_setshow_auto_boolean_cmd ("conditional-pending", no_class,
+				&conditional_pending_break_support, _("\
+Set debugger's behavior regarding pending breakpoints conditionals."), _("\
+Show debugger's behavior regarding pending breakpoints conditionals."), _("\
+If on, an unresolved breakpoint conditional will cause gdb to create a\n\
+pending breakpoint.  If off, an unresolved breakpoint conditionals results in\n\
+an error.  If auto, an unrecognized breakpoint conditional results in a\n\
+user-query to see if a pending breakpoint should be created."),
+				NULL,
+				show_conditional_pending_break_support,
+				&breakpoint_set_cmdlist,
+				&breakpoint_show_cmdlist);
+
+  conditional_pending_break_support = AUTO_BOOLEAN_AUTO;
+
   observer_attach_about_to_proceed (breakpoint_about_to_proceed);
 }

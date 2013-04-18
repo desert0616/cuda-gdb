@@ -724,7 +724,7 @@ putpkt_binary_1 (char *buf, int cnt, int is_notif)
   char *p;
   int cc;
 
-  buf2 = xmalloc (PBUFSIZ);
+  buf2 = xmalloc (strlen ("$") + cnt + strlen ("#nn") + 1);
 
   /* Copy the packet into buffer BUF2, encapsulating it
      and giving it a checksum.  */
@@ -1333,6 +1333,9 @@ prepare_resume_reply (char *buf, ptid_t ptid,
 		 status->value.integer, ptid_get_pid (ptid));
       else
 	sprintf (buf, "W%02x", status->value.integer);
+
+      /* CUDA - Append the return value of api_finalize. */
+      cuda_append_api_finalize_res (buf + strlen (buf));
       break;
     case TARGET_WAITKIND_SIGNALLED:
       if (multi_process)
@@ -1340,6 +1343,9 @@ prepare_resume_reply (char *buf, ptid_t ptid,
 		 status->value.sig, ptid_get_pid (ptid));
       else
 	sprintf (buf, "X%02x", status->value.sig);
+
+      /* CUDA - Append the return value of api_finalize. */
+      cuda_append_api_finalize_res (buf + strlen (buf));
       break;
     default:
       error ("unhandled waitkind");

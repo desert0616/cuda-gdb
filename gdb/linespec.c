@@ -55,11 +55,14 @@ static struct symtabs_and_lines decode_indirect (char **argptr);
 
 static char *locate_first_half (char **argptr, int *is_quote_enclosed);
 
+/* CUDA - Disable Objective-C selectors lookup*/
+#if 0
 static struct symtabs_and_lines decode_objc (char **argptr,
 					     int funfirstline,
 					     struct symtab *file_symtab,
 					     char ***canonical,
 					     char *saved_arg);
+#endif
 
 static struct symtabs_and_lines decode_compound (char **argptr,
 						 int funfirstline,
@@ -760,6 +763,8 @@ decode_line_1 (char **argptr, int funfirstline, struct symtab *default_symtab,
 
   first_half = p = locate_first_half (argptr, &is_quote_enclosed);
 
+/* CUDA - Disable Objective-C selectors lookup*/
+#if 0
   /* Check if this is an Objective-C method (anything that starts with
      a '+' or '-' and a '[').  */
   if (is_objc_method_format (p))
@@ -775,6 +780,7 @@ decode_line_1 (char **argptr, int funfirstline, struct symtab *default_symtab,
     if (values.sals != NULL)
       return values;
   }
+#endif
 
   /* Does it look like there actually were two parts?  */
 
@@ -1093,6 +1099,8 @@ locate_first_half (char **argptr, int *is_quote_enclosed)
 
 
 
+/* CUDA - Disable Objective-C selectors lookup*/
+#if 0
 /* Here's where we recognise an Objective-C Selector.  An Objective C
    selector may be implemented by more than one class, therefore it
    may represent more than one method/function.  This gives us a
@@ -1197,6 +1205,8 @@ decode_objc (char **argptr, int funfirstline, struct symtab *file_symtab,
 
   return values;
 }
+
+#endif
 
 /* This handles C++ and Java compound data structures.  P should point
    at the first component separator, i.e. double-colon or period.  As

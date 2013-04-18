@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -38,9 +38,6 @@ extern bool cuda_elf_path; /* REMOVE THIS ONCE CUDA ELF PATH IS COMPLETE! */
    REMOVE ONCE TRANSITION TESLA KERNELS HAVE PROLOGUES ALL THE TIME */
 extern bool cuda_producer_is_open64;
 
-#define DEFAULT_PROMPT   "(cuda-gdb) "
-#define GDBINIT_FILENAME ".cuda-gdbinit"
-
 /*---------------------------- CUDA ELF Specification --------------------------*/
 
 #define EV_CURRENT                   1
@@ -52,7 +49,8 @@ extern bool cuda_producer_is_open64;
 #define CUDA_ELFOSABIV_SYSCALL       4  /* ELFOSABIV_ABI + Improved syscall relocation */
 #define CUDA_ELFOSABIV_SEPCOMP       5  /* ELFOSABIV_SYSCALL + new caller-callee save conventions */
 #define CUDA_ELFOSABIV_ABI3          6  /* ELFOSABIV_SEPCOMP + fixes */
-#define CUDA_ELFOSABIV_LATEST        CUDA_ELFOSABIV_ABI3
+#define CUDA_ELFOSABIV_ABI4          7  /* ELFOSABIV_ABI3 + runtime JIT link */
+#define CUDA_ELFOSABIV_LATEST        CUDA_ELFOSABIV_ABI4
 #define CUDA_ELF_TEXT_PREFIX  ".text."  /* CUDA ELF text section format: ".text.KERNEL" */
 
 /*Return values that exceed 384-bits in size are returned in memory.
@@ -61,14 +59,6 @@ extern bool cuda_producer_is_open64;
 #define CUDA_ABI_MAX_REG_RV_SIZE  48 /* Size in bytes */
 
 /*------------------------------ Type Declarations -----------------------------*/
-
-typedef struct {
-  bool valid;
-  uint32_t value;
-  bool recoverable;
-} cuda_exception_t;
-
-extern cuda_exception_t cuda_exception;
 
 typedef enum {
   cuda_bp_none = 0,
@@ -108,13 +98,13 @@ cuda_coords_t cuda_coords_current;
 /*----------- Prototypes to avoid implicit declarations (hack-hack) ------------*/
 
 extern bool cuda_initialized;
+extern bool cuda_remote;
 
 struct partial_symtab;
 void switch_to_cuda_thread (cuda_coords_t *coords);
 int  cuda_thread_select (char *, int);
 void cuda_update_cudart_symbols (void);
 void cuda_cleanup_cudart_symbols (void);
-void cuda_update_convenience_variables (void);
 void cuda_set_environment (struct gdb_environ *);
 
 /*-------------------------------- Prototypes ----------------------------------*/
@@ -127,11 +117,12 @@ void cuda_initialize_target (void);
 bool cuda_inferior_in_debug_mode (void);
 void cuda_inferior_update_suspended_devices_mask (void);
 void cuda_load_device_info (char *, struct partial_symtab *);
+void cuda_signals_initialize (void);
+void cuda_initialize_driver_internal_error_report ();
+void cuda_initialize_driver_api_error_report ();
 
-char *   cuda_find_kernel_name_from_pc (CORE_ADDR pc, bool demangle);
+char *   cuda_find_function_name_from_pc (CORE_ADDR pc, bool demangle);
 bool     cuda_breakpoint_hit_p (cuda_clock_t clock);
-bool     cuda_exception_hit_p (cuda_exception_t *exception);
-const char * cuda_exception_type_to_name (CUDBGException_t exception_type);
 
 uint64_t cuda_get_last_driver_api_error_code (void);
 void     cuda_get_last_driver_api_error_func_name (char **name);
@@ -145,7 +136,10 @@ void cuda_trace (char *fmt, ...);
 /*Single-Stepping */
 bool     cuda_sstep_is_active (void);
 uint32_t cuda_sstep_dev_id (void);
-uint32_t cuda_sstep_grid_id (void);
+uint64_t cuda_sstep_grid_id (void);
+uint32_t cuda_sstep_wp_id (void);
+uint32_t cuda_sstep_sm_id (void);
+uint64_t cuda_sstep_wp_mask (void);
 ptid_t   cuda_sstep_ptid (void);
 void     cuda_sstep_set_ptid (ptid_t ptid);
 void     cuda_sstep_initialize (bool stepping);
@@ -168,10 +162,8 @@ bool            cuda_get_bfd_abi_version (bfd *obfd, unsigned int *abi_version);
 bool            cuda_current_active_elf_image_uses_abi (void);
 void            cuda_update_elf_images (void);
 CORE_ADDR       cuda_dwarf2_func_baseaddr (struct objfile *objfile, char *func_name);
-bool            cuda_find_function_pc_from_objfile (struct objfile *objfile, char *func_name, CORE_ADDR *func_addr);
+bool            cuda_find_pc_from_address_string (struct objfile *objfile, char *func_name, CORE_ADDR *func_addr);
 bool            cuda_find_func_text_vma_from_objfile (struct objfile *objfile, char *func_name, CORE_ADDR *vma);
-uint64_t        cuda_find_context_id (CORE_ADDR addr);
-context_t       cuda_find_context_by_addr (CORE_ADDR addr);
 bool            cuda_is_device_code_address (CORE_ADDR addr);
 int             cuda_abi_sp_regnum (struct gdbarch *);
 int             cuda_special_regnum (struct gdbarch *);
@@ -191,6 +183,8 @@ void cuda_reset_invalid_breakpoint_location_section (struct objfile *objfile);
 int cuda_breakpoint_address_match (struct gdbarch *gdbarch,
                                    struct address_space *aspace1, CORE_ADDR addr1,
                                    struct address_space *aspace2, CORE_ADDR addr2);
+void cuda_adjust_host_pc (ptid_t r);
+void cuda_adjust_device_code_address (CORE_ADDR original_addr, CORE_ADDR *adjusted_addr);
 
 /* Linux vs. Mac OS X */
 bool cuda_platform_supports_tid (void);
@@ -206,6 +200,8 @@ uint32_t    cuda_gdb_session_get_id (void);
 
 /* Attach support */
 void cuda_nat_attach (void);
+void cuda_do_detach(bool remote);
+void cuda_remote_attach (void);
  
 #endif
 

@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -73,6 +73,7 @@
 #include "valprint.h"
 #include "inline-frame.h"
 #include "tracepoint.h"
+#include "cuda-exceptions.h"
 
 /* Functions exported for general use, in inferior.h: */
 
@@ -486,8 +487,8 @@ Start it from the beginning? ")))
 	error (_("Program not restarted."));
 
       /* CUDA - cleanup CUDA exception state */
-      if (cuda_exception.valid)
-        cuda_exception.valid = false;
+      if (cuda_exception_is_valid (cuda_exception))
+        cuda_exception_reset (cuda_exception);
 
       target_kill ();
     }

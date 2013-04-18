@@ -18,7 +18,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -356,6 +356,13 @@ struct bp_location
 
   char *function_name;
 
+  /* Source file name of this address.  */
+  char *source_file;
+
+  /* Line number of this address.  */
+  int line_number;
+
+
   /* Details of the placed breakpoint, when inserted.  */
   struct bp_target_info target_info;
 
@@ -469,14 +476,6 @@ struct breakpoint
 
     /* Location(s) associated with this high-level breakpoint.  */
     struct bp_location *loc;
-
-    /* Line number of this address.  */
-
-    int line_number;
-
-    /* Source file name of this address.  */
-
-    char *source_file;
 
     /* Non-zero means a silent breakpoint (don't print frame info
        if we stop here). */
@@ -919,6 +918,13 @@ extern void insert_breakpoints (void);
 
 extern int remove_breakpoints (void);
 
+/* CUDA - breakpoints */
+/* These functions behave the same as the ones above, except that
+   the host watchpoints are skipped. */
+extern void cuda_insert_breakpoints (void);
+
+extern int cuda_remove_breakpoints (void);
+
 extern int remove_breakpoints_pid (int pid);
 
 /* This function can be used to physically insert eventpoints from the
@@ -1154,6 +1160,9 @@ extern void check_tracepoint_command (char *line, void *closure);
 
 /* CUDA - autostep */
 struct breakpoint *cuda_find_autostep_by_addr (CORE_ADDR address);
+
+/* CUDA - breakpoint */
+bool cuda_eval_thread_at_breakpoint (uint64_t pc, cuda_coords_t *c, int b_number);
 
 /* Call at the start and end of an "rbreak" command to register
    breakpoint numbers for a later "commands" command.  */

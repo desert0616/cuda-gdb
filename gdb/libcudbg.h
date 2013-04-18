@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -42,6 +42,7 @@ extern "C" {
 #if defined(_WIN32)
 /*Windows 32- and 64-bit */
 #define PRIx64  "I64x"
+#define PRId64  "I64d"
 typedef unsigned char bool;
 #undef false
 #undef true
@@ -87,7 +88,7 @@ typedef enum {
     CUDBGAPIREQ_unsetBreakpoint,
 
     /* Device State Inspection */
-    CUDBGAPIREQ_readGridId,
+    CUDBGAPIREQ_readGridId50,
     CUDBGAPIREQ_readBlockIdx,
     CUDBGAPIREQ_readThreadIdx,
     CUDBGAPIREQ_readBrokenWarps,
@@ -157,12 +158,21 @@ typedef enum {
     /* 5.0 Extensions */
     CUDBGAPIREQ_clearAttachState,
     CUDBGAPIREQ_memcheckReadErrorAddress,
-    CUDBGAPIREQ_getNextSyncEvent,
-    CUDBGAPIREQ_getNextAsyncEvent,
+    CUDBGAPIREQ_getNextSyncEvent50,
+    CUDBGAPIREQ_getNextAsyncEvent50,
     CUDBGAPIREQ_acknowledgeSyncEvents,
     CUDBGAPIREQ_requestCleanupOnDetach,
     CUDBGAPIREQ_initializeAttachStub,
+    CUDBGAPIREQ_getGridStatus50,
+
+    /* 5.5 Extensions */
+    CUDBGAPIREQ_getAdjustedCodeAddress,
+    CUDBGAPIREQ_getGridInfo,
+    CUDBGAPIREQ_getNextSyncEvent,
+    CUDBGAPIREQ_getNextAsyncEvent,
+    CUDBGAPIREQ_readGridId,
     CUDBGAPIREQ_getGridStatus,
+    CUDBGAPIREQ_setAsyncLaunchNotifications,
 } CUDBGAPIREQ_t;
 
 typedef enum {
@@ -180,7 +190,7 @@ typedef struct PACKED_ALIGNMENT {
     uint32_t z;
 } CUDBGDIM3_t;
 
-typedef struct PACKED_ALIGNMENT CUDBGAPI_message_st {
+typedef struct PACKED_ALIGNMENT CUDBGAPI_message50_st {
     uint32_t client_major;
     uint32_t client_minor;
     uint32_t client_rev;
@@ -296,8 +306,130 @@ typedef struct PACKED_ALIGNMENT CUDBGAPI_message_st {
                     struct PACKED_ALIGNMENT {
                         CUDBGResult errorType;
                     } internalError;
-                    /* WARNING: We need to version CUDBGAPIMSG_t if the change impacts
-                     * the size of the union */
+                } cases;
+            } event;
+        } result;
+    } apiData;
+} CUDBGAPIMSG50_t;
+
+typedef struct PACKED_ALIGNMENT CUDBGAPI_message_st {
+    uint32_t client_major;
+    uint32_t client_minor;
+    uint32_t client_rev;
+    uint32_t kind;
+    uint32_t result;
+    struct PACKED_ALIGNMENT {
+        struct PACKED_ALIGNMENT {
+            uint32_t dev;
+            uint32_t sm;
+            uint32_t wp;
+            uint32_t ln;
+            uint32_t dim;
+            uint32_t texid;
+            uint32_t regno;
+            uint32_t val;
+            uint32_t numPairs;
+            uint32_t relocated;
+            uint32_t attr;
+            uint32_t level;
+            uint64_t addr;
+            uint64_t pc;
+            uint64_t sz;
+            char reg[256];
+            uint32_t coords[4];
+            uint64_t gridId64;
+        } request;
+        struct PACKED_ALIGNMENT {
+            uint32_t major;
+            uint32_t minor;
+            uint32_t rev;
+            uint64_t gridId64;
+            uint32_t tid;
+            uint32_t val;
+            uint32_t numDevices;
+            uint32_t numSMs;
+            uint32_t numWarps;
+            uint32_t numLanes;
+            uint32_t numRegs;
+            uint32_t numPhysRegs;
+            uint32_t regClass;
+            uint32_t symFound;
+            uint32_t activeLanesMask;
+            uint32_t validLanesMask;
+            uint32_t instSize;
+            uint32_t isDeviceAddress;
+            uint32_t error;
+            uint32_t exception;
+            uint32_t depth;
+            uint32_t found;
+            uint64_t brokenWarpsMask;
+            uint64_t validWarpsMask;
+            uint64_t value;
+            uint64_t symAddr;
+            uint64_t pc;
+            uint64_t ra;
+            uint64_t size;
+            CUDBGDIM3_t blockIdx;
+            CUDBGDIM3_t threadIdx;
+            CUDBGDIM3_t blockDim;
+            CUDBGDIM3_t gridDim;
+            struct PACKED_ALIGNMENT {
+                uint32_t kind;
+                union {
+                    struct PACKED_ALIGNMENT {
+                        uint64_t  relocatedElfImage;
+                        uint64_t  nonRelocatedElfImage;
+                        uint32_t  size32;
+                        uint32_t  dev;
+                        uint64_t  context;
+                        uint64_t  module;
+                        uint64_t  size;
+                    } elfImageLoaded;
+                    struct PACKED_ALIGNMENT {
+                        uint32_t dev;
+                        uint64_t gridId64;
+                        uint32_t tid;
+                        uint64_t context;
+                        uint64_t module;
+                        uint64_t function;
+                        uint64_t functionEntry;
+                        CUDBGDIM3_t gridDim;
+                        CUDBGDIM3_t blockDim;
+                        uint32_t type;
+                        uint64_t parentGridId;
+                    } kernelReady;
+                    struct PACKED_ALIGNMENT {
+                        uint32_t dev;
+                        uint64_t gridId64;
+                        uint32_t tid;
+                        uint64_t context;
+                        uint64_t module;
+                        uint64_t function;
+                        uint64_t functionEntry;
+                    } kernelFinished;
+                    struct PACKED_ALIGNMENT {
+                        uint32_t dev;
+                        uint32_t tid;
+                        uint64_t context;
+                    } contextPush;
+                    struct PACKED_ALIGNMENT {
+                        uint32_t dev;
+                        uint32_t tid;
+                        uint64_t context;
+                    } contextPop;
+                    struct PACKED_ALIGNMENT {
+                        uint32_t dev;
+                        uint32_t tid;
+                        uint64_t context;
+                    } contextCreate;
+                    struct PACKED_ALIGNMENT {
+                        uint32_t dev;
+                        uint32_t tid;
+                        uint64_t context;
+                    } contextDestroy;
+                    struct PACKED_ALIGNMENT {
+                        CUDBGResult errorType;
+                    } internalError;
                 } cases;
             } event;
         } result;

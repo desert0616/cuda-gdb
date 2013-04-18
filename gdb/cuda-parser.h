@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -73,25 +73,27 @@ typedef enum {
   CMD_COND_AND   = 0x010,    /* AND-product of conditions */
   CMD_COND_OR    = 0x020,    /* OR-sum of hw conditions */
   CMD_FILTER     = 0x040,    /* filter for coordinates */
+  CMD_FILTER_KERNEL= 0x080,    /* filter for kernel only*/
 } command_t;
 
 typedef enum {
-  COORD_TYPE_NONE        = 0x0000,    /* ignored */
-  COORD_TYPE_DEVICE      = 0x0001,    /* the device index */
-  COORD_TYPE_SM          = 0x0002,    /* the SM index */
-  COORD_TYPE_WARP        = 0x0004,    /* the warp index */
-  COORD_TYPE_LANE        = 0x0008,    /* the lane index */
-  COORD_TYPE_KERNEL      = 0x0010,    /* the kernel index */
-  COORD_TYPE_GRID        = 0x0020,    /* the grid index */
-  COORD_TYPE_BLOCK       = 0x0040,    /* the block index (blockIdx) */
-  COORD_TYPE_THREAD      = 0x0080,    /* the thread index (threadIdx) */
-  COORD_TYPE_BLOCKIDX_X  = 0x0100,    /* blockIdx.x */
-  COORD_TYPE_BLOCKIDX_Y  = 0x0200,    /* blockIdx.y */
-  COORD_TYPE_BLOCKIDX_Z  = 0x0200,    /* blockIdx.z */
-  COORD_TYPE_THREADIDX_X = 0x0400,    /* threadIdx.x */
-  COORD_TYPE_THREADIDX_Y = 0x0800,    /* threadIdx.y */
-  COORD_TYPE_THREADIDX_Z = 0x1000,    /* threadidx.z */
-} coord_type_t;
+  FILTER_TYPE_NONE        = 0x0000,    /* ignored */
+  FILTER_TYPE_DEVICE      = 0x0001,    /* the device index */
+  FILTER_TYPE_SM          = 0x0002,    /* the SM index */
+  FILTER_TYPE_WARP        = 0x0004,    /* the warp index */
+  FILTER_TYPE_LANE        = 0x0008,    /* the lane index */
+  FILTER_TYPE_KERNEL      = 0x0010,    /* the kernel index */
+  FILTER_TYPE_GRID        = 0x0020,    /* the grid index */
+  FILTER_TYPE_BLOCK       = 0x0040,    /* the block index (blockIdx) */
+  FILTER_TYPE_THREAD      = 0x0080,    /* the thread index (threadIdx) */
+  FILTER_TYPE_BLOCKIDX_X  = 0x0100,    /* blockIdx.x */
+  FILTER_TYPE_BLOCKIDX_Y  = 0x0200,    /* blockIdx.y */
+  FILTER_TYPE_BLOCKIDX_Z  = 0x0200,    /* blockIdx.z */
+  FILTER_TYPE_THREADIDX_X = 0x0400,    /* threadIdx.x */
+  FILTER_TYPE_THREADIDX_Y = 0x0800,    /* threadIdx.y */
+  FILTER_TYPE_THREADIDX_Z = 0x1000,    /* threadidx.z */
+  FILTER_TYPE_BREAKPOINT  = 0x2000,    /* threads that hit a breakpoint. */
+} filter_type_t;
 
 typedef union {
     uint32_t          scalar;
@@ -99,7 +101,7 @@ typedef union {
 } request_value_t;
 
 typedef struct request_st {
-  coord_type_t        type;          /* the coordinate type: device, lane,... */
+  filter_type_t       type;          /* the filter type: device, lane,... */
   request_value_t     value;         /* the request value (~0 means invalid/unspecified) */
   compare_t           cmp;           /* the comparison operator */
 } request_t;

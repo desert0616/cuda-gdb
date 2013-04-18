@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -119,10 +119,11 @@ modules_new (void)
 }
 
 void
-modules_delete (modules_t modules, kernels_t kernels)
+modules_delete (modules_t modules)
 {
   module_t module;
   module_t next_module;
+  kernel_t kernel;
 
   gdb_assert (modules);
 
@@ -130,11 +131,8 @@ modules_delete (modules_t modules, kernels_t kernels)
   while (module)
     {
       next_module = module->next;
-
-      kernels_remove_kernels_for_module (kernels, module);
-
+      kernels_terminate_module (module);
       module_delete (module);
-
       module = next_module;
     }
 }

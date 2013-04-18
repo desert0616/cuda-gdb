@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -34,17 +34,20 @@
 #include "cuda-builtins.h"
 #include "cuda-commands.h"
 #include "cuda-events.h"
+#include "cuda-exceptions.h"
 #include "cuda-notifications.h"
 #include "cuda-options.h"
 #include "cuda-tdep.h"
 #include "cuda-parser.h"
 #include "cuda-state.h"
 #include "cuda-utils.h"
+#include "cuda-packet-manager.h"
+#include "cuda-convvars.h"
 #include "gdbthread.h"
 #include "valprint.h"
 #include "command.h"
 #include "gdbcmd.h"
-#ifdef __linux__
+#if defined(__linux__) && defined(GDB_NM_FILE)
 #include "linux-nat.h"
 #endif
 #include "inf-child.h"
@@ -61,8 +64,6 @@ static struct {
    does not apply because we are dealing with the host code/cpu, use those
    routines instead. */
 static struct target_ops host_target_ops;
-
-cuda_exception_t cuda_exception;
 
 static void cuda_nat_detach (struct target_ops *ops, char *args, int from_tty);
 
@@ -125,7 +126,19 @@ cuda_nat_xfer_partial (struct target_ops *ops,
     {
       nbytes = host_target_ops.to_xfer_partial (ops, object, annex, readbuf,
                                                 writebuf, offset, len);
+#ifdef __arm__
+      /*
+       * FIXME - Temporary workaround for mmap()/ptrace() issue.
+       * If the host memory xfer operation fails (i.e. nbytes is 0), 
+       * fallthrough to see if the CUDA Debug API can access 
+       * the specified address.
+       * This can happen with ordinary mmap'd allocations.
+       */
+      if (nbytes)
+        return nbytes;
+#else
       return nbytes;
+#endif
     }
 
   switch (object)
@@ -191,150 +204,11 @@ cuda_nat_kill (struct target_ops *ops)
 static void
 cuda_nat_mourn_inferior (struct target_ops *ops)
 {
-  if (!cuda_exception.valid)
+  if (!cuda_exception_is_valid (cuda_exception))
   {
     cuda_cleanup ();
     host_target_ops.to_mourn_inferior (ops);
   }
-}
-
-/* This is a helper function to print a message on a memcheck error
-*/
-static void
-cuda_print_memcheck_message (void)
-{
-  cuda_coords_t c;
-  uint64_t phys_addr, virt_addr;
-  kernel_t kernel;
-  uint64_t start_pc;
-  struct symbol *symbol;
-  const char *func_name;
-  uint64_t address = 0;
-  ptxStorageKind storage;
-  const char *addr_space = NULL;
-  CUDBGException_t exception = 0;
-
-  if (!cuda_focus_is_device ())
-    return;
-
-  cuda_coords_get_current (&c);
-
-  virt_addr = lane_get_virtual_pc (c.dev, c.sm, c.wp, c.ln);
-  kernel = warp_get_kernel (c.dev, c.sm, c.wp);
-  start_pc = kernel_get_virt_code_base (kernel);
-  symbol = find_pc_function ((CORE_ADDR) virt_addr);
-  func_name = cuda_find_kernel_name_from_pc (start_pc, false);
-
-  address = lane_get_memcheck_error_address (c.dev, c.sm, c.wp, c.ln);
-  storage = lane_get_memcheck_error_address_segment (c.dev, c.sm, c.wp, c.ln);
-
-  if (!address)
-    return;
-
-  ui_out_text (uiout, "Memcheck detected an illegal access to address ");
-  switch (storage)
-    {
-      case ptxGlobalStorage:
-        addr_space = "@global";
-        break;
-      case ptxSharedStorage:
-        addr_space = "@shared";
-        break;
-      case ptxLocalStorage:
-        addr_space = "@local";
-        break;
-      default:
-        addr_space = NULL;
-        break;
-    };
-
-  if (addr_space)
-    {
-      ui_out_text (uiout, "(");
-      ui_out_field_string (uiout, "error-address-space", addr_space);
-      ui_out_text (uiout, ")");
-    }
-  ui_out_field_fmt (uiout, "address", "0x%"PRIx64,  address);
-  ui_out_text (uiout, "\n");
-}
-
-/* This is a helper function to print a cleanly formatted assertion
-   message to the ui output. This message takes the form :
-   <FILE_NAME>:<LINE_NUMBER>: <KERNEL_NAME>: Assertion failed at
-   block <BLOCKIDX> thread <THREADIX>
-*/
-static void
-cuda_print_assert_message (void)
-{
-  cuda_coords_t c;
-  struct symtab_and_line sa;
-  uint64_t phys_addr, virt_addr;
-  kernel_t kernel;
-  uint64_t start_pc;
-  struct symbol *symbol;
-  const char *func_name;
-  struct symtab_and_line sal;
-
-  if (!cuda_focus_is_device ())
-    return;
-
-  cuda_coords_get_current (&c);
-
-  virt_addr = lane_get_virtual_pc (c.dev, c.sm, c.wp, c.ln);
-  kernel = warp_get_kernel (c.dev, c.sm, c.wp);
-  start_pc = kernel_get_virt_code_base (kernel);
-  symbol = find_pc_function ((CORE_ADDR) virt_addr);
-  func_name = cuda_find_kernel_name_from_pc (start_pc, false);
-  sal = find_pc_line ((CORE_ADDR)virt_addr, 0);
-
-  if (sal.symtab && sal.line)
-    {
-      char *file = strrchr (sal.symtab->filename, '/');
-
-      if (file)
-        ++file;
-      else
-        file = sal.symtab->filename;
-      ui_out_text         (uiout, "\n");
-      ui_out_field_string (uiout, "filename"    , file);
-      ui_out_text         (uiout, ":");
-      ui_out_field_int    (uiout, "line"        , sal.line);
-      ui_out_text         (uiout, ": ");
-      ui_out_field_string (uiout, "kernel"      , func_name);
-      ui_out_text         (uiout, ": ");
-      ui_out_text         (uiout, "Assertion failed at block (");
-      ui_out_field_int    (uiout, "blockidx.x"  , c.blockIdx.x);
-      ui_out_text         (uiout, ",");
-      ui_out_field_int    (uiout, "blockidx.y"  , c.blockIdx.y);
-      ui_out_text         (uiout, ",");
-      ui_out_field_int    (uiout, "blockidx.z"  , c.blockIdx.z);
-      ui_out_text         (uiout, "), thread (");
-      ui_out_field_int    (uiout, "threadidx.x"  , c.threadIdx.x);
-      ui_out_text         (uiout, ",");
-      ui_out_field_int    (uiout, "threadidx.y"  , c.threadIdx.y);
-      ui_out_text         (uiout, ",");
-      ui_out_field_int    (uiout, "threadidx.z"  , c.threadIdx.z);
-      ui_out_text         (uiout, ")\n");
-    }
-  else
-    {
-      ui_out_text         (uiout, "\n");
-      ui_out_field_string (uiout, "kernel"      , func_name);
-      ui_out_text         (uiout, ": ");
-      ui_out_text         (uiout, "Assertion failed at block (");
-      ui_out_field_int    (uiout, "blockidx.x"  , c.blockIdx.x);
-      ui_out_text         (uiout, ",");
-      ui_out_field_int    (uiout, "blockidx.y"  , c.blockIdx.y);
-      ui_out_text         (uiout, ",");
-      ui_out_field_int    (uiout, "blockidx.z"  , c.blockIdx.z);
-      ui_out_text         (uiout, "), thread (");
-      ui_out_field_int    (uiout, "threadidx.x"  , c.threadIdx.x);
-      ui_out_text         (uiout, ",");
-      ui_out_field_int    (uiout, "threadidx.y"  , c.threadIdx.y);
-      ui_out_text         (uiout, ",");
-      ui_out_field_int    (uiout, "threadidx.z"  , c.threadIdx.z);
-      ui_out_text         (uiout, ")\n");
-    }
 }
 
 static bool sendAck = false;
@@ -348,8 +222,8 @@ static bool sendAck = false;
 
    We adopt the host semantics such that a device exception will
    terminate the host application as well. This is the simplest option
-   for now. For this purpose we use the boolean cuda_exception.valid to
-   track the propagation of this event.
+   for now. For this purpose we use the boolean cuda_exception_is_valid
+   (cuda_exception) to track the propagation of this event.
 
    This is a 3-step process:
 
@@ -358,8 +232,8 @@ static bool sendAck = false;
      Device exception detected.  We indicate this process has "stopped"
      (i.e. is not yet terminated) with a signal.  We suspend the
      device, and allow a user to inspect their program for the reason
-     why they hit the fault.  cuda_exception.valid is set to true at this
-     point.
+     why they hit the fault.  cuda_exception_is_valid (cuda_exception) is set
+     to true at this point.
 
    2. cuda_resume ()
 
@@ -368,20 +242,20 @@ static bool sendAck = false;
      resume your app beyond a terminal signal (the app dies).  So,
      since in our case the app doesn't die, we need to enforce this if
      we desire the same behavior.  This is done by seeeing if
-     cuda_exception.valid is set to true.
+     cuda_exception_is_valid (cuda_exception) is set to true.
 
    3. cuda_wait ()
 
-     If cuda_exception.valid is set, then we know we've killed the app due
-     to an exception.  We need to indicate the process has been
-     "signalled" (i.e. app has terminated) with a signal.  At this point,
-     cuda_exception.valid is set back to false.  Process mourning ensues
-     and the world is a better place.
+     If cuda_exception_is_valid (cuda_exception) is set, then we know we've
+     killed the app due to an exception.  We need to indicate the process has
+     been "signalled" (i.e. app has terminated) with a signal.  At this point,
+     cuda_exception_is_valid (cuda_exception) is set back to false.  Process
+     mourning ensues and the world is a better place.
 */
 
 extern struct breakpoint *step_resume_breakpoint;
 
-#ifdef __linux__
+#if defined(__linux__) && defined(GDB_NM_FILE)
 static void
 cuda_clear_pending_sigint (pid_t pid)
 {
@@ -395,7 +269,7 @@ cuda_clear_pending_sigint (pid_t pid)
 static int
 cuda_check_pending_sigint (pid_t pid)
 {
-#ifdef __linux__
+#if defined(__linux__) && defined(GDB_NM_FILE)
   sigset_t pending, blocked, ignored;
 
   linux_proc_pending_signals (pid, &pending, &blocked, &ignored);
@@ -416,7 +290,7 @@ struct {
   uint32_t stop;
 } cuda_sigtrap_info;
 
-static void
+void
 cuda_sigtrap_set_silent (void)
 {
   enum target_signal sigtrap = target_signal_from_host (SIGTRAP);
@@ -429,7 +303,7 @@ cuda_sigtrap_set_silent (void)
   signal_print_update (sigtrap, 0);
 }
 
-static void
+void
 cuda_sigtrap_restore_settings (void)
 {
   enum target_signal sigtrap = target_signal_from_host (SIGTRAP);
@@ -442,50 +316,94 @@ cuda_sigtrap_restore_settings (void)
     }
 }
 
+extern int cuda_host_want_singlestep;
+
 /*CUDA_RESUME:
 
   For the meaning and interaction of ptid and sstep, read gnu-nat.c,
   line 1924.
 
-  The actions of cuda_resume are based on 3 inputs: sstep, resume_all,
+  The actions of cuda_resume are based on 3 inputs: sstep, host_sstep
   and cuda_focus_is_device(). The actions are summarized in this
   table. 'sstep/resume dev' means single-stepping/resuming the device
   in focus if any, respectively.  'resume other dev' means resume any
   active device that is not in focus.
 
-      device   sstep   resume  | sstep   resume   resume    resume/sstep
-      focus             all    |  dev     dev    other dev      host
+      device   sstep sstep | sstep   resume   resume    resume    sstep
+      focus           host |  dev     dev    other dev   host      host
       ------------------------------------------------------------------
-        0        0        0    |   0       0         0           1
-        0        0        1    |   0       1         1           1
-        0        1        0    |   0       0         0           1
-        0        1        1    |   0       1         1           1
-        1        0        0    |  n/a     n/a       n/a         n/a(c)
-        1        0        1    |   0       1         1           1
-        1        1        0    |   1       0         0           0(a)
-        1        1        1    |   1       0         0           0(b)
+        0        0     0   |   0       1         1        1(b)      0
+        0        0     1   |   0       0         0        1(c)      0
+        0        1     0   |   -       -         -        -         -
+        0        1     1   |   0       0         0        0         1
+        1        0     0   |   0       1         1        1         0
+        1        0     1   |   0       1         1        1         0
+        1        1     0   |   1       0         0        0(a)      0
+        1        1     1   |   1       0         0        0(a)      0
 
      (a) because we fake single-stepping to GDB by not calling the
      wait() routine, there is no need to resume the host. We used to
      resume the host so that the host could capture any SIGTRAP signal
      sent during single-stepping.
 
-     (b) 'resume_all' should force the host to resume as
-     well. However, it is incompatble with the way we fake device
-     single-stepping in GDB (no call to cuda/target_wait).
-
-     (c) currently, there is no way to resume a single device, without
+     (b) currently, there is no way to resume a single device, without
      resuming the rest of the world. That would lead to a deadlock.
+
+     (c) In case host is resumed to simulate a single stepping,
+     device should remain suspended.
 */
+static void
+cuda_do_resume (struct target_ops *ops, ptid_t ptid,
+                     int sstep, int host_sstep, enum target_signal ts)
+{
+  uint32_t dev;
+
+  cuda_sstep_reset (sstep);
+
+  // Is focus on host?
+  if (!cuda_focus_is_device())
+    {
+      // If not sstep - resume devices
+      if (!host_sstep)
+        for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
+            device_resume (dev);
+
+      // resume the host
+      host_target_ops.to_resume (ops, ptid, sstep, ts);
+      return;
+    }
+
+   // sstep the device
+  if (sstep)
+    {
+      cuda_sstep_execute (inferior_ptid);
+      return;
+    }
+
+  // resume the device
+  device_resume (cuda_current_device ());
+
+  // resume other devices
+  if (!cuda_notification_pending ())
+    for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
+      if (dev != cuda_current_device ())
+        device_resume (dev);
+
+  // resume the host
+  host_target_ops.to_resume (ops, ptid, 0, ts);
+}
+
 static void
 cuda_nat_resume (struct target_ops *ops, ptid_t ptid, int sstep, enum target_signal ts)
 {
   uint32_t dev;
   cuda_coords_t c;
   bool cuda_event_found = false;
+  int host_want_sstep = cuda_host_want_singlestep;
   CUDBGEvent event;
 
   cuda_trace ("cuda_resume: sstep=%d", sstep);
+  cuda_host_want_singlestep = 0;
 
   /* In cuda-gdb we have two types of device exceptions :
      Recoverable : CUDA_EXCEPTION_WARP_ASSERT
@@ -506,18 +424,18 @@ cuda_nat_resume (struct target_ops *ops, ptid_t ptid, int sstep, enum target_sig
      exception (i.e. printing the assert message) is done as part of the
      cuda_wait call.
   */
-  if (cuda_exception.valid && !cuda_exception.recoverable)
-  {
-    target_kill ();
-    cuda_trace ("cuda_resume: exception found");
-    return;
-  }
-
-  if (cuda_exception.valid && cuda_exception.recoverable)
+  if (cuda_exception_is_valid (cuda_exception) &&
+      !cuda_exception_is_recoverable (cuda_exception))
     {
-      cuda_exception.valid = false;
-      cuda_exception.recoverable = false;
-      cuda_exception.value = 0;
+      target_kill ();
+      cuda_trace ("cuda_resume: exception found");
+      return;
+    }
+
+  if (cuda_exception_is_valid (cuda_exception) &&
+      cuda_exception_is_recoverable (cuda_exception))
+    {
+      cuda_exception_reset (cuda_exception);
       cuda_trace ("cuda_resume: recoverable exception found\n");
     }
 
@@ -550,27 +468,7 @@ cuda_nat_resume (struct target_ops *ops, ptid_t ptid, int sstep, enum target_sig
       sendAck = false;
     }
 
-  cuda_sstep_reset (sstep);
-
-  // sstep the device in focus?
-  if (cuda_focus_is_device () && sstep)
-    cuda_sstep_execute (inferior_ptid);
-
-  // resume the device in focus?
-  if (cuda_focus_is_device () && !sstep)
-    device_resume (cuda_current_device ());
-
-  // resume the devices not in focus?
-  if (!sstep)
-    if (!cuda_notification_pending ())
-      for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
-        if (!cuda_focus_is_device () || dev != cuda_current_device ())
-          device_resume (dev);
-
-  // resume the host?
-  if (!cuda_focus_is_device () ||
-      (cuda_focus_is_device () && !sstep))
-    host_target_ops.to_resume (ops, ptid, sstep, ts);
+  cuda_do_resume (ops, ptid, sstep, host_want_sstep, ts);
 
   cuda_clock_increment ();
   cuda_trace ("cuda_resume: done");
@@ -601,21 +499,21 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
                int target_options)
 {
   ptid_t r;
-  uint32_t dev, dev_id, grid_id;
+  uint32_t dev, dev_id;
+  uint64_t grid_id;
+  kernel_t kernel;
   bool cuda_event_found = false;
   CUDBGEvent event, asyncEvent;
   struct thread_info *tp;
-  kernels_t kernels;
-  kernel_t kernel;
+  cuda_coords_t c;
 
   cuda_trace ("cuda_wait");
 
-  if (cuda_exception.valid)
+  if (cuda_exception_is_valid (cuda_exception))
     {
       ws->kind = TARGET_WAITKIND_SIGNALLED;
-      ws->value.sig = cuda_exception.value;
-      cuda_exception.valid = false;
-      cuda_exception.recoverable = false;
+      ws->value.sig = cuda_exception_get_value (cuda_exception);
+      cuda_exception_reset (cuda_exception);
       cuda_trace ("cuda_wait: exception found");
       return inferior_ptid;
     }
@@ -628,9 +526,12 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
       /* When stepping the device, the host process remains suspended.
          So, if the user issued a Ctrl-C, we wouldn't detect it since
          we never actually check its wait status.  We must explicitly
-         check for a pending SIGINT here. */
-      if (cuda_check_pending_sigint (PIDGET (r)))
+         check for a pending SIGINT here.
+         if quit_flag is set then C-c was pressed in gdb session
+         but signal was yet not forwarded to debugged process */
+      if (cuda_check_pending_sigint (PIDGET (r)) || quit_flag)
         {
+          quit_flag = 0;
           ws->kind = TARGET_WAITKIND_STOPPED;
           ws->value.sig = TARGET_SIGNAL_INT;
           cuda_set_signo (TARGET_SIGNAL_INT);
@@ -651,9 +552,8 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
               /* Only destroy the kernel that has been stepped to its exit */
               dev_id  = cuda_sstep_dev_id ();
               grid_id = cuda_sstep_grid_id ();
-              kernels = device_get_kernels (dev_id);
-              kernel  = kernels_find_kernel_by_grid_id (kernels, grid_id);
-              kernels_terminate_kernel (kernels, kernel);
+              kernel = kernels_find_kernel_by_grid_id (dev_id, grid_id);
+              kernels_terminate_kernel (kernel);
 
               /* Invalidate current coordinates and device state */
               cuda_coords_invalidate_current ();
@@ -667,7 +567,7 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
                 cuda_process_events (&asyncEvent, CUDA_EVENT_ASYNC);
 
               /* Update device state/kernels */
-              cuda_system_update_kernels ();
+              kernels_update_terminated ();
               cuda_update_convenience_variables ();
 
               switch_to_thread (r);
@@ -708,7 +608,8 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
      we've received a notification, or if we're single stepping
      the device (since if we're stepping we wouldn't receive an
      explicit notification). */
-  cuda_notification_analyze (r, ws);
+  tp = inferior_thread ();
+  cuda_notification_analyze (r, ws, tp->trap_expected);
   if (cuda_notification_received ())
     {
       /* Check if there is any CUDA event to be processed */
@@ -727,20 +628,18 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
     }
 
   /* Update the info about the kernels */
-  cuda_system_update_kernels ();
+  kernels_update_terminated ();
 
   /* Decide which thread/kernel to switch focus to. */
-  if (cuda_exception_hit_p (&cuda_exception))
+  if (cuda_exception_hit_p (cuda_exception))
     {
       cuda_trace ("cuda_wait: stopped because of an exception");
+      c = cuda_exception_get_coords (cuda_exception);
+      cuda_coords_set_current (&c);
+      cuda_exception_print_message (cuda_exception);
       ws->kind = TARGET_WAITKIND_STOPPED;
-      ws->value.sig = cuda_exception.value;
-      cuda_set_signo (cuda_exception.value);
-      cuda_coords_update_current (false, true);
-      if (cuda_exception.value == TARGET_SIGNAL_CUDA_WARP_ASSERT)
-        cuda_print_assert_message ();
-      else if (cuda_exception.value == TARGET_SIGNAL_CUDA_LANE_ILLEGAL_ADDRESS)
-        cuda_print_memcheck_message ();
+      ws->value.sig = cuda_exception_get_value (cuda_exception);
+      cuda_set_signo (cuda_exception_get_value (cuda_exception));
     }
   else if (cuda_sstep_is_active ())
     {
@@ -749,34 +648,8 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
     }
   else if (cuda_breakpoint_hit_p (cuda_clock ()))
     {
-      struct regcache *regcache;
-      CORE_ADDR pc;
-
       cuda_trace ("cuda_wait: stopped because of a breakpoint");
       cuda_set_signo (TARGET_SIGNAL_TRAP);
-
-      /* Rewind host PC and consume pending SIGTRAP
-         Sometimes, one thread can hit both a host and a device
-         breakpoint at the same time, in which case host SIGTRAP
-         is triggered while SIGTRAP from back end is blocked (pending).
-         When resuming, host PC is not rewound because focus is on the
-         device.
-
-         Before switching to CUDA thread, we check if that's the case.
-         If so, manually rewind the host PC and consume the pending SIGTRAP.
-         This allows the host breakpoint to be hit again after resuming. */
-
-      /* r is guaranteed to be the return of host_wait in this case */
-      regcache = get_thread_regcache (r);
-      pc = regcache_read_pc (regcache) - gdbarch_decr_pc_after_break (target_gdbarch);
-      if (breakpoint_inserted_here_p (get_regcache_aspace (regcache), pc))
-        {
-          /* Rewind the PC */
-          regcache_write_pc (regcache, pc);
-          /* Remove the pending notification */
-          cuda_notification_consume_pending ();
-        }
-
       cuda_coords_update_current (true, false);
     }
   else if (cuda_system_is_broken (cuda_clock ()))
@@ -825,6 +698,8 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
       cuda_set_signo (TARGET_SIGNAL_TRAP);
       cuda_coords_invalidate_current ();
     }
+
+  cuda_adjust_host_pc (r);
 
   /* Switch focus and update related data */
   cuda_update_convenience_variables ();
@@ -910,7 +785,6 @@ static int
 cuda_nat_insert_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_tgt)
 {
   uint32_t dev;
-  kernels_t kernels;
   bool is_cuda_addr;
   bool inserted;
 
@@ -928,8 +802,7 @@ cuda_nat_insert_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_t
           /* If we haven't received a launch notification, don't bother
              inserting breakpoints.  Let the caller think this operation
              was successful, as this is not an error. */
-          kernels = device_get_kernels (dev);
-          if (kernels_get_num_kernels (kernels) == 0)
+          if (device_get_num_kernels (dev) == 0)
             {
               inserted = true;
               continue;
@@ -980,33 +853,39 @@ cuda_nat_thread_architecture (struct target_ops *ops, ptid_t ptid)
     return target_gdbarch;
 }
 
-/*Comprehensive container for everything that may need to be restored
-   when switching focus temporarily. Not all the fields are used at
-   the present time. */
-static struct {
-  bool valid;
-  ptid_t ptid;
-  cuda_coords_t coords;
-} previous_focus;
-
 void
-cuda_save_focus (void)
+cuda_focus_init (cuda_focus_t *focus)
 {
-  previous_focus.valid = true;
-  previous_focus.ptid = inferior_ptid;
-  previous_focus.coords = CUDA_INVALID_COORDS;
-  cuda_coords_get_current (&previous_focus.coords);
+  gdb_assert (focus);
+
+  focus->valid = false;
 }
 
 void
-cuda_restore_focus (void)
+cuda_focus_save (cuda_focus_t *focus)
 {
-  gdb_assert (previous_focus.valid);
-  if (previous_focus.coords.valid)
-    switch_to_cuda_thread  (&previous_focus.coords);
-  else if (TIDGET (previous_focus.ptid))
-    switch_to_thread (previous_focus.ptid);
-  previous_focus.valid = false;
+  gdb_assert (focus);
+  gdb_assert (!focus->valid);
+
+  focus->ptid = inferior_ptid;
+  focus->coords = CUDA_INVALID_COORDS;
+  cuda_coords_get_current (&focus->coords);
+
+  focus->valid = true;
+}
+
+void
+cuda_focus_restore (cuda_focus_t *focus)
+{
+  gdb_assert (focus);
+  gdb_assert (focus->valid);
+
+  if (focus->coords.valid)
+    switch_to_cuda_thread  (&focus->coords);
+  else
+    switch_to_thread (focus->ptid);
+
+  focus->valid = false;
 }
 
 void
@@ -1031,6 +910,8 @@ void
 cuda_update_cudart_symbols (void)
 {
   int fd;
+  unsigned int *cuda_builtins = NULL;
+  size_t cuda_builtins_size = 0;
   struct stat s;
   char tmp_sym_file[CUDA_GDB_TMP_BUF_SIZE];
 
@@ -1043,7 +924,30 @@ cuda_update_cudart_symbols (void)
       if (!(fd = mkstemp (tmp_sym_file)))
         error (_("Failed to create the cudart symbol file."));
 
-      if (!write (fd, cuda_builtins, sizeof (cuda_builtins)))
+      /* Select builtins appropriate for the target architecture*/
+      if (gdbarch_bfd_arch_info(target_gdbarch)->arch == bfd_arch_arm &&
+          gdbarch_bfd_arch_info(target_gdbarch)->bits_per_address == 32)
+       {
+        cuda_builtins = cuda_builtins_arm;
+        cuda_builtins_size = sizeof(cuda_builtins_arm);
+       }
+      else if (gdbarch_bfd_arch_info(target_gdbarch)->arch == bfd_arch_i386)
+        {
+          if (gdbarch_bfd_arch_info(target_gdbarch)->bits_per_address == 32)
+            {
+              cuda_builtins = cuda_builtins_i386;
+              cuda_builtins_size = sizeof(cuda_builtins_i386);
+            }
+          else
+            {
+              cuda_builtins = cuda_builtins_x86_64;
+              cuda_builtins_size = sizeof(cuda_builtins_x86_64);
+            }
+        }
+      else
+       error (_("Builtins not defined for the arch you are debugging."));
+
+      if (cuda_builtins && !write (fd, cuda_builtins, cuda_builtins_size))
         error (_("Failed to write the cudart symbole file."));
 
       close (fd);
@@ -1051,7 +955,7 @@ cuda_update_cudart_symbols (void)
       if (stat (tmp_sym_file, &s))
         error (_("Failed to stat the cudart symbol file."));
 
-      if (s.st_size != sizeof (cuda_builtins))
+      if (s.st_size != cuda_builtins_size)
         error (_("The cudart symbol file size is incorrect."));
 
       cuda_cudart_symbols.created = true;
@@ -1060,19 +964,14 @@ cuda_update_cudart_symbols (void)
                strlen (tmp_sym_file) + 1);
     }
 
-  /* Load/unload the CUDA runtime symbols only when necessary */
-  if (cuda_focus_is_device () && !cuda_cudart_symbols.objfile)
+  /* Load the CUDA runtime symbols */
+  if (!cuda_cudart_symbols.objfile)
     {
       cuda_cudart_symbols.objfile =
         symbol_file_add (cuda_cudart_symbols.objfile_path,
                          SYMFILE_DEFER_BP_RESET, NULL, 0);
       if (!cuda_cudart_symbols.objfile)
         error (_("Failed to add cudart symbols."));
-    }
-  else if (!cuda_focus_is_device () && cuda_cudart_symbols.objfile)
-    {
-      free_objfile (cuda_cudart_symbols.objfile);
-      cuda_cudart_symbols.objfile = NULL;
     }
 }
 
@@ -1101,7 +1000,7 @@ cuda_cleanup_cudart_symbols (void)
     }
 }
 
-#ifndef __linux__
+#if defined(__APPLE__)
 /* CUDA - cuda-gdb wrapper */
 /* Smuggle the DYLD_* environement variables like GDB 6.3.5 used to do. Because
    we cuda-gdb must be part of the procmod group, those variables are not
@@ -1154,22 +1053,65 @@ smuggle_dyld_settings (struct gdb_environ *e)
 }
 #endif
 
+/* If a host event is hit while there are valid threads
+   on the GPU, the focus ends up being switched to the 
+   GPU, leaving the host PC not rewound.
+
+   This function determines if the host is at a breakpoint,
+   and if so it manually rewinds the host PC so that the
+   breakpoint can be hit again after a resume.
+   r here is the return value of host_wait().
+*/
+void 
+cuda_adjust_host_pc (ptid_t r)
+{
+  bool pc_rewound = false;
+  struct regcache *regcache;
+  CORE_ADDR pc;
+  cuda_coords_t coords;
+
+  if (!cuda_focus_is_device ())
+    return;
+
+  /* Rewind host PC and consume pending SIGTRAP
+     Sometimes, one thread can hit both a host and a device
+     breakpoint at the same time, in which case host SIGTRAP
+     is triggered while SIGTRAP from back end is blocked (pending).
+     When resuming, host PC is not rewound because focus is on the
+     device.
+
+     Before switching to CUDA thread, we check if that's the case.
+     If so, manually rewind the host PC and consume the pending SIGTRAP.
+     This allows the host breakpoint to be hit again after resuming. */
+
+  /* r is guaranteed to be the return of host_wait in this case */
+  cuda_coords_get_current (&coords);
+
+  /* Temporarily invalidate the current coords so that the focus
+     is set on the host. */
+  cuda_coords_invalidate_current ();
+
+  regcache = get_thread_arch_regcache (r, target_gdbarch);
+  pc = regcache_read_pc (regcache) - gdbarch_decr_pc_after_break (target_gdbarch);
+  if (breakpoint_inserted_here_p (get_regcache_aspace (regcache), pc))
+    {
+        /* Rewind the PC */
+      regcache_write_pc (regcache, pc);
+      pc_rewound = true;
+    }
+
+  /* Restore coords */
+  cuda_coords_set_current (&coords);
+
+  /* Remove the pending notification if we rewound the pc */
+  if (pc_rewound)
+      cuda_notification_consume_pending ();
+}
+
 void
 cuda_set_environment (struct gdb_environ *environ)
 {
-  /* CUDA_MEMCHECK */
-  if (cuda_options_memcheck ())
-      set_in_environ (environ, "CUDA_MEMCHECK", "1");
-  else
-      unset_in_environ (environ, "CUDA_MEMCHECK");
-
-  /* CUDA_LAUNCH_BLOCKING */
-  if (cuda_options_launch_blocking ())
-    set_in_environ (environ, "CUDA_LAUNCH_BLOCKING", "1");
-  else
-    unset_in_environ (environ, "CUDA_LAUNCH_BLOCKING");
-
-#ifndef __linux__
+#if defined(__APPLE__)
   /* CUDA - cuda-gdb wrapper */
   smuggle_dyld_settings (environ);
 #endif
@@ -1266,6 +1208,12 @@ cuda_nat_attach (void)
   if (!debugFlagAddr)
     return;
 
+  /* If the CUDA driver has been loaded but software preemption has been turned
+     on, stop the attach process. */
+  if (cuda_options_software_preemption ())
+    error (_("Attaching to a running CUDA process with software preemption "
+             "enabled in the debugger is not supported."));
+
   cuda_api_set_attach_state (CUDA_ATTACH_STATE_IN_PROGRESS);
 
   cuda_initialize_target ();
@@ -1310,9 +1258,14 @@ cuda_nat_attach (void)
     }
 }
 
-static void
-cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
+
+void cuda_do_detach(bool remote)
 {
+
+  struct cmd_list_element *alias = NULL;
+  struct cmd_list_element *prefix_cmd = NULL;
+  struct cmd_list_element *cmd = NULL;
+  char *cudbgApiDetach = "cudbgApiDetach()";
   CORE_ADDR debugFlagAddr;
   CORE_ADDR rpcFlagAddr;
   CORE_ADDR needCleanupOnDetachFlagAddr;
@@ -1321,14 +1274,9 @@ cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
 
   debugFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_IPC_FLAG_NAME));
 
-  /* If the CUDA driver isn't available or if the Debug API is not
-     initialized, treat the inferior as a host-only process */
-  if (!debugFlagAddr || 
-       cuda_api_get_state () != CUDA_API_STATE_INITIALIZED)
-    {
-      host_target_ops.to_detach (ops, args, from_tty);
+  /* Bail out if the CUDA driver isn't available */
+  if (!debugFlagAddr)
       return;
-    }
 
   /* Update the suspended devices mask in the inferior */
   cuda_inferior_update_suspended_devices_mask ();
@@ -1346,6 +1294,14 @@ cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
   /* Request cleanup from the debugger backend if needed */
   if (needCleanupOnDetach)
     cuda_api_request_cleanup_on_detach ();
+  else
+    {
+      if (!lookup_cmd_composition ("call", &alias, &prefix_cmd, &cmd))
+        error (_("Failed to initiate detach."));
+
+      /* Make dynamic call for cleanup */
+      cmd_func (cmd, cudbgApiDetach, 0);
+    }
 
   /* Make sure the debugger is reinitialized from scratch on reattaching
      to the inferior */
@@ -1367,12 +1323,22 @@ cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
       cuda_options_disable_break_on_launch ();
 
       /* Now resume the app. */
-      continue_command (0, 0);
+      if (!remote)
+        continue_command (0, 0);
     }
 
   target_write_memory (debugFlagAddr, &zero, 1);
 
   cuda_cleanup ();
+}
+
+static void
+cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
+{
+  /* If the Debug API is not initialized, 
+   * treat the inferior as a host-only process */
+  if (cuda_api_get_state () == CUDA_API_STATE_INITIALIZED)
+    cuda_do_detach (false);
 
   /* Call the host detach routine. */
   host_target_ops.to_detach (ops, args, from_tty);

@@ -103,6 +103,13 @@ xcalloc (size_t nelem, size_t elsize)
   return newmem;
 }
 
+void
+xfree (void *ptr)
+{
+  if (ptr != NULL)
+    free (ptr);
+}
+
 /* Copy a string into a memory buffer.
    If malloc fails, this will print a message to stderr and exit.  */
 

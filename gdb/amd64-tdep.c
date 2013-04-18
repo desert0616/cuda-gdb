@@ -185,7 +185,7 @@ amd64_dwarf_reg_to_regnum (struct gdbarch *gdbarch, reg_t reg)
     regnum = amd64_dwarf_regmap[reg];
 
   if (regnum == -1)
-    warning (_("Unmapped DWARF Register #%ld encountered."), reg);
+    warning (_("Unmapped DWARF Register #%ld encountered."), (long int)reg);
   else if (ymm0_regnum >= 0
 	   && i386_xmm_regnum_p (gdbarch, regnum))
     regnum += ymm0_regnum - I387_XMM0_REGNUM (tdep);

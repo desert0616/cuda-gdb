@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -66,6 +66,7 @@
 #include "event-loop.h"
 #include "gdbthread.h"
 #include "cuda-gdb.h"
+#include "cuda-exceptions.h"
 
 /* readline include files */
 #include "readline/readline.h"
@@ -1220,10 +1221,9 @@ quit_target (void *arg)
 {
   struct qt_args *qt = (struct qt_args *)arg;
 
-  if (cuda_exception.valid && cuda_is_target_mourn_pending)
+  if (cuda_exception_is_valid (cuda_exception) && cuda_is_target_mourn_pending)
     {
-      cuda_exception.valid = false;
-      cuda_exception.recoverable = false;
+      cuda_exception_reset (cuda_exception);
       cuda_is_target_mourn_pending = false;
       
       target_mourn_inferior ();

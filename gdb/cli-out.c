@@ -284,6 +284,28 @@ cli_flush (struct ui_out *uiout)
   gdb_flush (data->stream);
 }
 
+/* CUDA: Allow multiple redirections on streams */
+static void
+cli_push_stream (cli_out_data *data, struct ui_file *stream)
+{
+  set_ui_file_next (stream, data->original_stream);
+  data->original_stream = stream;
+}
+
+static struct ui_file * 
+cli_pop_stream (cli_out_data *data)
+{
+  struct ui_file *stream = data->original_stream;
+
+  if (stream != NULL)
+    {
+      data->original_stream = ui_file_next (stream);
+      set_ui_file_next (stream, NULL);
+    }
+
+  return stream;
+}
+
 static int
 cli_redirect (struct ui_out *uiout, struct ui_file *outstream)
 {
@@ -291,13 +313,12 @@ cli_redirect (struct ui_out *uiout, struct ui_file *outstream)
 
   if (outstream != NULL)
     {
-      data->original_stream = data->stream;
+      cli_push_stream (data, data->stream);
       data->stream = outstream;
     }
   else if (data->original_stream != NULL)
     {
-      data->stream = data->original_stream;
-      data->original_stream = NULL;
+      data->stream = cli_pop_stream (data);
     }
 
   return 0;

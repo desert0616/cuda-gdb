@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -108,6 +108,16 @@ mi_cmd_cuda_info_kernels (char *command, char **argv, int argc)
 }
 
 void
+mi_cmd_cuda_info_contexts (char *command, char **argv, int argc)
+{
+  char *filter = concatenate_string (argv, argc);
+
+  run_info_cuda_command (info_cuda_contexts_command, filter);
+
+  xfree (filter);
+}
+
+void
 mi_cmd_cuda_info_blocks (char *command, char **argv, int argc)
 {
   char *filter = concatenate_string (argv, argc);
@@ -123,6 +133,26 @@ mi_cmd_cuda_info_threads (char *command, char **argv, int argc)
   char *filter = concatenate_string (argv, argc);
 
   run_info_cuda_command (info_cuda_threads_command, filter);
+
+  xfree (filter);
+}
+
+void
+mi_cmd_cuda_info_launch_trace (char *command, char **argv, int argc)
+{
+  char *filter = concatenate_string (argv, argc);
+
+  run_info_cuda_command (info_cuda_launch_trace_command, filter);
+
+  xfree (filter);
+}
+
+void
+mi_cmd_cuda_info_launch_children (char *command, char **argv, int argc)
+{
+  char *filter = concatenate_string (argv, argc);
+
+  run_info_cuda_command (info_cuda_launch_children_command, filter);
 
   xfree (filter);
 }

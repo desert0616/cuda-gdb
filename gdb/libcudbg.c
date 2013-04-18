@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -19,10 +19,17 @@
 #include <signal.h>
 #include <string.h>
 #include <pthread.h>
+
+#ifdef GDBSERVER
+#include <server.h>
+#include <cuda-tdep-server.h>
+#else
 #include <defs.h>
 #include <gdb_assert.h>
 #include <cuda-options.h>
 #include <cuda-tdep.h>
+#endif
+
 #include <libcudbg.h>
 #include <libcudbgipc.h>
 #include <cudadebugger.h>
@@ -33,6 +40,7 @@ static void cudbg_trace(char *fmt, ...);
 /*Globals */
 CUDBGNotifyNewEventCallback cudbgDebugClientCallback = NULL;
 pthread_t callbackEventThreadHandle;
+pthread_t cudagdbMainThreadHandle;
 static bool cudbgPreInitComplete = false;
 
 static void *
@@ -111,6 +119,7 @@ cudbgPreInitialize(void)
         if (res != CUDBG_SUCCESS)
             return CUDBG_ERROR_COMMUNICATION_FAILURE;
 
+        cudagdbMainThreadHandle = pthread_self();
         if (pthread_create(&callbackEventThreadHandle, NULL, cudbgCallbackHandler, NULL))
             return CUDBG_ERROR_COMMUNICATION_FAILURE;
     }
@@ -345,7 +354,7 @@ cudbgUnsetBreakpoint(uint32_t dev, uint64_t addr)
 
 
 static CUDBGResult
-cudbgReadGridId(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *gridId)
+cudbgReadGridId(uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *gridId64)
 {
     void *d;
     CUDBGAPIMSG_t ipcreq, *ipcres;
@@ -363,7 +372,7 @@ cudbgReadGridId(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *gridId)
 
     res = ipcres->result;
 
-    *gridId = ipcres->apiData.result.gridId;
+    *gridId64 = ipcres->apiData.result.gridId64;
 
     return res;
 }
@@ -1611,7 +1620,7 @@ cudbgGetNextEventCommon(CUDBGEvent *event, CUDBGAPIREQ_t kind)
             event->cases.elfImageLoaded.dev = ipcres->apiData.result.event.cases.elfImageLoaded.dev;
             event->cases.elfImageLoaded.context = ipcres->apiData.result.event.cases.elfImageLoaded.context;
             event->cases.elfImageLoaded.module = ipcres->apiData.result.event.cases.elfImageLoaded.module;
-            
+
             event->cases.elfImageLoaded.relocatedElfImage =
                 cudbgNewElfImage(d + sizeof ipcreq, event->cases.elfImageLoaded.size);
             if (!event->cases.elfImageLoaded.relocatedElfImage)
@@ -1620,7 +1629,7 @@ cudbgGetNextEventCommon(CUDBGEvent *event, CUDBGAPIREQ_t kind)
         case CUDBG_EVENT_KERNEL_READY:
             cudbg_trace ("kernel ready event received");
             event->cases.kernelReady.dev = ipcres->apiData.result.event.cases.kernelReady.dev;
-            event->cases.kernelReady.gridId = ipcres->apiData.result.event.cases.kernelReady.gridId;
+            event->cases.kernelReady.gridId64 = ipcres->apiData.result.event.cases.kernelReady.gridId64;
             event->cases.kernelReady.tid = ipcres->apiData.result.event.cases.kernelReady.tid;
             event->cases.kernelReady.context = ipcres->apiData.result.event.cases.kernelReady.context;
             event->cases.kernelReady.module = ipcres->apiData.result.event.cases.kernelReady.module;
@@ -1633,11 +1642,12 @@ cudbgGetNextEventCommon(CUDBGEvent *event, CUDBGAPIREQ_t kind)
             event->cases.kernelReady.blockDim.y = ipcres->apiData.result.event.cases.kernelReady.blockDim.y;
             event->cases.kernelReady.blockDim.z = ipcres->apiData.result.event.cases.kernelReady.blockDim.z;
             event->cases.kernelReady.type = ipcres->apiData.result.event.cases.kernelReady.type;
+            event->cases.kernelReady.parentGridId= ipcres->apiData.result.event.cases.kernelReady.parentGridId;
             break;
         case CUDBG_EVENT_KERNEL_FINISHED:
             cudbg_trace ("kernel finished event received");
             event->cases.kernelFinished.dev = ipcres->apiData.result.event.cases.kernelFinished.dev;
-            event->cases.kernelFinished.gridId = ipcres->apiData.result.event.cases.kernelFinished.gridId;
+            event->cases.kernelFinished.gridId64 = ipcres->apiData.result.event.cases.kernelFinished.gridId64;
             event->cases.kernelFinished.tid = ipcres->apiData.result.event.cases.kernelFinished.tid;
             event->cases.kernelFinished.context = ipcres->apiData.result.event.cases.kernelFinished.context;
             event->cases.kernelFinished.module = ipcres->apiData.result.event.cases.kernelFinished.module;
@@ -1796,7 +1806,7 @@ cudbgMemcheckReadErrorAddress(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t l
 }
 
 static CUDBGResult
-cudbgGetGridStatus(uint32_t dev, uint32_t grid_id, CUDBGGridStatus *status)
+cudbgGetGridStatus(uint32_t dev, uint64_t gridId64, CUDBGGridStatus *status)
 {
     void *d;
     CUDBGAPIMSG_t ipcreq, *ipcres;
@@ -1805,7 +1815,7 @@ cudbgGetGridStatus(uint32_t dev, uint32_t grid_id, CUDBGGridStatus *status)
     memset(&ipcreq, 0, sizeof ipcreq);
     ipcreq.kind = CUDBGAPIREQ_getGridStatus;
     ipcreq.apiData.request.dev = dev;
-    ipcreq.apiData.request.val = grid_id;
+    ipcreq.apiData.request.gridId64 = gridId64;
 
     CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
     CUDBG_IPC_REQUEST((void *)&d);
@@ -1816,6 +1826,75 @@ cudbgGetGridStatus(uint32_t dev, uint32_t grid_id, CUDBGGridStatus *status)
     *status = (CUDBGGridStatus)ipcres->apiData.result.val;
 
     return res;
+}
+
+static CUDBGResult
+cudbgGetAdjustedCodeAddress(uint32_t dev, uint64_t address, uint64_t *adjustedAddress, CUDBGAdjAddrAction adjAction)
+{
+    void *d;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+    CUDBGResult res;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    ipcreq.kind = CUDBGAPIREQ_getAdjustedCodeAddress;
+    ipcreq.apiData.request.dev = dev;
+    ipcreq.apiData.request.addr = address;
+    ipcreq.apiData.request.attr = adjAction;
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_REQUEST((void *)&d);
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    res = ipcres->result;
+
+    *adjustedAddress = ipcres->apiData.result.value;
+
+    return res;
+}
+
+static CUDBGResult
+cudbgGetGridInfo(uint32_t dev, uint64_t grid_id, CUDBGGridInfo *gridInfo)
+{
+    char *d, *p;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+    CUDBGResult res;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    memset(gridInfo, 0, sizeof *gridInfo);
+    ipcreq.kind = CUDBGAPIREQ_getGridInfo;
+    ipcreq.apiData.request.dev = dev;
+    ipcreq.apiData.request.gridId64 = grid_id;
+    ipcreq.apiData.request.sz = sizeof *gridInfo;
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_APPEND(gridInfo, sizeof *gridInfo);
+    CUDBG_IPC_REQUEST((void *)&d);
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    res = ipcres->result;
+
+    p = d + sizeof ipcreq;
+    memcpy (gridInfo, p, sizeof *gridInfo);
+
+    return res;
+}
+
+static CUDBGResult
+cudbgSetAsyncLaunchNotifications (bool enabled)
+{
+    void *d;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    ipcreq.kind = CUDBGAPIREQ_setAsyncLaunchNotifications;
+    ipcreq.apiData.request.val = enabled;
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_REQUEST((void *)&d);
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    return ipcres->result;
+
 }
 
 /*Stubs (Unused functions) Assert if they are called */
@@ -1960,6 +2039,34 @@ STUB_cudbgAcknowledgeEvents42(void)
     return CUDBG_SUCCESS;
 }
 
+static CUDBGResult
+STUB_cudbgGetNextSyncEvent50(CUDBGEvent50 *event)
+{
+    gdb_assert (0);
+    return CUDBG_SUCCESS;
+}
+
+static CUDBGResult
+STUB_cudbgGetNextAsyncEvent50(CUDBGEvent50 *event)
+{
+    gdb_assert (0);
+    return CUDBG_SUCCESS;
+}
+
+static CUDBGResult
+STUB_cudbgReadGridId50(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *gridId)
+{
+    gdb_assert (0);
+    return CUDBG_SUCCESS;
+}
+
+static CUDBGResult
+STUB_cudbgGetGridStatus50(uint32_t dev, uint32_t gridId, CUDBGGridStatus *status)
+{
+    gdb_assert (0);
+    return CUDBG_SUCCESS;
+}
+
 static const struct CUDBGAPI_st cudbgCurrentApi = {
     /* Initialization */
     cudbgInitialize,
@@ -1975,7 +2082,7 @@ static const struct CUDBGAPI_st cudbgCurrentApi = {
     STUB_cudbgUnsetBreakpoint31,
 
     /* Device State Inspection */
-    cudbgReadGridId,
+    STUB_cudbgReadGridId50,
     STUB_cudbgReadBlockIdx32,
     cudbgReadThreadIdx,
     cudbgReadBrokenWarps,
@@ -2069,13 +2176,22 @@ static const struct CUDBGAPI_st cudbgCurrentApi = {
 
     /* 5.0 Extensions */
     cudbgClearAttachState,
-    cudbgGetNextSyncEvent,
+    STUB_cudbgGetNextSyncEvent50,
     cudbgMemcheckReadErrorAddress,
     cudbgAcknowledgeSyncEvents,
-    cudbgGetNextAsyncEvent,
+    STUB_cudbgGetNextAsyncEvent50,
     cudbgRequestCleanupOnDetach,
     cudbgInitializeAttachStub,
+    STUB_cudbgGetGridStatus50,
+
+    /* 5.5 Extensions */
+    cudbgGetAdjustedCodeAddress,
+    cudbgGetNextSyncEvent,
+    cudbgGetNextAsyncEvent,
+    cudbgGetGridInfo,
+    cudbgReadGridId,
     cudbgGetGridStatus,
+    cudbgSetAsyncLaunchNotifications,
 };
 
 CUDBGResult
@@ -2087,14 +2203,29 @@ cudbgGetAPI(uint32_t major, uint32_t minor, uint32_t rev, CUDBGAPI *api)
 
 static void cudbg_trace(char *fmt, ...)
 {
+#ifdef GDBSERVER
+  struct cuda_trace_msg *msg;
+#endif
   va_list ap;
 
-  if (cuda_options_debug_libcudbg())
-    {
-      va_start (ap, fmt);
-      fprintf (stderr, "[CUDAGDB] libcudbg ");
-      vfprintf (stderr, fmt, ap);
-      fprintf (stderr, "\n");
-      fflush (stderr);
-    }
+  if (!cuda_options_debug_libcudbg())
+    return;
+
+  va_start (ap, fmt);
+#ifdef GDBSERVER
+  msg = xmalloc (sizeof (*msg));
+  if (!cuda_first_trace_msg)
+    cuda_first_trace_msg = msg;
+  else
+    cuda_last_trace_msg->next = msg;
+  sprintf (msg->buf, "[CUDAGDB] libcudbg ");
+  vsnprintf (msg->buf + strlen (msg->buf), sizeof (msg->buf), fmt, ap);
+  msg->next = NULL;
+  cuda_last_trace_msg = msg;
+#else
+  fprintf (stderr, "[CUDAGDB] libcudbg ");
+  vfprintf (stderr, fmt, ap);
+  fprintf (stderr, "\n");
+  fflush (stderr);
+#endif
 }

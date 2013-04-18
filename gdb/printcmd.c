@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -87,6 +87,9 @@ struct format_data
     char format;
     char size;
 
+    /* CUDA - memory segments */
+    enum type_instance_flag_value segment_type;
+
     /* True if the value should be printed raw -- that is, bypassing
        python-based formatters.  */
     unsigned char raw;
@@ -95,6 +98,9 @@ struct format_data
 /* Last specified output format.  */
 
 static char last_format = 0;
+
+/* Last CUDA memory segment used. */
+static enum type_instance_flag_value last_segment_type = 0;
 
 /* Last specified examination size.  'b', 'h', 'w' or `q'.  */
 
@@ -209,7 +215,7 @@ static void do_one_display (struct display *);
    past the specification and past all whitespace following it.  */
 
 static struct format_data
-decode_format (char **string_ptr, int oformat, int osize)
+decode_format (char **string_ptr, int oformat, int osize, enum type_instance_flag_value st)
 {
   struct format_data val;
   char *p = *string_ptr;
@@ -218,6 +224,7 @@ decode_format (char **string_ptr, int oformat, int osize)
   val.size = '?';
   val.count = 1;
   val.raw = 0;
+  val.segment_type = st;
 
   if (*p >= '0' && *p <= '9')
     val.count = atoi (p);
@@ -884,6 +891,10 @@ instead."), size);
         }
     }
 
+  /* CUDA - memory segments */
+  if (fmt.segment_type)
+    val_type = make_type_with_address_space ( val_type, fmt.segment_type);
+
   maxelts = 8;
   if (size == 'w')
     maxelts = 4;
@@ -971,7 +982,7 @@ print_command_1 (char *exp, int inspect, int voidprint)
   if (exp && *exp == '/')
     {
       exp++;
-      fmt = decode_format (&exp, last_format, 0);
+      fmt = decode_format (&exp, last_format, 0, 0);
       validate_format (fmt, "print");
       last_format = format = fmt.format;
     }
@@ -981,6 +992,7 @@ print_command_1 (char *exp, int inspect, int voidprint)
       fmt.format = 0;
       fmt.size = 0;
       fmt.raw = 0;
+      fmt.segment_type = 0;
     }
 
   if (exp && *exp)
@@ -1071,7 +1083,7 @@ output_command (char *exp, int from_tty)
   if (exp && *exp == '/')
     {
       exp++;
-      fmt = decode_format (&exp, 0, 0);
+      fmt = decode_format (&exp, 0, 0, 0);
       validate_format (fmt, "output");
       format = fmt.format;
     }
@@ -1420,7 +1432,9 @@ x_command (char *exp, int from_tty)
   struct format_data fmt;
   struct cleanup *old_chain;
   struct value *val;
+  struct type *type;
 
+  fmt.segment_type = cuda_focus_is_device()?last_segment_type:0;
   fmt.format = last_format ? last_format : 'x';
   fmt.size = last_size;
   fmt.count = 1;
@@ -1429,7 +1443,7 @@ x_command (char *exp, int from_tty)
   if (exp && *exp == '/')
     {
       exp++;
-      fmt = decode_format (&exp, last_format, last_size);
+      fmt = decode_format (&exp, last_format, last_size, fmt.segment_type);
     }
 
   /* If we have an expression, evaluate it and use it as the address.  */
@@ -1454,6 +1468,17 @@ x_command (char *exp, int from_tty)
 	next_address = value_address (val);
       else
 	next_address = value_as_address (val);
+
+      /* CUDA - memory segments */
+      type = value_type (val);
+      if (TYPE_CODE(type) == TYPE_CODE_PTR)
+         type = TYPE_TARGET_TYPE(type);
+      if (TYPE_CUDA_ALL(type))
+        {
+          fmt.segment_type = TYPE_INSTANCE_FLAGS(type);
+          fmt.segment_type &= TYPE_INSTANCE_FLAG_CUDA_ALL;
+          last_segment_type = fmt.segment_type;
+        }
 
       next_gdbarch = expr->gdbarch;
       do_cleanups (old_chain);
@@ -1524,7 +1549,7 @@ display_command (char *exp, int from_tty)
       if (*exp == '/')
 	{
 	  exp++;
-	  fmt = decode_format (&exp, 0, 0);
+	  fmt = decode_format (&exp, 0, 0, 0);
 	  if (fmt.size && fmt.format == 0)
 	    fmt.format = 'x';
 	  if (fmt.format == 'i' || fmt.format == 's')
@@ -1536,6 +1561,7 @@ display_command (char *exp, int from_tty)
 	  fmt.size = 0;
 	  fmt.count = 0;
 	  fmt.raw = 0;
+	  fmt.segment_type = 0;
 	}
 
       innermost_block = NULL;

@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -60,6 +60,7 @@
 #include "source.h"
 #include "cli/cli-cmds.h"
 #include "python/python.h"
+#include "cuda-gdb.h"
 
 /* The selected interpreter.  This will be used as a set command
    variable, so it should always be malloc'ed - since
@@ -115,6 +116,9 @@ static void print_gdb_help (struct ui_file *);
    out files to be edited by another program. */
 
 extern char *external_editor_command;
+
+/* Whether cuda-gdb should create a global lock file */
+extern int cuda_use_lockfile;
 
 /* Relocate a file or directory.  PROGNAME is the name by which gdb
    was invoked (i.e., argv[0]).  INITIAL is the default value for the
@@ -398,7 +402,8 @@ captured_main (void *data)
       OPT_STATISTICS,
       OPT_TUI,
       OPT_NOWINDOWS,
-      OPT_WINDOWS
+      OPT_WINDOWS,
+      OPT_CUDA_USE_LOCKFILE
     };
     static struct option long_options[] =
     {
@@ -461,6 +466,7 @@ captured_main (void *data)
       {"args", no_argument, &set_args, 1},
       {"l", required_argument, 0, 'l'},
       {"return-child-result", no_argument, &return_child_result, 1},
+      {"cuda-use-lockfile", required_argument, 0, OPT_CUDA_USE_LOCKFILE},
       {0, no_argument, 0, 0}
     };
 
@@ -525,6 +531,9 @@ captured_main (void *data)
 	    xfree (interpreter_p);
 	    interpreter_p = xstrdup (INTERP_CONSOLE);
 	    use_windows = 0;
+	    break;
+	  case OPT_CUDA_USE_LOCKFILE:
+            cuda_use_lockfile = (atoi (optarg) != 0);
 	    break;
 	  case 'f':
 	    annotation_level = 1;
@@ -955,7 +964,7 @@ print_gdb_help (struct ui_file *stream)
   get_init_files (&system_gdbinit, &home_gdbinit, &local_gdbinit);
 
   fputs_unfiltered (_("\
-This is the GNU debugger with CUDA suport.  Usage:\n\n\
+This is the GNU debugger with CUDA support.  Usage:\n\n\
     cuda-gdb [options] [executable-file [core-file or process-id]]\n\
     cuda-gdb [options] --args executable-file [inferior-arguments ...]\n\n\
 Options:\n\n\
@@ -1016,6 +1025,14 @@ Options:\n\n\
   --xdb              XDB compatibility mode.\n\
 "), stream);
   fputs_unfiltered (_("\n\
+CUDA-specific options:\n\n\
+"), stream);
+  fputs_unfiltered (_("\
+  --cuda-use-lockfile=VALUE\n\
+                     If VALUE == 0, don't create a lock file for cuda-gdb.\n\
+                     Default behavior is to create a lock file.\n\
+"), stream);
+  fputs_unfiltered (_("\n\
 At startup, GDB reads the following init files and executes their commands:\n\
 "), stream);
   if (system_gdbinit)
@@ -1030,6 +1047,10 @@ At startup, GDB reads the following init files and executes their commands:\n\
     fprintf_unfiltered (stream, _("\
    * local init file: ./%s\n\
 "), local_gdbinit);
+/* CUDA */
+    fprintf_unfiltered (stream, _("\
+   * local cuda-gdb init file: ./%s\n\
+"), GDBINIT_FILENAME);
   fputs_unfiltered (_("\n\
 For more information, type \"help\" from within GDB, or consult the\n\
 GDB manual (available as on-line info or a printed manual).\n\

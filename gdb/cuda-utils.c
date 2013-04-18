@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -16,9 +16,15 @@
  */
 
 /* Utility functions for cuda-gdb */
+#ifdef GDBSERVER
+#include "gdb_locale.h"
+#include "server.h"
+#else
+#include "gdb_assert.h"
 #include "defs.h"
-#include <ctype.h>
+#endif
 
+#include <ctype.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <string.h>
@@ -29,7 +35,6 @@
 #include <fcntl.h>
 #include "cuda-utils.h"
 #include "cuda-defs.h"
-#include "gdb_assert.h"
 
 #define RECORD_FORMAT_MASTER   "LOCK:%10d\n"
 #define RECORD_FORMAT_DEVICE    "%4d:%10d\n"
@@ -37,6 +42,8 @@
 #define RECORD_MASTER                      0
 #define RECORD_DEVICE(i)           ((i) + 1)
 #define DEVICE_RECORD(i)           ((i) - 1)
+
+int cuda_use_lockfile = 1;
 
 static const char cuda_gdb_lock_file[] = "cuda-gdb.lock";
 static char cuda_gdb_tmp_basedir[CUDA_GDB_TMP_BUF_SIZE];
@@ -48,7 +55,6 @@ int
 cuda_gdb_dir_create (const char *dir_name, uint32_t permissions,
                      bool override_umask, bool *dir_exists)
 {
-  DIR* dir;
   struct stat st;
   mode_t old_umask = 0;
   int ret = 0;
@@ -127,7 +133,7 @@ cuda_gdb_tmpdir_cleanup_dir (char* dirpath)
   rmdir (dirpath);
 }
 
-static void
+void
 cuda_gdb_tmpdir_cleanup_self (void *unused)
 {
   cuda_gdb_tmpdir_cleanup_dir (cuda_gdb_tmp_dir);
@@ -160,7 +166,6 @@ static void
 cuda_gdb_record_set_lock (int record_idx, bool enable_lock)
 {
   struct flock lock = {0};
-  int pid = 0;
   int e = 0;
 
   lock.l_type = enable_lock ? F_WRLCK: F_UNLCK;
@@ -197,11 +202,11 @@ cuda_gdb_lock_file_initialize ()
     }
 }
 
-static void
+void
 cuda_gdb_record_remove_all (void *unused)
 {
   char buf[CUDA_GDB_TMP_BUF_SIZE];
-  int res, i;
+  int i;
 
   snprintf (buf, sizeof (buf), "%s/%s",
             cuda_gdb_tmp_basedir, cuda_gdb_lock_file);
@@ -229,11 +234,14 @@ cuda_gdb_lock_file_create ()
   char buf[CUDA_GDB_TMP_BUF_SIZE];
   char *visible_devices;
   uint32_t dev_id, num_devices = 0;
-  struct flock lock = {0};
-  int res, pid, i, ignored;
+  int i;
   bool initialize_lock_file = false;
   mode_t old_umask;
   int my_pid = (int) getpid();
+
+  /* Default == 1, can be overriden via a command-line option */
+  if (cuda_use_lockfile == 0)
+    return;
 
   snprintf (buf, sizeof (buf), "%s/%s",
               cuda_gdb_tmp_basedir, cuda_gdb_lock_file);
@@ -254,7 +262,11 @@ cuda_gdb_lock_file_create ()
     error (_("Cannot open %s. \n"), buf);
 
   /* Register cleanup routine */
+  /* No final cleanup chain at server side,
+     cleanup function is called explicitly when server quits */
+#ifndef GDBSERVER
   make_final_cleanup (cuda_gdb_record_remove_all, NULL);
+#endif
 
   /* Get the mutex ("work") lock before doing anything */
   cuda_gdb_record_set_lock (RECORD_MASTER, true);
@@ -323,7 +335,12 @@ cuda_gdb_tmpdir_setup (void)
 
   cuda_gdb_tmp_dir = xmalloc (strlen (dirpath) + 1);
   strncpy (cuda_gdb_tmp_dir, dirpath, strlen (dirpath) + 1);
+
+  /* No final cleanup chain at server side,
+   * cleanup function is called explicitly when server quits */
+#ifndef GDBSERVER
   make_final_cleanup (cuda_gdb_tmpdir_cleanup_self, NULL);
+#endif
 }
 
 const char*

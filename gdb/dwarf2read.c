@@ -27,7 +27,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2012 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -8383,6 +8383,14 @@ check_cu_functions (CORE_ADDR address, struct dwarf2_cu *cu)
   return fn->lowpc;
 }
 
+/* Ignore this record_line request.  */
+
+static void
+noop_record_line (struct subfile *subfile, int line, CORE_ADDR pc)
+{
+  return;
+}
+
 /* Decode the Line Number Program (LNP) for the given line_header
    structure and CU.  The actual information extracted and the type
    of structures created from the LNP depends on the value of PST.
@@ -8414,6 +8422,8 @@ dwarf_decode_lines (struct line_header *lh, char *comp_dir, bfd *abfd,
   struct gdbarch *gdbarch = get_objfile_arch (objfile);
   const int decode_for_pst_p = (pst != NULL);
   struct subfile *last_subfile = NULL, *first_subfile = current_subfile;
+  void (*p_record_line) (struct subfile *subfile, int line, CORE_ADDR pc)
+    = record_line;
 
   baseaddr = ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile));
 
@@ -8483,13 +8493,13 @@ dwarf_decode_lines (struct line_header *lh, char *comp_dir, bfd *abfd,
 			{
 			  addr = gdbarch_addr_bits_remove (gdbarch, address);
 			  if (last_subfile)
-			    record_line (last_subfile, 0, addr);
+			    (*p_record_line) (last_subfile, 0, addr);
 			  last_subfile = current_subfile;
 			}
 		      /* Append row to matrix using current values.  */
 		      addr = check_cu_functions (address, cu);
 		      addr = gdbarch_addr_bits_remove (gdbarch, addr);
-		      record_line (current_subfile, line, addr);
+		      (*p_record_line) (current_subfile, line, addr);
 		    }
 		}
 	      basic_block = 0;
@@ -8505,10 +8515,27 @@ dwarf_decode_lines (struct line_header *lh, char *comp_dir, bfd *abfd,
 	      switch (extended_op)
 		{
 		case DW_LNE_end_sequence:
+		  p_record_line = record_line;
 		  end_sequence = 1;
 		  break;
 		case DW_LNE_set_address:
 		  address = read_address (abfd, line_ptr, cu, &bytes_read);
+
+		  if (address == 0 && !dwarf2_per_objfile->has_section_at_zero)
+		    {
+		      /* This line table is for a function which has been
+			 GCd by the linker.  Ignore it.  PR gdb/12528 */
+
+		      long line_offset
+			= line_ptr - dwarf2_per_objfile->line.buffer;
+
+		      complaint (&symfile_complaints,
+				 _(".debug_line address at offset 0x%lx is 0 "
+				   "[in module %s]"),
+				 line_offset, cu->objfile->name);
+		      p_record_line = noop_record_line;
+		    }
+
 		  op_index = 0;
 		  line_ptr += bytes_read;
 		  address += baseaddr;
@@ -8564,12 +8591,12 @@ dwarf_decode_lines (struct line_header *lh, char *comp_dir, bfd *abfd,
 			{
 			  addr = gdbarch_addr_bits_remove (gdbarch, address);
 			  if (last_subfile)
-			    record_line (last_subfile, 0, addr);
+			    (*p_record_line) (last_subfile, 0, addr);
 			  last_subfile = current_subfile;
 			}
 		      addr = check_cu_functions (address, cu);
 		      addr = gdbarch_addr_bits_remove (gdbarch, addr);
-		      record_line (current_subfile, line, addr);
+		      (*p_record_line) (current_subfile, line, addr);
 		    }
 		}
 	      basic_block = 0;
@@ -8668,7 +8695,7 @@ dwarf_decode_lines (struct line_header *lh, char *comp_dir, bfd *abfd,
           if (!decode_for_pst_p)
 	    {
 	      addr = gdbarch_addr_bits_remove (gdbarch, address);
-	      record_line (current_subfile, 0, addr);
+	      (*p_record_line) (current_subfile, 0, addr);
 	    }
         }
     }
@@ -8928,6 +8955,7 @@ new_symbol (struct die_info *die, struct type *type, struct dwarf2_cu *cu)
   struct attribute *attr2 = NULL;
   CORE_ADDR baseaddr;
   int inlined_func = (die->tag == DW_TAG_inlined_subroutine);
+  struct cleanup *cleanup_chain = make_cleanup (null_cleanup, NULL);
 
   baseaddr = ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile));
 
@@ -8935,16 +8963,31 @@ new_symbol (struct die_info *die, struct type *type, struct dwarf2_cu *cu)
   if (name)
     {
       const char *linkagename;
+      char *cuda_demangled = NULL;
 
       sym = (struct symbol *) obstack_alloc (&objfile->objfile_obstack,
 					     sizeof (struct symbol));
       OBJSTAT (objfile, n_syms++);
       memset (sym, 0, sizeof (struct symbol));
 
+      /* CUDA - demangle C++ routine/kernel names */
+      if (die->tag == DW_TAG_subprogram &&
+          cuda_is_bfd_cuda(cu->objfile->obfd) &&
+          cu->language == language_cplus)
+        {
+          SYMBOL_SET_CUDA_NAME (sym, name, strlen (name), objfile);
+          /* function parameters are stored in DWARF info */
+          cuda_demangled = cplus_demangle (name, /*DMGL_PARAMS |*/ DMGL_ANSI | DMGL_VERBOSE);
+          if (cuda_demangled)
+            make_cleanup (xfree, cuda_demangled);
+        }
+
       /* Cache this symbol's name and the name's demangled form (if any).  */
       SYMBOL_LANGUAGE (sym) = cu->language;
-      linkagename = dwarf2_physname (name, die, cu);
+      linkagename = dwarf2_physname ( cuda_demangled? cuda_demangled : name, die, cu);
       SYMBOL_SET_NAMES (sym, linkagename, strlen (linkagename), 0, objfile);
+
+      do_cleanups (cleanup_chain);
 
       /* Fortran does not have mangling standard and the mangling does differ
 	 between gfortran, iFort etc.  */
@@ -13032,6 +13075,8 @@ cuda_decode_lines (struct line_header *lh, struct objfile *objfile)
   bfd *abfd = objfile->obfd;
   int i;
   struct file_entry *fe;
+  void (*p_record_line) (struct subfile *subfile, int line, CORE_ADDR pc)
+    = record_line;
 
   baseaddr = ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile));
 
@@ -13106,7 +13151,7 @@ cuda_decode_lines (struct line_header *lh, struct objfile *objfile)
             }
             /* Append row to matrix using current values.  */
             addr = gdbarch_addr_bits_remove (gdbarch, address);
-            record_line (current_subfile, line, addr);
+            (*p_record_line) (current_subfile, line, addr);
           }
         }
         basic_block = 0;
@@ -13122,6 +13167,7 @@ cuda_decode_lines (struct line_header *lh, struct objfile *objfile)
           switch (extended_op)
           {
             case DW_LNE_end_sequence:
+              p_record_line = record_line;
               end_sequence = 1;
               break;
             case DW_LNE_set_address:
@@ -13135,6 +13181,21 @@ cuda_decode_lines (struct line_header *lh, struct objfile *objfile)
                   address = bfd_get_64 (abfd, line_ptr);
                   bytes_read = 8;
                 }
+              if (address == 0)
+                {
+                  /* This line table is for a function which has been
+		     dead-coded by the linker.  Ignore it.
+                      CUDA duplicate of PR gdb/12528 */
+
+		   long line_offset
+                     = line_ptr - dwarf2_per_objfile->line.buffer;
+
+		    complaint (&symfile_complaints,
+                               _("CUDA: .debug_line address at offset 0x%lx"
+                                 "is 0"),
+                               line_offset);
+		    p_record_line = noop_record_line;
+		}
               op_index = 0;
               line_ptr += bytes_read;
               address += baseaddr;
@@ -13190,11 +13251,11 @@ cuda_decode_lines (struct line_header *lh, struct objfile *objfile)
               {
                 addr = gdbarch_addr_bits_remove (gdbarch, address);
                 if (last_subfile)
-                  record_line (last_subfile, 0, addr);
+                  (*p_record_line) (last_subfile, 0, addr);
                 last_subfile = current_subfile;
               }
               addr = gdbarch_addr_bits_remove (gdbarch, address);
-              record_line (current_subfile, line, addr);
+              (*p_record_line) (current_subfile, line, addr);
             }
           }
           basic_block = 0;
@@ -13288,7 +13349,7 @@ cuda_decode_lines (struct line_header *lh, struct objfile *objfile)
     {
       lh->file_names[file - 1].included_p = 1;
       addr = gdbarch_addr_bits_remove (gdbarch, address);
-      record_line (current_subfile, 0, addr);
+      (*p_record_line) (current_subfile, 0, addr);
     }
   }
 
