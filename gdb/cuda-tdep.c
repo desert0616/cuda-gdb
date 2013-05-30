@@ -1606,13 +1606,28 @@ cuda_sstep_execute (ptid_t ptid)
               dev_id, sm_id, cuda_sstep_info.warp_mask);
   gdb_assert (cuda_sstep_info.warp_mask & (1ULL << wp_id));
 
-  /* Single-step all the warps in the warp mask. */
-  for (wp = 0; wp < CUDBG_MAX_WARPS; ++wp)
-    if (cuda_sstep_info.warp_mask & (1ULL << wp) &&
-        warp_is_valid (dev_id, sm_id, wp))
+  if (cuda_options_software_preemption ())
     {
-      warp_single_step (dev_id, sm_id, wp, &warp_mask);
-      stepped_warp_mask |= warp_mask;
+      /* If sw preemption is enabled, then only step
+         the warp in focus.  Do not use the resulting
+         warp_mask as it is invalid in between single
+         step operations when this mode is enabled
+         (these warps can/will land on different SMs,
+         which is handled by invalidating state for
+         all warps instead of using this mask -- see
+         warp_single_step) */
+      warp_single_step (dev_id, sm_id, wp_id, &warp_mask);
+    }
+  else
+    {
+      /* Single-step all the warps in the warp mask. */
+      for (wp = 0; wp < CUDBG_MAX_WARPS; ++wp)
+        if (cuda_sstep_info.warp_mask & (1ULL << wp) &&
+            warp_is_valid (dev_id, sm_id, wp))
+          {
+            warp_single_step (dev_id, sm_id, wp, &warp_mask);
+            stepped_warp_mask |= warp_mask;
+          }
     }
 
   /* Update the warp mask. It may have grown. */
@@ -2152,19 +2167,6 @@ cuda_breakpoint_from_pc (struct gdbarch *gdbarch, CORE_ADDR *pc, int *len)
   return NULL;
 }
 
-static CORE_ADDR
-cuda_adjust_breakpoint_address (struct gdbarch *gdbarch, CORE_ADDR bpaddr)
-{
-  uint64_t adjusted_addr = bpaddr;
-
-  context_t context = cuda_system_find_context_by_addr (bpaddr);
-
-  if (context)
-    cuda_api_get_adjusted_code_address (context_get_device_id (context),
-                                        bpaddr, &adjusted_addr, CUDBG_ADJ_CURRENT_ADDRESS);
-  return (CORE_ADDR)adjusted_addr;
-}
-
 static struct gdbarch *
 cuda_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 {
@@ -2282,7 +2284,6 @@ cuda_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   set_gdbarch_print_insn (gdbarch, cuda_print_insn);
   set_gdbarch_relocate_instruction (gdbarch, NULL);
   set_gdbarch_breakpoint_from_pc   (gdbarch, cuda_breakpoint_from_pc);
-  set_gdbarch_adjust_breakpoint_address (gdbarch, cuda_adjust_breakpoint_address);
 
   /* CUDA - no address space management */
   set_gdbarch_has_global_breakpoints (gdbarch, 1);
@@ -2378,17 +2379,3 @@ cuda_gdb_session_get_dir (void)
 {
     return cuda_gdb_session_dir;
 }
-
-/* Find out if the provided address is a GPU address, and if so adjust it. */
-void
-cuda_adjust_device_code_address (CORE_ADDR original_addr, CORE_ADDR *adjusted_addr)
-{
-  context_t context = cuda_system_find_context_by_addr (original_addr);
-  uint64_t addr = original_addr;
-
-  if (context)
-    cuda_api_get_adjusted_code_address (context_get_device_id (context),
-                                        original_addr, &addr, CUDBG_ADJ_CURRENT_ADDRESS);
-  *adjusted_addr = (CORE_ADDR)addr;
-}
-

@@ -21,9 +21,12 @@
 #include "arch-utils.h"
 #include "regcache.h"
 
+#include <block.h>
+
 #include "cuda-autostep.h"
 #include "cuda-state.h"
 #include "cuda-iterator.h"
+#include "cuda-frame.h"
 
 /* When inside an autostep range, we go into single-step mode */
 static bool autostep_stepping = false;
@@ -127,10 +130,8 @@ autostep_report_exception_device (int before_ln, uint64_t before_pc,
          that the exception was at after_pc-8. This is true in all but some
          obscure cases. */
 
-      uint64_t guess_pc;
-      struct symtab_and_line guess_sal;
-
-      cuda_api_get_adjusted_code_address (c.dev, after_pc, &guess_pc, CUDBG_ADJ_PREVIOUS_ADDRESS);
+      uint64_t guess_pc = after_pc - 8;
+      struct symtab_and_line guess_sal = find_pc_line (guess_pc, 0);
 
       guess_sal = find_pc_line (guess_pc, 0);
 
@@ -222,6 +223,23 @@ handle_autostep_host (void)
   cuda_set_autostep_stepping (false);
 }
 
+static uint64_t
+find_end_pc(uint64_t pc)
+{
+  struct block *bl;
+  struct minimal_symbol *msymbol;
+
+  bl = block_for_pc ((CORE_ADDR)pc);
+  if (bl)
+       return BLOCK_END (bl);
+
+  msymbol = lookup_minimal_symbol_by_pc ((CORE_ADDR)pc);
+  if (msymbol)
+       return SYMBOL_VALUE_ADDRESS (msymbol) + MSYMBOL_SIZE (msymbol);
+
+  return (uint64_t)-1LL;
+}
+
 /* Single steps all the warps that are at an autostep */
 static void
 handle_autostep_device ()
@@ -229,7 +247,7 @@ handle_autostep_device ()
   cuda_iterator iter;
   cuda_coords_t after_coords;
   struct breakpoint *astep, *overlap;
-  uint64_t before_pc, after_pc;
+  uint64_t before_pc, after_pc, end_pc;
   int remaining;
   struct cleanup *old_cleanups;
   bool single_inst;
@@ -291,6 +309,14 @@ handle_autostep_device ()
       while (remaining>0)
         {
           before_pc = warp_get_active_virtual_pc (c.dev, c.sm, c.wp);
+
+          /* If pc is in the top frame - do not allow autostepping outside of kernel boundaries */
+          if ( cuda_frame_outermost_p (get_next_frame (get_current_frame ())))
+            {
+              end_pc = find_end_pc (before_pc);
+              if (before_pc >= end_pc)
+                break;
+            }
 
           /* Clear pending flag to test if we encounter another autostep */
           cuda_set_autostep_pending (false);

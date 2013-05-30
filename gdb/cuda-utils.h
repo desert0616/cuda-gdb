@@ -38,6 +38,12 @@ int cuda_gdb_dir_create (const char *dir_name, uint32_t permissions,
 /* Clean up files in a directory */
 void cuda_gdb_dir_cleanup_files (char* dirpath);
 
+/* Bypass non-fatal signals to the application during controlled application resume
+ * Perform cleanup of the returned value to revert all changes in debugger behaviour
+ * introduced by this routine
+ */
+struct cleanup *cuda_gdb_bypass_signals (void);
+
 /* cuda debugging clock, incremented at each resume/wait cycle */
 cuda_clock_t cuda_clock (void);
 void         cuda_clock_increment (void);

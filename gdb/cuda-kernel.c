@@ -40,6 +40,10 @@ cuda_latest_launched_kernel_id (void)
   return next_kernel_id - 1;
 }
 
+/* forward declaration */
+static void
+kernels_add_parent_kernel (uint32_t dev_id, uint64_t grid_id, uint64_t *parent_grid_id);
+
 /******************************************************************************
  *
  *                                   Kernel
@@ -47,25 +51,26 @@ cuda_latest_launched_kernel_id (void)
  *****************************************************************************/
 
 struct kernel_st {
-  bool            grid_status_p;
-  uint64_t        id;              /* unique kernel id per GDB session */
-  uint32_t        dev_id;          /* device where the kernel was launched */
-  uint64_t        grid_id;         /* unique kernel id per device */
-  CUDBGGridStatus grid_status;     /* current grid status of the kernel */
-  kernel_t        parent;          /* the kernel that launched this grid */
-  kernel_t        children;        /* list of children */
-  kernel_t        siblings;        /* next sibling when traversing the list of children */
-  char           *name;            /* name of the kernel if available */
-  char           *args;            /* kernel arguments in string format */
-  uint64_t        virt_code_base;  /* virtual address of the kernel entry point */
-  module_t        module;          /* CUmodule handle of the kernel */
-  bool            launched;        /* Has the kernel been seen on the hw? */
-  CuDim3          grid_dim;        /* The grid dimensions of the kernel. */
-  CuDim3          block_dim;       /* The block dimensions of the kernel. */
-  char            dimensions[128]; /* A string repr. of the kernel dimensions. */
-  CUDBGKernelType type;            /* The kernel type: system or application. */
-  disasm_cache_t  disasm_cache;    /* the cached disassembled instructions */
-  kernel_t        next;            /* next kernel on the same device */
+  bool              grid_status_p;
+  uint64_t          id;              /* unique kernel id per GDB session */
+  uint32_t          dev_id;          /* device where the kernel was launched */
+  uint64_t          grid_id;         /* unique kernel id per device */
+  CUDBGGridStatus   grid_status;     /* current grid status of the kernel */
+  kernel_t          parent;          /* the kernel that launched this grid */
+  kernel_t          children;        /* list of children */
+  kernel_t          siblings;        /* next sibling when traversing the list of children */
+  char             *name;            /* name of the kernel if available */
+  char             *args;            /* kernel arguments in string format */
+  uint64_t          virt_code_base;  /* virtual address of the kernel entry point */
+  module_t          module;          /* CUmodule handle of the kernel */
+  bool              launched;        /* Has the kernel been seen on the hw? */
+  CuDim3            grid_dim;        /* The grid dimensions of the kernel. */
+  CuDim3            block_dim;       /* The block dimensions of the kernel. */
+  char              dimensions[128]; /* A string repr. of the kernel dimensions. */
+  CUDBGKernelType   type;            /* The kernel type: system or application. */
+  CUDBGKernelOrigin origin;          /* The kernel origin: CPU or GPU */
+  disasm_cache_t    disasm_cache;    /* the cached disassembled instructions */
+  kernel_t          next;            /* next kernel on the same device */
 };
 
 static void
@@ -100,16 +105,17 @@ kernel_remove_child (kernel_t parent, kernel_t child)
        cur != NULL;
        prev = cur, cur = cur->siblings)
     if (cur == child)
-    {
-      prev->siblings = cur->siblings;
-      break;
-    }
+      {
+        prev->siblings = cur->siblings;
+        break;
+      }
 }
 
 static kernel_t
 kernel_new (uint32_t dev_id, uint64_t grid_id, uint64_t virt_code_base,
             char *name, module_t module, CuDim3 grid_dim, CuDim3 block_dim,
-            CUDBGKernelType type, uint64_t parent_grid_id)
+            CUDBGKernelType type, uint64_t parent_grid_id,
+            CUDBGKernelOrigin origin)
 {
   kernel_t   kernel;
   uint32_t   name_len;
@@ -117,6 +123,11 @@ kernel_new (uint32_t dev_id, uint64_t grid_id, uint64_t virt_code_base,
   kernel_t   parent_kernel;
 
   parent_kernel = kernels_find_kernel_by_grid_id (dev_id, parent_grid_id);
+  if (!parent_kernel && origin == CUDBG_KNL_ORIGIN_GPU)
+    {
+      kernels_add_parent_kernel (dev_id, grid_id, &parent_grid_id); 
+      parent_kernel = kernels_find_kernel_by_grid_id (dev_id, parent_grid_id);
+    }
   name_len  = strlen (name);
   name_copy = xmalloc (name_len + 1);
   memcpy (name_copy, name, name_len + 1);
@@ -138,6 +149,7 @@ kernel_new (uint32_t dev_id, uint64_t grid_id, uint64_t virt_code_base,
   kernel->grid_dim                 = grid_dim;
   kernel->block_dim                = block_dim;
   kernel->type                     = type;
+  kernel->origin                   = origin;
   kernel->disasm_cache             = disasm_cache_create ();
   kernel->next                     = NULL;
 
@@ -148,7 +160,7 @@ kernel_new (uint32_t dev_id, uint64_t grid_id, uint64_t virt_code_base,
 
   kernel_add_child (parent_kernel, kernel);
 
-  if (cuda_options_show_kernel_events ())
+  if (cuda_options_show_kernel_events () && origin == CUDBG_KNL_ORIGIN_CPU)
     printf_unfiltered (_("[Launch of CUDA Kernel %"PRIu64" (%s%s) on Device %u]\n"),
                        kernel->id, kernel->name, kernel->dimensions, dev_id);
 
@@ -162,7 +174,7 @@ kernel_delete (kernel_t kernel)
 
   kernel_remove_child (kernel->parent, kernel);
 
-  if (cuda_options_show_kernel_events ())
+  if (cuda_options_show_kernel_events () && kernel->origin  == CUDBG_KNL_ORIGIN_CPU)
     printf_unfiltered (_("[Termination of CUDA Kernel %"PRIu64" (%s%s) on Device %u]\n"),
                       kernel->id, kernel->name, kernel->dimensions, kernel->dev_id);
 
@@ -271,7 +283,7 @@ kernel_get_sibling (kernel_t kernel)
   return kernel->siblings;
 }
 
-  uint64_t
+uint64_t
 kernel_get_virt_code_base (kernel_t kernel)
 {
   gdb_assert (kernel);
@@ -339,6 +351,13 @@ kernel_get_status (kernel_t kernel)
     }
 
   return kernel->grid_status;
+}
+
+CUDBGKernelOrigin
+kernel_get_origin (kernel_t kernel)
+{
+  gdb_assert (kernel);
+  return kernel->origin;
 }
 
 uint32_t
@@ -488,7 +507,7 @@ kernels_start_kernel (uint32_t dev_id, uint64_t grid_id,
                       uint64_t virt_code_base, uint64_t context_id,
                       uint64_t module_id, CuDim3 grid_dim,
                       CuDim3 block_dim, CUDBGKernelType type,
-                      uint64_t parent_grid_id)
+                      uint64_t parent_grid_id, CUDBGKernelOrigin origin)
 {
   context_t context;
   modules_t modules;
@@ -505,11 +524,28 @@ kernels_start_kernel (uint32_t dev_id, uint64_t grid_id,
   kernel_name = cuda_find_function_name_from_pc (virt_code_base, true);
 
   kernel = kernel_new (dev_id, grid_id, virt_code_base, kernel_name, module,
-                       grid_dim, block_dim, type, parent_grid_id);
+                       grid_dim, block_dim, type, parent_grid_id, origin);
 
 
   kernel->next = kernels;
   kernels = kernel;
+}
+
+static void
+kernels_add_parent_kernel (uint32_t dev_id, uint64_t grid_id, uint64_t *parent_grid_id)
+{
+  CUDBGGridInfo grid_info;
+  CUDBGGridInfo parent_grid_info;
+
+  cuda_api_get_grid_info (dev_id, grid_id, &grid_info);
+  cuda_api_get_grid_info (dev_id, grid_info.parentGridId, &parent_grid_info);
+  *parent_grid_id = parent_grid_info.gridId64;
+  kernels_start_kernel (parent_grid_info.dev, parent_grid_info.gridId64,
+                        parent_grid_info.functionEntry,
+                        parent_grid_info.context, parent_grid_info.module,
+                        parent_grid_info.gridDim, parent_grid_info.blockDim,
+                        parent_grid_info.type, parent_grid_info.parentGridId,
+                        parent_grid_info.origin);
 }
 
 void

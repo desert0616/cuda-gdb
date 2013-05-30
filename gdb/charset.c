@@ -595,7 +595,11 @@ make_wchar_iterator (const gdb_byte *input, size_t bytes, const char *charset,
   result->input = (char *) input;
   /* CUDA - iconv padding */
   /* Use 4 bytes of padding */
+#ifdef __linux__
+  result->cuda_iconv_padding_bytes = 0;
+#else
   result->cuda_iconv_padding_bytes = 4;
+#endif
   result->bytes = bytes + result->cuda_iconv_padding_bytes;
   result->width = width;
 

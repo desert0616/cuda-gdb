@@ -4779,9 +4779,6 @@ infrun: not switching back to stepped thread, it has vanished\n");
 
   stop_pc_sal = find_pc_line (stop_pc, 0);
 
-  /* CUDA : The PC that the line belongs to may need to be adjusted */
-  cuda_adjust_device_code_address (stop_pc_sal.pc, &stop_pc_sal.pc);
-
   /* NOTE: tausq/2004-05-24: This if block used to be done before all
      the trampoline processing logic, however, there are some trampolines 
      that have no names, so we should do trampoline handling first.  */

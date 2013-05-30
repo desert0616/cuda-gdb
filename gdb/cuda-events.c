@@ -38,7 +38,7 @@
 #include "cuda-options.h"
 
 #ifdef __APPLE__
-bool cuda_darwin_compute_gpu_used_for_graphics (void);
+bool cuda_darwin_cuda_device_used_for_graphics (uint32_t dev_id);
 #endif
 
 static void
@@ -64,10 +64,16 @@ cuda_event_create_context (uint32_t dev_id, uint64_t context_id, uint32_t tid)
                        context_id, dev_id);
 
 #ifdef __APPLE__
-  if (cuda_options_gpu_busy_check() && cuda_darwin_compute_gpu_used_for_graphics())
-    error (_("A device about to be used for compute may already be in use for graphics.\n"
-             "This is an unsupported scenario. Further debugging might be unsafe. Aborting.\n"
-             "Disable the ‘cuda gpu_busy_check’ option to bypass the checking mechanism." ));
+  if ( cuda_remote ||
+       !cuda_options_gpu_busy_check () ||
+       !cuda_darwin_cuda_device_used_for_graphics (dev_id))
+    return;
+
+  target_terminal_ours();
+  target_kill();
+  error (_("A device about to be used for compute may already be in use for graphics.\n"
+           "This is an unsupported scenario. Further debugging might be unsafe. Aborting.\n"
+           "Disable the 'cuda gpu_busy_check' option to bypass the checking mechanism." ));
 #endif
 }
 
@@ -204,7 +210,7 @@ static void
 cuda_event_kernel_ready (uint32_t dev_id, uint64_t context_id, uint64_t module_id,
                          uint64_t grid_id, uint32_t tid, uint64_t virt_code_base,
                          CuDim3 grid_dim, CuDim3 block_dim, CUDBGKernelType type,
-                         uint64_t parent_grid_id)
+                         uint64_t parent_grid_id, CUDBGKernelOrigin origin)
 {
   ptid_t           previous_ptid = inferior_ptid;
 #if defined(__linux__) && defined(GDB_NM_FILE)
@@ -233,7 +239,8 @@ cuda_event_kernel_ready (uint32_t dev_id, uint64_t context_id, uint64_t module_i
 #endif
 
   kernels_start_kernel (dev_id, grid_id, virt_code_base, context_id,
-                        module_id, grid_dim, block_dim, type, parent_grid_id);
+                        module_id, grid_dim, block_dim, type,
+                        parent_grid_id, origin);
 
   if ((type == CUDBG_KNL_TYPE_APPLICATION &&
        cuda_options_break_on_launch_application ()) ||
@@ -289,10 +296,6 @@ cuda_event_post_process (void)
      breakpoint handling (via remove/insert). */
   cuda_remove_breakpoints ();
   cuda_insert_breakpoints ();
-
-  if (cuda_options_async_events_needs_updating ())
-    cuda_api_set_async_launch_notifications (
-         cuda_options_show_kernel_events_async ());
 }
 
 void
@@ -327,6 +330,7 @@ cuda_process_event (CUDBGEvent *event)
   CuDim3   grid_dim;
   CuDim3   block_dim;
   CUDBGKernelType type;
+  CUDBGKernelOrigin origin;
   CUDBGResult errorType;
 
   gdb_assert (event);
@@ -356,9 +360,10 @@ cuda_process_event (CUDBGEvent *event)
             block_dim      = event->cases.kernelReady.blockDim;
             type           = event->cases.kernelReady.type;
             parent_grid_id = event->cases.kernelReady.parentGridId;
+            origin         = event->cases.kernelReady.origin;
             cuda_event_kernel_ready (dev_id, context_id, module_id, grid_id,
                                      tid, virt_code_base, grid_dim, block_dim,
-                                     type, parent_grid_id);
+                                     type, parent_grid_id, origin);
             break;
           }
         case CUDBG_EVENT_KERNEL_FINISHED:

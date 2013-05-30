@@ -108,7 +108,7 @@ int return_child_result_value = -1;
 extern int write_files;
 
 /* GDB as it has been invoked from the command line (i.e. argv[0]).  */
-static char *gdb_program_name;
+char *gdb_program_name;
 
 static void print_gdb_help (struct ui_file *);
 

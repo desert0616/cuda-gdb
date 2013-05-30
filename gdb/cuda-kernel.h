@@ -21,33 +21,34 @@
 
 #include "cuda-defs.h"
 
-uint64_t        kernel_get_id                       (kernel_t kernel);
-uint32_t        kernel_get_dev_id                   (kernel_t kernel);
-uint64_t        kernel_get_grid_id                  (kernel_t kernel);
-kernel_t        kernel_get_parent                   (kernel_t kernel);
-kernel_t        kernel_get_children                 (kernel_t kernel);
-kernel_t        kernel_get_sibling                  (kernel_t kernel);
-const char*     kernel_get_name                     (kernel_t kernel);
-const char*     kernel_get_args                     (kernel_t kernel);
-uint64_t        kernel_get_virt_code_base           (kernel_t kernel);
-context_t       kernel_get_context                  (kernel_t kernel);
-module_t        kernel_get_module                   (kernel_t kernel);
-CuDim3          kernel_get_grid_dim                 (kernel_t kernel);
-CuDim3          kernel_get_block_dim                (kernel_t kernel);
-const char*     kernel_get_dimensions               (kernel_t kernel);
-CUDBGKernelType kernel_get_type                     (kernel_t kernel);
-CUDBGGridStatus kernel_get_status                   (kernel_t kernel);
-uint32_t        kernel_get_depth                    (kernel_t kernel);
-uint32_t        kernel_get_num_children             (kernel_t kernel);
-bool            kernel_has_launched                 (kernel_t kernel);
-bool            kernel_is_present                   (kernel_t kernel);
+uint64_t            kernel_get_id                       (kernel_t kernel);
+uint32_t            kernel_get_dev_id                   (kernel_t kernel);
+uint64_t            kernel_get_grid_id                  (kernel_t kernel);
+kernel_t            kernel_get_parent                   (kernel_t kernel);
+kernel_t            kernel_get_children                 (kernel_t kernel);
+kernel_t            kernel_get_sibling                  (kernel_t kernel);
+const char*         kernel_get_name                     (kernel_t kernel);
+const char*         kernel_get_args                     (kernel_t kernel);
+uint64_t            kernel_get_virt_code_base           (kernel_t kernel);
+context_t           kernel_get_context                  (kernel_t kernel);
+module_t            kernel_get_module                   (kernel_t kernel);
+CuDim3              kernel_get_grid_dim                 (kernel_t kernel);
+CuDim3              kernel_get_block_dim                (kernel_t kernel);
+const char*         kernel_get_dimensions               (kernel_t kernel);
+CUDBGKernelType     kernel_get_type                     (kernel_t kernel);
+CUDBGGridStatus     kernel_get_status                   (kernel_t kernel);
+CUDBGKernelOrigin   kernel_get_origin                   (kernel_t kernel);
+uint32_t            kernel_get_depth                    (kernel_t kernel);
+uint32_t            kernel_get_num_children             (kernel_t kernel);
+bool                kernel_has_launched                 (kernel_t kernel);
+bool                kernel_is_present                   (kernel_t kernel);
 
-void            kernel_invalidate         (kernel_t kernel);
-uint32_t        kernel_compute_sms_mask   (kernel_t kernel);
-void            kernel_load_elf_images    (kernel_t kernel);
-void            kernel_print              (kernel_t kernel);
-void            kernel_flush_disasm_cache (kernel_t kernel);
-const char*     kernel_disassemble        (kernel_t kernel, uint64_t pc,
+void                kernel_invalidate         (kernel_t kernel);
+uint32_t            kernel_compute_sms_mask   (kernel_t kernel);
+void                kernel_load_elf_images    (kernel_t kernel);
+void                kernel_print              (kernel_t kernel);
+void                kernel_flush_disasm_cache (kernel_t kernel);
+const char*         kernel_disassemble        (kernel_t kernel, uint64_t pc,
                                            uint32_t *inst_size);
 
 void      kernels_start_kernel     (uint32_t dev_id, uint64_t grid_id,
@@ -55,7 +56,8 @@ void      kernels_start_kernel     (uint32_t dev_id, uint64_t grid_id,
                                     uint64_t context_id, uint64_t module_id,
                                     CuDim3 grid_dim, CuDim3 block_dim,
                                     CUDBGKernelType type,
-                                    uint64_t parent_grid_id);
+                                    uint64_t parent_grid_id,
+                                    CUDBGKernelOrigin origin);
 void      kernels_terminate_kernel  (kernel_t kernel);
 void      kernels_terminate_module  (module_t module);
 void      kernels_update_terminated (void);

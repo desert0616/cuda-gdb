@@ -89,7 +89,7 @@ typedef unsigned char bool;
 
 #define CUDBG_API_VERSION_MAJOR      5  /* Major release version number */
 #define CUDBG_API_VERSION_MINOR      5  /* Minor release version number */
-#define CUDBG_API_VERSION_REVISION  90  /* Revision (build) number */
+#define CUDBG_API_VERSION_REVISION  95  /* Revision (build) number */
 
 /*---------------------------------- Constants -------------------------------*/
 
@@ -189,6 +189,7 @@ typedef enum {
     CUDBG_ERROR_INVALID_ENVVAR_ARGS         = 0x0024,  /* Some environment variable's value is invalid */
     CUDBG_ERROR_OS_RESOURCES                = 0x0025,  /* Error while allocating resources from the OS */
     CUDBG_ERROR_FORK_FAILED                 = 0x0026,  /* Error while forking the debugger process */
+    CUDBG_ERROR_NO_DEVICE_AVAILABLE         = 0x0027,  /* No CUDA capable device was found */
 } CUDBGResult;
 
 /*------------------------------ Grid Attributes -----------------------------*/
@@ -257,13 +258,14 @@ typedef enum {
     CUDBG_KNL_ORIGIN_GPU               = 0x001,   /* The kernel was launched from the GPU. */
 } CUDBGKernelOrigin;
 
-/*------------------------------ Code Address --------------------------------*/
+/*------------------------ Kernel Launch Notify Mode --------------------------*/
 
 typedef enum {
-    CUDBG_ADJ_PREVIOUS_ADDRESS         = 0x000,   /* Get the adjusted previous code address. */
-    CUDBG_ADJ_CURRENT_ADDRESS          = 0x001,   /* Get the adjusted current code address. */
-    CUDBG_ADJ_NEXT_ADDRESS             = 0x002,   /* Get the adjusted next code address. */
-} CUDBGAdjAddrAction;
+    CUDBG_KNL_LAUNCH_NOTIFY_EVENT      = 0x000,   /* The kernel notifications generate events */
+    CUDBG_KNL_LAUNCH_NOTIFY_DEFER      = 0x001,   /* The kernel notifications are deferred */
+} CUDBGKernelLaunchNotifyMode;
+
+/*------------------------------ Code Address --------------------------------*/
 
 /* Deprecated */
 typedef struct {
@@ -481,6 +483,7 @@ typedef struct {
             CUDBGKernelType type;
             uint64_t parentGridId;
             uint64_t gridId64;
+            CUDBGKernelOrigin origin;
         } kernelReady;
         struct kernelFinished_st {
             uint32_t dev;
@@ -697,13 +700,13 @@ struct CUDBGAPI_st {
     CUDBGResult (*getGridStatus50)(uint32_t dev, uint32_t gridId, CUDBGGridStatus *status);
 
     /* 5.5 Extensions */
-    CUDBGResult (*getAdjustedCodeAddress)(uint32_t dev, uint64_t address, uint64_t *adjustedAddress, CUDBGAdjAddrAction adjAction);
     CUDBGResult (*getNextSyncEvent)(CUDBGEvent *event);
     CUDBGResult (*getNextAsyncEvent)(CUDBGEvent *event);
     CUDBGResult (*getGridInfo)(uint32_t dev, uint64_t gridId64, CUDBGGridInfo *gridInfo);
     CUDBGResult (*readGridId)(uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *gridId64);
     CUDBGResult (*getGridStatus)(uint32_t dev, uint64_t gridId64, CUDBGGridStatus *status);
-    CUDBGResult (*setAsyncLaunchNotifications)(bool enabled);
+    CUDBGResult (*setKernelLaunchNotificationMode) (CUDBGKernelLaunchNotifyMode mode);
+    CUDBGResult (*getDevicePCIBusInfo) (uint32_t devIdId, uint32_t *pciBusId, uint32_t *pciDevId);
 };
 
 #ifdef __cplusplus

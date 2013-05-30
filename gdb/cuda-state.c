@@ -132,7 +132,7 @@ cuda_system_initialize (void)
 
   for (dev_id = 0; dev_id < cuda_system_get_num_devices (); ++dev_id)
      device_initialize (dev_id);
-  cuda_options_force_set_async_events_update ();
+  cuda_options_force_set_launch_notification_update ();
 }
 
 void
@@ -735,6 +735,23 @@ device_resume (uint32_t dev_id)
   cuda_system_info.suspended_devices_mask &= ~(1 << dev_id);
 }
 
+static void
+device_create_kernel(uint32_t dev_id, uint64_t grid_id)
+{
+  CUDBGGridInfo gridInfo = {0};
+
+  cuda_api_get_grid_info(dev_id, grid_id, &gridInfo);
+  kernels_start_kernel(dev_id, grid_id,
+                       gridInfo.functionEntry,
+                       gridInfo.context,
+                       gridInfo.module,
+                       gridInfo.gridDim,
+                       gridInfo.blockDim,
+                       gridInfo.type,
+                       gridInfo.parentGridId,
+                       gridInfo.origin);
+}
+
 void
 device_suspend (uint32_t dev_id)
 {
@@ -754,6 +771,8 @@ device_suspend (uint32_t dev_id)
 
   cuda_system_info.suspended_devices_mask |= (1 << dev_id);
 }
+
+
 
 /******************************************************************************
  *
@@ -987,6 +1006,12 @@ warp_get_kernel (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
 
   grid_id = warp_get_grid_id (dev_id, sm_id, wp_id);
   kernel  = kernels_find_kernel_by_grid_id (dev_id, grid_id);
+
+  if (!kernel && cuda_options_defer_kernel_launch_notifications())
+    {
+      device_create_kernel(dev_id, grid_id);
+      kernel = kernels_find_kernel_by_grid_id (dev_id, grid_id);
+    }
 
   wp->kernel   = kernel;
   wp->kernel_p = CACHED;

@@ -25,6 +25,7 @@
 #include <limits.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <pthread.h>
 
 #ifdef GDBSERVER
 #include <server.h>
@@ -199,7 +200,7 @@ cudbgipcPush(CUDBGIPC_t *out)
         writeCount = write(out->fd, buf + offset, out->dataSize - offset);
         if (writeCount < 0) {
             /* Forward SIGINT received during syscall to main thread signal handler */
-            if (errno == EINTR)
+            if (errno == EINTR && pthread_self() != cudagdbMainThreadHandle)
               pthread_kill (cudagdbMainThreadHandle, SIGINT);
 
             if (errno != EAGAIN && errno != EINTR) {
@@ -232,7 +233,7 @@ cudbgipcRead(CUDBGIPC_t *in, void *buf, uint32_t size)
         }
         if (readCount < 0) {
             /* Forward SIGINT received during syscall to main thread signal handler */
-            if (errno == EINTR)
+            if (errno == EINTR && pthread_self() != cudagdbMainThreadHandle)
               pthread_kill (cudagdbMainThreadHandle, SIGINT);
 
             if (errno != EAGAIN && errno != EINTR) {
@@ -295,7 +296,7 @@ cudbgipcWait(CUDBGIPC_t *in)
        ret = select(in->fd + 1, &readFDS, NULL, &errFDS, NULL);
 
        /* Forward SIGINT received during syscall to main thread signal handler */
-       if (ret < 0 && errno == EINTR)
+       if (ret < 0 && errno == EINTR && pthread_self() != cudagdbMainThreadHandle)
          pthread_kill (cudagdbMainThreadHandle, SIGINT);
    } while (ret == -1 && errno == EINTR);
 

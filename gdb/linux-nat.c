@@ -3862,13 +3862,7 @@ linux_nat_kill (struct target_ops *ops)
       iterate_over_lwps (ptid, kill_wait_callback, NULL);
     }
 
-  /* CUDA - exceptions */
-  /* If a CUDA exception was received, we are not ready to mourn yet because
-     GDB core does not know that the threads have terminated for some reason. */
-  if (!cuda_exception_is_valid (cuda_exception))
-    target_mourn_inferior ();
-  else
-    cuda_is_target_mourn_pending = true;
+  target_mourn_inferior ();
 }
 
 static void

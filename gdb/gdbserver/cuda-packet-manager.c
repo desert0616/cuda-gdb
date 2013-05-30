@@ -177,25 +177,6 @@ cuda_process_unset_breakpoint_packet (char *buf)
 }
 
 void
-cuda_process_get_adjusted_code_address (char *buf)
-{
-  CUDBGResult res;
-  char *p;
-  uint32_t dev;
-  uint64_t addr;
-  uint64_t adjusted_addr;
-  CUDBGAdjAddrAction adj_action;
-
-  extract_bin (NULL, (unsigned char *) &dev,  sizeof (dev));
-  extract_bin (NULL, (unsigned char *) &addr, sizeof (addr));
-  extract_bin (NULL, (unsigned char *) &adj_action, sizeof (adj_action));
-
-  res = cudbgAPI->getAdjustedCodeAddress (dev, addr, &adjusted_addr, adj_action);
-  p = append_bin ((unsigned char *) &res, buf, sizeof (res), true);
-  p = append_bin ((unsigned char *) &adjusted_addr, p, sizeof (adjusted_addr), false);
-}
-
-void
 cuda_process_get_host_addr_from_device_addr_packet (char *buf)
 {
   CUDBGResult res;
@@ -414,7 +395,12 @@ cuda_process_initialize_target_packet (char *buf)
   char *p;
   bool driver_is_compatible;
 
+  extract_bin (NULL, (unsigned char *) &cuda_software_preemption, sizeof (cuda_software_preemption));
+  extract_bin (NULL, (unsigned char *) &cuda_memcheck, sizeof (cuda_memcheck));
+  extract_bin (NULL, (unsigned char *) &cuda_launch_blocking, sizeof (cuda_launch_blocking));
+
   driver_is_compatible = cuda_initialize_target ();
+
   p = append_bin ((unsigned char *) &get_debugger_api_res, buf, sizeof (get_debugger_api_res), true);
   p = append_bin ((unsigned char *) &set_callback_api_res, p, sizeof (set_callback_api_res), true);
   p = append_bin ((unsigned char *) &api_initialize_res, p, sizeof (api_initialize_res), true);
@@ -1220,30 +1206,11 @@ cuda_process_api_request_cleanup_on_detach_packet (char *buf)
 void
 cuda_process_set_option_packet (char *buf)
 {
-  bool preemption;
-  bool memcheck;
-  bool launch_blocking;
-  const unsigned char one = 1;
-  const unsigned char zero = 0;
-  CORE_ADDR preemption_addr;
-  CORE_ADDR memcheck_addr;
-  CORE_ADDR launch_blocking_addr;
-
-  preemption_addr = cuda_get_symbol_address_from_cache (_STRING_(CUDBG_ENABLE_PREEMPTION_DEBUGGING));
-  memcheck_addr = cuda_get_symbol_address_from_cache (_STRING_(CUDBG_ENABLE_INTEGRATED_MEMCHECK));
-  launch_blocking_addr = cuda_get_symbol_address_from_cache (_STRING_(CUDBG_ENABLE_LAUNCH_BLOCKING));
-
-  extract_bin (NULL, (unsigned char *) &preemption,               sizeof (preemption));
-  extract_bin (NULL, (unsigned char *) &memcheck,                 sizeof (memcheck));
-  extract_bin (NULL, (unsigned char *) &launch_blocking,          sizeof (launch_blocking));
   extract_bin (NULL, (unsigned char *) &cuda_debug_general,       sizeof (cuda_debug_general));
   extract_bin (NULL, (unsigned char *) &cuda_debug_libcudbg,      sizeof (cuda_debug_libcudbg));
   extract_bin (NULL, (unsigned char *) &cuda_debug_notifications, sizeof (cuda_debug_notifications));
   extract_bin (NULL, (unsigned char *) &cuda_notify_youngest,     sizeof (cuda_notify_youngest));
 
-  write_inferior_memory (preemption_addr, preemption ? &one : &zero, 1);
-  write_inferior_memory (memcheck_addr, memcheck ? &one : &zero, 1);
-  write_inferior_memory (launch_blocking_addr, launch_blocking ? &one : &zero, 1);
   append_string ("OK", buf, false);
 }
 
@@ -1251,10 +1218,10 @@ void
 cuda_process_set_async_launch_notifications (char *buf)
 {
   CUDBGResult res;
-  bool enabled;
-  extract_bin (NULL, (unsigned char *) &enabled, sizeof (enabled));
+  uint32_t mode;
+  extract_bin (NULL, (unsigned char *) &mode, sizeof (mode));
 
-  res = cudbgAPI->setAsyncLaunchNotifications (enabled);
+  res = cudbgAPI->setKernelLaunchNotificationMode (mode);
   append_bin ((unsigned char *) &res, buf, sizeof (res), false);
 }
 
@@ -1324,7 +1291,11 @@ generate_kernel_ready_reply (char *buf, CUDBGEvent *event)
   p = append_bin ((unsigned char *) &(event->cases.kernelReady.blockDim),
                            p, sizeof (event->cases.kernelReady.blockDim), true);
   p = append_bin ((unsigned char *) &(event->cases.kernelReady.type),
-                           p, sizeof (event->cases.kernelReady.type), false);
+                           p, sizeof (event->cases.kernelReady.type), true);
+  p = append_bin ((unsigned char *) &(event->cases.kernelReady.parentGridId),
+                           p, sizeof (event->cases.kernelReady.parentGridId), true);
+  p = append_bin ((unsigned char *) &(event->cases.kernelReady.origin),
+                           p, sizeof (event->cases.kernelReady.origin), false);
 }
 
 static void
@@ -1650,9 +1621,6 @@ handle_cuda_packet (char *buf)
       break;
     case GET_GRID_INFO:
       cuda_process_get_grid_info_packet (buf);
-      break;
-    case GET_ADJUSTED_CODE_ADDRESS:
-      cuda_process_get_adjusted_code_address (buf);
       break;
     case GET_HOST_ADDR_FROM_DEVICE_ADDR:
       cuda_process_get_host_addr_from_device_addr_packet (buf);

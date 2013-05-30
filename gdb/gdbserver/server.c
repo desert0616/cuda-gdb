@@ -2224,7 +2224,10 @@ handle_status (char *own_buf)
 static void
 gdbserver_version (void)
 {
-  printf ("GNU gdbserver %s%s\n"
+  printf ("NVIDIA (R) CUDA gdbserver\n"
+          "5.5 release\n"
+          "Portions Copyright (C) 2013 NVIDIA Corporation\n"
+          "GNU gdbserver %s%s\n"
 	  "Copyright (C) 2010 Free Software Foundation, Inc.\n"
 	  "gdbserver is free software, covered by the GNU General Public License.\n"
 	  "This gdbserver was configured as \"%s\"\n",

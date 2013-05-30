@@ -1221,12 +1221,12 @@ quit_target (void *arg)
 {
   struct qt_args *qt = (struct qt_args *)arg;
 
-  if (cuda_exception_is_valid (cuda_exception) && cuda_is_target_mourn_pending)
+  if (cuda_exception_is_valid (cuda_exception))
     {
+      cuda_cleanup();
       cuda_exception_reset (cuda_exception);
-      cuda_is_target_mourn_pending = false;
-      
-      target_mourn_inferior ();
+
+      target_kill ();
     }
 
   /* Kill or detach all inferiors.  */

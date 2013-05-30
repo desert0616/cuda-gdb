@@ -966,6 +966,9 @@ cuda_info_blocks_build (char *filter_string, cuda_info_block_t **blocks, uint32_
   gdb_assert (blocks);
   gdb_assert (num_blocks);
 
+  /* make valgrind not complain */
+  expected = CUDA_INVALID_COORDS;
+
   /* get the filter */
   default_filter = CUDA_WILDCARD_FILTERS;
   default_filter.coords.kernelId = CUDA_CURRENT;

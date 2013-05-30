@@ -166,13 +166,13 @@ typedef enum {
     CUDBGAPIREQ_getGridStatus50,
 
     /* 5.5 Extensions */
-    CUDBGAPIREQ_getAdjustedCodeAddress,
     CUDBGAPIREQ_getGridInfo,
     CUDBGAPIREQ_getNextSyncEvent,
     CUDBGAPIREQ_getNextAsyncEvent,
     CUDBGAPIREQ_readGridId,
     CUDBGAPIREQ_getGridStatus,
-    CUDBGAPIREQ_setAsyncLaunchNotifications,
+    CUDBGAPIREQ_setKernelLaunchNotificationMode,
+    CUDBGAPIREQ_getDevicePCIBusInfo,
 } CUDBGAPIREQ_t;
 
 typedef enum {
@@ -373,6 +373,8 @@ typedef struct PACKED_ALIGNMENT CUDBGAPI_message_st {
             CUDBGDIM3_t threadIdx;
             CUDBGDIM3_t blockDim;
             CUDBGDIM3_t gridDim;
+            uint32_t pciBusId;
+            uint32_t pciDevId;
             struct PACKED_ALIGNMENT {
                 uint32_t kind;
                 union {
@@ -397,6 +399,7 @@ typedef struct PACKED_ALIGNMENT CUDBGAPI_message_st {
                         CUDBGDIM3_t blockDim;
                         uint32_t type;
                         uint64_t parentGridId;
+                        CUDBGKernelOrigin origin;
                     } kernelReady;
                     struct PACKED_ALIGNMENT {
                         uint32_t dev;

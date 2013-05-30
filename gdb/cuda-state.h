@@ -62,7 +62,6 @@ void        device_resume     (uint32_t dev_id);
 void        device_suspend    (uint32_t dev_id);
 void        device_invalidate (uint32_t dev_id);
 
-
 /* SM State */
 bool        sm_is_valid                    (uint32_t dev_id, uint32_t sm_id);
 uint64_t    sm_get_valid_warps_mask        (uint32_t dev_id, uint32_t sm_id);

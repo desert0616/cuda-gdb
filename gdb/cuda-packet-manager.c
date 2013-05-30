@@ -205,27 +205,6 @@ cuda_remote_api_unset_breakpoint (uint32_t dev, uint64_t addr)
 }
 
 CUDBGResult
-cuda_remote_api_get_adjusted_code_address (uint32_t dev, uint64_t addr, uint64_t *adjusted_addr,
-                                           CUDBGAdjAddrAction adj_action)
-{
-  char *p;
-  CUDBGResult res;
-  cuda_packet_type_t packet_type = GET_ADJUSTED_CODE_ADDRESS;
-
-  p = append_string ("qnv.", pktbuf.buf, false);
-  p = append_bin ((gdb_byte *) &packet_type, p, sizeof (packet_type), true);
-  p = append_bin ((gdb_byte *) &dev, p, sizeof (dev), true);
-  p = append_bin ((gdb_byte *) &addr, p, sizeof (addr), true);
-  p = append_bin ((gdb_byte *) &adj_action, p, sizeof (adj_action), false);
-  putpkt (pktbuf.buf);
-  getpkt (&pktbuf.buf, &pktbuf.buf_size, 1);
-
-  extract_bin (pktbuf.buf, (gdb_byte *) &res, sizeof (res));
-  extract_bin (NULL, (gdb_byte *) adjusted_addr, sizeof (*adjusted_addr));
-  return res;
-}
-
-CUDBGResult
 cuda_remote_api_get_host_addr_from_device_addr (uint32_t dev, uint64_t addr, uint64_t *hostaddr)
 {
   char *p;
@@ -1179,6 +1158,10 @@ cuda_remote_query_events (cuda_event_kind_t cuda_event_kind)
                                      sizeof (event.cases.kernelReady.blockDim));
            extract_bin (NULL, (gdb_byte *) &(event.cases.kernelReady.type),
                                      sizeof (event.cases.kernelReady.type));
+           extract_bin (NULL, (gdb_byte *) &(event.cases.kernelReady.parentGridId),
+                                     sizeof (event.cases.kernelReady.parentGridId));
+           extract_bin (NULL, (gdb_byte *) &(event.cases.kernelReady.origin),
+                                     sizeof (event.cases.kernelReady.origin));
          }
        else if (strcmp ("KERNEL_FINISHED", p) == 0)
          {
@@ -1416,9 +1399,16 @@ cuda_remote_initialize (CUDBGResult *get_debugger_api_res, CUDBGResult *set_call
 {
   char *p;
   cuda_packet_type_t packet_type = INITIALIZE_TARGET;
+  bool preemption          = cuda_options_software_preemption ();
+  bool memcheck            = cuda_options_memcheck ();
+  bool launch_blocking     = cuda_options_launch_blocking ();
 
   p = append_string ("qnv.", pktbuf.buf, false);
-  p = append_bin ((gdb_byte *) &packet_type, p, sizeof (packet_type), false);
+  p = append_bin ((gdb_byte *) &packet_type,     p, sizeof (packet_type), true);
+  p = append_bin ((gdb_byte *) &preemption,      p, sizeof (preemption), true);
+  p = append_bin ((gdb_byte *) &memcheck,        p, sizeof (memcheck), true);
+  p = append_bin ((gdb_byte *) &launch_blocking, p, sizeof (launch_blocking), false);
+
   putpkt (pktbuf.buf);
   getpkt (&pktbuf.buf, &pktbuf.buf_size, 1);
 
@@ -1558,7 +1548,7 @@ cuda_remote_api_request_cleanup_on_detach (void)
 }
 
 CUDBGResult
-cuda_remote_api_set_async_launch_notifications (bool enable)
+cuda_remote_api_set_kernel_launch_notification_mode (CUDBGKernelLaunchNotifyMode mode)
 {
   char *p;
   CUDBGResult res;
@@ -1566,7 +1556,7 @@ cuda_remote_api_set_async_launch_notifications (bool enable)
 
   p = append_string ("qnv.", pktbuf.buf, false);
   p = append_bin ((gdb_byte *) &packet_type, p, sizeof (packet_type), true);
-  p = append_bin ((gdb_byte *) &enable, p, sizeof (enable), false);
+  p = append_bin ((gdb_byte *) &mode, p, sizeof (mode), false);
 
   putpkt (pktbuf.buf);
   getpkt (&pktbuf.buf, &pktbuf.buf_size, 1);
@@ -1579,9 +1569,6 @@ void
 cuda_remote_set_option ()
 {
   char *p;
-  bool preemption          = cuda_options_software_preemption ();
-  bool memcheck            = cuda_options_memcheck ();
-  bool launch_blocking     = cuda_options_launch_blocking ();
   bool general_trace       = cuda_options_debug_general ();
   bool libcudbg_trace      = cuda_options_debug_libcudbg ();
   bool notifications_trace = cuda_options_debug_notifications ();
@@ -1591,9 +1578,6 @@ cuda_remote_set_option ()
 
   p = append_string ("qnv.", pktbuf.buf, false);
   p = append_bin ((gdb_byte *) &packet_type,         p, sizeof (cuda_packet_type_t), true);
-  p = append_bin ((gdb_byte *) &preemption,          p, sizeof (preemption), true);
-  p = append_bin ((gdb_byte *) &memcheck,            p, sizeof (memcheck), true);
-  p = append_bin ((gdb_byte *) &launch_blocking,     p, sizeof (launch_blocking), true);
   p = append_bin ((gdb_byte *) &general_trace,       p, sizeof (general_trace), true);
   p = append_bin ((gdb_byte *) &libcudbg_trace,      p, sizeof (libcudbg_trace), true);
   p = append_bin ((gdb_byte *) &notifications_trace, p, sizeof (notifications_trace), true);

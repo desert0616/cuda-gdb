@@ -553,7 +553,9 @@ const char *cuda_break_on_launch_enums[] = {
 };
 
 static const char *cuda_break_on_launch;
-static const char *cuda_show_kernel_events;
+
+/* Forward Declearation */
+static int cuda_defer_kernel_launch_notifications;
 
 static void
 cuda_show_break_on_launch (struct ui_file *file, int from_tty,
@@ -567,11 +569,15 @@ cuda_set_break_on_launch (char *args, int from_tty, struct cmd_list_element *c)
 {
   /* Print warning if this change alters effective kernel_events policy */
   if (cuda_break_on_launch != cuda_break_on_launch_none &&
-      strcmp ((char *)cuda_show_kernel_events, "show_async") == 0)
-    printf_filtered ("Warning: Becaus break_on_launch options is set to '%s'"
-                     " effective kernel_events policy would be show_sync.\n", cuda_show_kernel_events);
+      cuda_defer_kernel_launch_notifications != 0)
+    {
+      printf_filtered ("Warning: Because break_on_launch options is set to '%s',"
+                       " defer_kernel_launch_notifications will be set to 'off'.\n",
+                       cuda_break_on_launch);
+      cuda_defer_kernel_launch_notifications = 0;
+      cuda_options_force_set_launch_notification_update ();
+    }
 
-  cuda_options_force_set_async_events_update ();
   // reset the auto breakpoints
   cuda_cleanup_auto_breakpoints (NULL);
 }
@@ -713,48 +719,26 @@ cuda_options_hide_internal_frames (void)
 /*
  * set cuda show_kernel_events
  */
-const char  cuda_show_kernel_events_hide[]       = "hide";
-const char  cuda_show_kernel_events_show[]       = "show_sync";
-const char  cuda_show_kernel_events_async[]      = "show_async";
-
-const char *cuda_show_kernel_events_enum[] = {
-  cuda_show_kernel_events_hide,
-  cuda_show_kernel_events_show,
-  cuda_show_kernel_events_async,
-  NULL
-};
+int cuda_show_kernel_events;
 
 static void
 cuda_show_show_kernel_events (struct ui_file *file, int from_tty,
-                               struct cmd_list_element *c, const char *value)
+                              struct cmd_list_element *c, const char *value)
 {
-  fprintf_filtered (file, _("CUDA kernel events output message policy is %s.\n"), value);
-}
-
-static void
-cuda_set_show_kernel_events (char *args, int from_tty, struct cmd_list_element *c)
-{
-  if (cuda_break_on_launch != cuda_break_on_launch_none &&
-      cuda_show_kernel_events == cuda_show_kernel_events_async)
-    printf_filtered ("Warning: Becaus break_on_launch options is set to '%s'"
-                     " effective kernel_events policy would be show_sync.\n", cuda_show_kernel_events);
-  cuda_options_force_set_async_events_update ();
+  fprintf_filtered (file, _("Show CUDA kernel events is %s.\n"), value);
 }
 
 static void
 cuda_options_initialize_show_kernel_events (void)
 {
-  cuda_show_kernel_events = cuda_show_kernel_events_show;
+  cuda_show_kernel_events = 1;
 
-  add_setshow_enum_cmd ("kernel_events", class_cuda,
-                            cuda_show_kernel_events_enum, &cuda_show_kernel_events,
-                            _("Control kernel events (launch/termination) output message policy."),
+  add_setshow_boolean_cmd ("kernel_events", class_cuda,
+                            &cuda_show_kernel_events,
+                            _("Turn on/off kernel events (launch/termination) output messages."),
                             _("Show kernel events."),
-                            _("When enabled, following policies applies to kernel events:\n"
-                              "  hide        : do not show kernel events\n"
-                              "  show_sync   : receive and display kernel events synchronously\n"
-                              "  show_async  : receive and display kernel events asynchronously\n"),
-                            cuda_set_show_kernel_events,
+                            _("When turned on, the kernel launch and termination events are displayed.\n"),
+                            NULL,
                             cuda_show_show_kernel_events,
                             &setcudalist, &showcudalist);
 }
@@ -762,32 +746,61 @@ cuda_options_initialize_show_kernel_events (void)
 bool
 cuda_options_show_kernel_events (void)
 {
-  return cuda_show_kernel_events != cuda_show_kernel_events_hide;
+  return cuda_show_kernel_events;
+}
+
+/* set cuda deferl_kernel_launch_notifications */
+static int cuda_defer_kernel_launch_notifications = 0;
+
+static void
+cuda_show_defer_kernel_launch_notifications (struct ui_file *file, int from_tty,
+                                            struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("CUDA defer kernel launch notifications is %s.\n"), value);
+}
+
+static void
+cuda_set_defer_kernel_launch_notifications (char *args, int from_tty, struct cmd_list_element *c)
+{
+  if (cuda_break_on_launch != cuda_break_on_launch_none &&
+      cuda_defer_kernel_launch_notifications != 0)
+    {
+      printf_filtered ("Warning: Because break_on_launch options is set to '%s',"
+                       " defer_kernel_launch_notification option will be set to 'off'.\n",
+                       cuda_break_on_launch);
+      cuda_defer_kernel_launch_notifications = 0;
+    }
+  cuda_options_force_set_launch_notification_update ();
+}
+
+static void
+cuda_options_initialize_defer_kernel_launch_notifications (void)
+{
+  cuda_defer_kernel_launch_notifications = 0;
+  add_setshow_boolean_cmd ("defer_kernel_launch_notifications", class_cuda,
+                            &cuda_defer_kernel_launch_notifications,
+                            _("Turn on/off deferral of kernel launch messages."),
+                            _("Show whether kernel launch notifications are deferred."),
+                            _("When turned on, the kernel launch and termination events are deferred until the debugger hits a breakpoint or an exception. \n"),
+                            cuda_set_defer_kernel_launch_notifications,
+                            cuda_show_defer_kernel_launch_notifications,
+                            &setcudalist, &showcudalist);
 }
 
 bool
-cuda_options_show_kernel_events_async (void)
+cuda_options_defer_kernel_launch_notifications (void)
 {
-  return cuda_show_kernel_events == cuda_show_kernel_events_async &&
-         cuda_break_on_launch == cuda_break_on_launch_none;
-}
-
-static bool cuda_needs_async_events_update = false;
-
-bool
-cuda_options_async_events_needs_updating (void)
-{
-  if (!cuda_needs_async_events_update)
-    return false;
-
-  cuda_needs_async_events_update = false;
-  return true;
+    return (cuda_defer_kernel_launch_notifications &&
+            cuda_break_on_launch == cuda_break_on_launch_none);
 }
 
 void
-cuda_options_force_set_async_events_update (void)
+cuda_options_force_set_launch_notification_update (void)
 {
-  cuda_needs_async_events_update = true;
+  if (cuda_options_defer_kernel_launch_notifications ())
+    cuda_api_set_kernel_launch_notification_mode (CUDBG_KNL_LAUNCH_NOTIFY_DEFER);
+  else
+    cuda_api_set_kernel_launch_notification_mode (CUDBG_KNL_LAUNCH_NOTIFY_EVENT);
 }
 
 /*
@@ -1014,10 +1027,11 @@ bool
 cuda_options_software_preemption (void)
 {
   struct gdb_environ *env = current_inferior ()->environment;
+  char *cuda_dsp = env ? get_in_environ (env, "CUDA_DEBUGGER_SOFTWARE_PREEMPTION") : NULL;
 
   /* Software preemption auto value is determined by the
      CUDA_DEBUGGER_SOFTWARE_PREEMPTION env var */
-  cuda_software_preemption_auto = env && !!get_in_environ (env, "CUDA_DEBUGGER_SOFTWARE_PREEMPTION");
+  cuda_software_preemption_auto = cuda_dsp && strcmp(cuda_dsp,"1")==0;
 
   return cuda_software_preemption == AUTO_BOOLEAN_TRUE ||
         (cuda_software_preemption == AUTO_BOOLEAN_AUTO && cuda_software_preemption_auto);
@@ -1080,6 +1094,7 @@ cuda_options_initialize ()
   cuda_options_initialize_disassemble_from ();
   cuda_options_initialize_hide_internal_frames ();
   cuda_options_initialize_show_kernel_events ();
+  cuda_options_initialize_defer_kernel_launch_notifications ();
   cuda_options_initialize_show_context_events ();
   cuda_options_initialize_launch_blocking ();
   cuda_options_initialize_thread_selection ();

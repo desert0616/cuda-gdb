@@ -62,7 +62,6 @@ typedef enum {
     GET_NUM_DEVICES,
     GET_GRID_STATUS,
     GET_GRID_INFO,
-    GET_ADJUSTED_CODE_ADDRESS,
     GET_HOST_ADDR_FROM_DEVICE_ADDR,
 
     /* notification */
@@ -108,7 +107,6 @@ CUDBGResult cuda_remote_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_
 /* Breakpoints */
 CUDBGResult cuda_remote_api_set_breakpoint (uint32_t dev, uint64_t addr);
 CUDBGResult cuda_remote_api_unset_breakpoint (uint32_t dev, uint64_t addr);
-CUDBGResult cuda_remote_api_get_adjusted_code_address (uint32_t dev, uint64_t addr, uint64_t *adjusted_addr, CUDBGAdjAddrAction adj_action);
 
 /* Device State Inspection */
 CUDBGResult cuda_remote_api_read_grid_id (uint32_t dev_id, uint32_t sm_id, uint32_t warp_id, uint64_t *grid_id);
@@ -187,7 +185,7 @@ CUDBGResult cuda_remote_api_finalize (void);
 CUDBGResult cuda_remote_api_clear_attach_state (void);
 CUDBGResult cuda_remote_api_request_cleanup_on_detach (void);
 CUDBGResult cuda_remote_api_get_host_addr_from_device_addr (uint32_t dev, uint64_t addr, uint64_t *hostaddr);
-CUDBGResult cuda_remote_api_set_async_launch_notifications (bool);
+CUDBGResult cuda_remote_api_set_kernel_launch_notification_mode (CUDBGKernelLaunchNotifyMode);
 void cuda_remote_set_option (void);
 void cuda_remote_query_trace_message (void);
 #endif

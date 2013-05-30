@@ -608,7 +608,21 @@ source_info (char *ignore, int from_tty)
     }
   printf_filtered (_("Current source file is %s\n"), s->filename);
   if (s->dirname)
-    printf_filtered (_("Compilation directory is %s\n"), s->dirname);
+    {
+      /* CUDA - filenames */
+      char *lastsep;
+      int dirnamelen;
+      lastsep = strrchr(s->filename, '/');
+      dirnamelen = strlen(s->dirname);
+      if (lastsep)
+        {
+          if (s->dirname[dirnamelen-1]=='/') dirnamelen--;
+          while (s->dirname[dirnamelen-1]==*(--lastsep)) dirnamelen--;
+          if (s->dirname[dirnamelen-1]=='/') dirnamelen--;
+        }
+
+      printf_filtered (_("Compilation directory is %.*s\n"), dirnamelen, s->dirname);
+    }
   if (s->fullname)
     printf_filtered (_("Located in %s\n"), s->fullname);
   if (s->nlines)

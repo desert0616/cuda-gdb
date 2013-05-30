@@ -44,7 +44,7 @@ static bool interrupt_flag = false;
 
 static void
 cuda_do_resume (struct target_ops *ops, ptid_t ptid,
-                     int sstep, enum target_signal ts)
+                     int sstep, int host_sstep, enum target_signal ts)
 {
   uint32_t dev;
 
@@ -54,7 +54,7 @@ cuda_do_resume (struct target_ops *ops, ptid_t ptid,
   if (!cuda_focus_is_device())
     {
       // If not sstep - resume devices
-      if (!sstep)
+      if (!host_sstep)
         for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
             device_resume (dev);
 
@@ -183,6 +183,8 @@ cuda_remote_mourn_inferior (struct target_ops *ops)
   }
 }
 
+extern int cuda_host_want_singlestep;
+
 static void
 cuda_remote_resume (struct target_ops *ops,
                     ptid_t ptid, int sstep, enum target_signal ts)
@@ -191,9 +193,11 @@ cuda_remote_resume (struct target_ops *ops,
   cuda_coords_t c;
   bool cuda_event_found = false;
   CUDBGEvent event;
+  int host_want_sstep = cuda_host_want_singlestep;
 
   gdb_assert (host_target_ops);
   cuda_trace ("cuda_resume: sstep=%d", sstep);
+  cuda_host_want_singlestep = 0;
 
   /* In cuda-gdb we have two types of device exceptions :
      Recoverable : CUDA_EXCEPTION_WARP_ASSERT
@@ -244,7 +248,7 @@ cuda_remote_resume (struct target_ops *ops,
       sendAck = false;
     }
 
-  cuda_do_resume (ops, ptid, sstep, ts);
+  cuda_do_resume (ops, ptid, sstep, host_want_sstep, ts);
 
   cuda_clock_increment ();
   cuda_trace ("cuda_resume: done");

@@ -184,6 +184,10 @@ cuda_api_handle_initialization_error (CUDBGResult res)
       cuda_api_fatal ("One or more CUDA devices cannot be used for debugging. "
                       "Please consult the list of supported CUDA devices for more details.",
                       res);
+      break;
+    case CUDBG_ERROR_NO_DEVICE_AVAILABLE:
+      cuda_api_fatal ("No CUDA capable device was found.", res);
+      break;
     default:
       cuda_api_fatal ("The CUDA driver initialization failed.", res);
       break;
@@ -1147,26 +1151,6 @@ cuda_api_is_device_code_address (uint64_t addr, bool *is_device_address)
                "to the host or device (error=%u). "), addr, res);
 }
 
-bool
-cuda_api_lookup_device_code_symbol (char *name, uint64_t *addr)
-{
-  bool found;
-  CUDBGResult res;
-
-  found = false;
-
-  if (!api_initialized)
-    return false;
-
-  res = cudbgAPI->lookupDeviceCodeSymbol (name, &found, (uintptr_t *) addr);
-  cuda_api_print_api_call_result (res);
-  if (res != CUDBG_SUCCESS)
-    error (_("Error: Failed to find address for device symbol %s (error=%u)."),
-           name, res);
-
-  return found;
-}
-
 void
 cuda_api_set_notify_new_event_callback (CUDBGNotifyNewEventCallback callback)
 {
@@ -1366,31 +1350,33 @@ cuda_api_attach_or_detach_in_progress (void)
 }
 
 void
-cuda_api_get_adjusted_code_address (uint32_t dev, uint64_t addr, uint64_t *adjusted_addr, CUDBGAdjAddrAction adj_action)
+cuda_api_set_kernel_launch_notification_mode(CUDBGKernelLaunchNotifyMode mode)
 {
-  CUDBGResult res;
-
   if (!api_initialized)
     return;
-
   if (cuda_remote)
-    res = cuda_remote_api_get_adjusted_code_address (dev, addr, adjusted_addr, adj_action);
+    cuda_remote_api_set_kernel_launch_notification_mode (mode);
   else
-    res = cudbgAPI->getAdjustedCodeAddress (dev, addr, adjusted_addr, adj_action);
-  cuda_api_print_api_call_result (res);
-  if (res != CUDBG_SUCCESS)
-    error (_("Error: Failed to get adjusted code address "
-             "(dev=%u, addr=0x%"PRIx64", error=%u).\n"),
-             dev, addr, res);
+    cudbgAPI->setKernelLaunchNotificationMode (mode);
 }
 
 void
-cuda_api_set_async_launch_notifications(bool enabled)
+cuda_api_get_device_pci_bus_info (uint32_t dev, uint32_t *pci_bus_id, uint32_t *pci_dev_id)
 {
+  CUDBGResult res;
+
+  *pci_bus_id = 0xffff;
+  *pci_dev_id = 0xffff;
+
   if (!api_initialized)
     return;
+
   if (cuda_remote)
-    cuda_remote_api_set_async_launch_notifications (enabled);
-  else
-    cudbgAPI->setAsyncLaunchNotifications (enabled);
+     return;
+
+  res = cudbgAPI->getDevicePCIBusInfo (dev, pci_bus_id, pci_dev_id);
+  if (res != CUDBG_SUCCESS)
+    error (_("Error: Failed to get PCI bus information for dev=%u error=%u\n"),
+           dev, res);
 }
+

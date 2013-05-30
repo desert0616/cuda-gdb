@@ -1643,6 +1643,7 @@ cudbgGetNextEventCommon(CUDBGEvent *event, CUDBGAPIREQ_t kind)
             event->cases.kernelReady.blockDim.z = ipcres->apiData.result.event.cases.kernelReady.blockDim.z;
             event->cases.kernelReady.type = ipcres->apiData.result.event.cases.kernelReady.type;
             event->cases.kernelReady.parentGridId= ipcres->apiData.result.event.cases.kernelReady.parentGridId;
+            event->cases.kernelReady.origin = ipcres->apiData.result.event.cases.kernelReady.origin;
             break;
         case CUDBG_EVENT_KERNEL_FINISHED:
             cudbg_trace ("kernel finished event received");
@@ -1829,30 +1830,6 @@ cudbgGetGridStatus(uint32_t dev, uint64_t gridId64, CUDBGGridStatus *status)
 }
 
 static CUDBGResult
-cudbgGetAdjustedCodeAddress(uint32_t dev, uint64_t address, uint64_t *adjustedAddress, CUDBGAdjAddrAction adjAction)
-{
-    void *d;
-    CUDBGAPIMSG_t ipcreq, *ipcres;
-    CUDBGResult res;
-
-    memset(&ipcreq, 0, sizeof ipcreq);
-    ipcreq.kind = CUDBGAPIREQ_getAdjustedCodeAddress;
-    ipcreq.apiData.request.dev = dev;
-    ipcreq.apiData.request.addr = address;
-    ipcreq.apiData.request.attr = adjAction;
-
-    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
-    CUDBG_IPC_REQUEST((void *)&d);
-    ipcres = (CUDBGAPIMSG_t *)d;
-
-    res = ipcres->result;
-
-    *adjustedAddress = ipcres->apiData.result.value;
-
-    return res;
-}
-
-static CUDBGResult
 cudbgGetGridInfo(uint32_t dev, uint64_t grid_id, CUDBGGridInfo *gridInfo)
 {
     char *d, *p;
@@ -1880,14 +1857,14 @@ cudbgGetGridInfo(uint32_t dev, uint64_t grid_id, CUDBGGridInfo *gridInfo)
 }
 
 static CUDBGResult
-cudbgSetAsyncLaunchNotifications (bool enabled)
+cudbgSetKernelLaunchNotificationMode (CUDBGKernelLaunchNotifyMode mode)
 {
     void *d;
     CUDBGAPIMSG_t ipcreq, *ipcres;
 
     memset(&ipcreq, 0, sizeof ipcreq);
-    ipcreq.kind = CUDBGAPIREQ_setAsyncLaunchNotifications;
-    ipcreq.apiData.request.val = enabled;
+    ipcreq.kind = CUDBGAPIREQ_setKernelLaunchNotificationMode;
+    ipcreq.apiData.request.val = mode;
 
     CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
     CUDBG_IPC_REQUEST((void *)&d);
@@ -1896,6 +1873,28 @@ cudbgSetAsyncLaunchNotifications (bool enabled)
     return ipcres->result;
 
 }
+
+static CUDBGResult
+cudbgGetDevicePCIBusInfo (uint32_t dev, uint32_t *pciBusId, uint32_t *pciDevId)
+{
+    void *d;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    ipcreq.kind = CUDBGAPIREQ_getDevicePCIBusInfo;
+    ipcreq.apiData.request.dev = dev;
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_REQUEST((void *)&d);
+
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    *pciBusId = ipcres->apiData.result.pciBusId;
+    *pciDevId = ipcres->apiData.result.pciDevId;
+
+    return ipcres->result;
+}
+
 
 /*Stubs (Unused functions) Assert if they are called */
 
@@ -2185,13 +2184,13 @@ static const struct CUDBGAPI_st cudbgCurrentApi = {
     STUB_cudbgGetGridStatus50,
 
     /* 5.5 Extensions */
-    cudbgGetAdjustedCodeAddress,
     cudbgGetNextSyncEvent,
     cudbgGetNextAsyncEvent,
     cudbgGetGridInfo,
     cudbgReadGridId,
     cudbgGetGridStatus,
-    cudbgSetAsyncLaunchNotifications,
+    cudbgSetKernelLaunchNotificationMode,
+    cudbgGetDevicePCIBusInfo,
 };
 
 CUDBGResult

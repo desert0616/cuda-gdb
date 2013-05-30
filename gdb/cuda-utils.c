@@ -22,6 +22,8 @@
 #else
 #include "gdb_assert.h"
 #include "defs.h"
+#include "inferior.h"
+#include "gdb/signals.h"
 #endif
 
 #include <ctype.h>
@@ -73,7 +75,7 @@ cuda_gdb_dir_create (const char *dir_name, uint32_t permissions,
     }
   else
     *dir_exists = true;
-  
+
   return ret;
 }
 
@@ -364,6 +366,67 @@ cuda_clock_increment (void)
   if (cuda_clock_ == 0)
     warning (_("The internal clock counter used for cuda debugging wrapped around.\n"));
 }
+
+#ifndef GDBSERVER
+static unsigned char *
+cuda_nat_save_gdb_signal_handlers (void)
+{
+  unsigned char *sigs;
+  int i,j;
+  static int (*sighand_savers[])(int) =
+    {signal_stop_state, signal_print_state, signal_pass_state};
+
+  sigs = xmalloc (TARGET_SIGNAL_LAST*ARRAY_SIZE(sighand_savers));
+
+  for (i=0; i < ARRAY_SIZE(sighand_savers); i++)
+    for (j=0; j < TARGET_SIGNAL_LAST; j++)
+      sigs[i*TARGET_SIGNAL_LAST+j] = sighand_savers[i](j);
+
+  return sigs;
+}
+
+static void
+cuda_nat_restore_gdb_signal_handlers (unsigned char *sigs)
+{
+  int i,j;
+  static int (*sighand_updaters[])(int,int) =
+    {signal_stop_update, signal_print_update, signal_pass_update};
+
+  for (i=0; i < ARRAY_SIZE(sighand_updaters); i++)
+    for (j=0; j < TARGET_SIGNAL_LAST; j++)
+      sighand_updaters[i] (j, sigs[i*TARGET_SIGNAL_LAST+j]);
+}
+
+static void cuda_nat_bypass_signals_cleanup (void *ptr)
+{
+  unsigned char *sigs = ptr;
+
+  cuda_nat_restore_gdb_signal_handlers (sigs);
+  xfree (ptr);
+}
+
+struct cleanup *
+cuda_gdb_bypass_signals (void)
+{
+  unsigned char *sigs;
+  int i;
+
+  sigs = cuda_nat_save_gdb_signal_handlers ();
+  for (i=0;i< TARGET_SIGNAL_LAST; i++)
+    {
+      if ( i == TARGET_SIGNAL_TRAP ||
+           i == TARGET_SIGNAL_KILL ||
+           i == TARGET_SIGNAL_STOP ||
+           i >= TARGET_SIGNAL_CUDA_UNKNOWN_EXCEPTION ) continue;
+      signal_stop_update (i, 0);
+      signal_pass_update (i, 1);
+      signal_print_update (i, 1);
+    }
+
+  return make_cleanup (cuda_nat_bypass_signals_cleanup, sigs);
+}
+
+#endif /* GDBSERVER */
 
 void
 cuda_utils_initialize (void)

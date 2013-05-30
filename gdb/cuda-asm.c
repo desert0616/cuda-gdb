@@ -126,6 +126,25 @@ disasm_cache_destroy (disasm_cache_t disasm_cache)
   xfree (disasm_cache);
 }
 
+extern char *gdb_program_name;
+
+static int
+gdb_program_dir_len (void)
+{
+  static int len = -1;
+  int cnt;
+
+  if (len >=0)
+    return len;
+
+  len = strlen(gdb_program_name);
+  for (cnt=len; cnt > 1 && gdb_program_name[cnt-1] != '/'; cnt--);
+  if (cnt > 1)
+    len = cnt;
+
+  return len;
+}
+
 static void
 disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
 {
@@ -162,7 +181,9 @@ disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
   function_name = cuda_find_function_name_from_pc (pc, false);
 
   /* generate the dissassembled code using cuobjdump if available */
-  snprintf (command, sizeof (command), "cuobjdump --dump-sass %s", filename);
+  snprintf (command, sizeof (command), "%.*scuobjdump --function %s --dump-sass %s",
+        system ("which cuobjdump >/dev/null") == 0 ? 0: gdb_program_dir_len(),
+        gdb_program_name, function_name, filename);
   sass = popen (command, "r");
 
   if (!sass)

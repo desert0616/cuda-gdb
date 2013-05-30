@@ -80,7 +80,6 @@ typedef bool (*cuda_thread_func)(cuda_coords_t *, void *);
 /*------------------------------ Global Variables ------------------------------*/
 
 extern bool cuda_debugging_enabled;
-extern bool cuda_is_target_mourn_pending;
 struct gdbarch * cuda_get_gdbarch (void);
 bool cuda_is_cuda_gdbarch (struct gdbarch *);
 
@@ -184,7 +183,6 @@ int cuda_breakpoint_address_match (struct gdbarch *gdbarch,
                                    struct address_space *aspace1, CORE_ADDR addr1,
                                    struct address_space *aspace2, CORE_ADDR addr2);
 void cuda_adjust_host_pc (ptid_t r);
-void cuda_adjust_device_code_address (CORE_ADDR original_addr, CORE_ADDR *adjusted_addr);
 
 /* Linux vs. Mac OS X */
 bool cuda_platform_supports_tid (void);
@@ -202,6 +200,6 @@ uint32_t    cuda_gdb_session_get_id (void);
 void cuda_nat_attach (void);
 void cuda_do_detach(bool remote);
 void cuda_remote_attach (void);
- 
+
 #endif
 

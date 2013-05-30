@@ -23,6 +23,8 @@
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
+#include "cuda-api.h"
+
 #ifdef __APPLE__
 #include <libproc.h>
 #include <IOKit/IOKitLib.h>
@@ -32,13 +34,6 @@
 
 /* Darwin process name length */
 #define DARWIN_PROC_NAME_LEN 128
-
-/* Statuses of CUDA_GPU devices */
-#define CUDA_GPU_PRESENT 1
-#define CUDA_GPU_HAS_DISPLAY 2
-#define CUDA_GPU_HAS_COMPUTE_USERS 4
-#define CUDA_GPU_HAS_FB_USERS 8
-#define CUDA_GPU_HAS_ALL 15
 
 static IOReturn
 DarwinGetObjects(mach_port_t port, int *count, io_object_t *objects, const char *name)
@@ -127,122 +122,94 @@ DarwinGetChildsOfTypeCount(io_object_t obj, const char *type)
   return rc != kIOReturnSuccess ? -1 : count;
 }
 
-
-static IOReturn
-DarwinGetObjectsPCIParent (io_object_t *list, int count)
+static int
+DarwinGetSiblingsOfTypeCount(io_object_t obj, const char *type)
 {
-  int i;
-  io_object_t parent;
   IOReturn rc;
+  io_object_t parent;
+  int count;
 
-  for(i = 0; i < count; i++)
-    {
-      rc = DarwinGetParentOfType (list[i], &parent, "IOPCIDevice");
-      if (rc != kIOReturnSuccess)
-        return rc;
-      if (parent == 0)
-        return kIOReturnNoDevice;
-      list[i] = parent;
-    }
-  return kIOReturnSuccess;
+  rc = IORegistryEntryGetParentEntry (obj, kIOServicePlane, &parent);
+  if ( rc != kIOReturnSuccess) return -1;
+  return DarwinGetChildsOfTypeCount (parent, type);
 }
 
-static int
-object_index_in_list (io_object_t *list, io_object_t obj)
+static IOReturn
+DarwinGetPCIBusInfo(io_object_t obj, uint32_t *pci_bus_id, uint32_t *pci_dev_id, uint32_t *pci_func_id)
 {
-  int i;
+  CFDataRef reg_ref;
+  uint32_t pci_id;
 
-  for (i = 0; list[i] != 0; i++)
-    if (list[i] == obj) return i;
-  return -1;
+  reg_ref = IORegistryEntryCreateCFProperty (obj, CFSTR("reg"), kCFAllocatorDefault, kNilOptions);
+
+  if (!reg_ref) return kIOReturnNotFound;
+  if (CFGetTypeID(reg_ref) != CFDataGetTypeID())
+    {
+      CFRelease (reg_ref);
+      return kIOReturnNotFound;
+    }
+  pci_id = ((uint32_t *)CFDataGetBytePtr(reg_ref))[0];
+  CFRelease (reg_ref);
+
+  if (pci_bus_id)  *pci_bus_id  = (pci_id>>16)&0xff;
+  if (pci_dev_id)  *pci_dev_id  = (pci_id>>11)&0x1f;
+  if (pci_func_id) *pci_func_id = (pci_id>>8)&0x07;
+  return kIOReturnSuccess;
 }
 
 
 /*
  * Tries to determine if GPU used for graphics is also used for CUDA
  * If any of the system calls fails, it assumes that's the case.
- * GPU is considered busy with both compute and graphics
- * if following conditions are met:
- * - Display is attached to a given GPU
+ * CUDA device is considered used for graphics if following conditions are met:
+ * - Display is attached to given GPU
  * - At least one frame-buffer client is using this GPU (i.e. WindowServer is running)
  * - At least one compute client is using this GPU
  */
-bool
-cuda_darwin_compute_gpu_used_for_graphics(void)
-{
- int count;
- int i, idx;
- io_object_t displays[MAX_OBJLIST_LEN+1];
- io_object_t cuda_gpus[MAX_OBJLIST_LEN+1];
- int cuda_gpu_status[MAX_OBJLIST_LEN+1];
- io_object_t nvdas[MAX_OBJLIST_LEN+1];
- io_object_t parent;
- IOReturn rc;
 
- /* Get NVKernel objects */
- memset (cuda_gpus, 0, sizeof(cuda_gpus));
- memset (cuda_gpu_status, 0, sizeof(cuda_gpu_status));
- rc = DarwinGetObjects (kIOMasterPortDefault, &count, cuda_gpus, "NVKernel");
- if (rc != kIOReturnSuccess || count == 0)
-    return true;
-  rc = DarwinGetObjectsPCIParent (cuda_gpus, count);
-  if (rc != kIOReturnSuccess)
-    return true;
-  for(i = 0; i < count; i++)
-    cuda_gpu_status[i] = CUDA_GPU_PRESENT;
+bool
+cuda_darwin_cuda_device_used_for_graphics(int dev_id)
+{
+  uint32_t cuda_pci_bus_id, cuda_pci_dev_id;
+  uint32_t pci_bus_id, pci_dev_id;
+  int i, count;
+  io_object_t displays[MAX_OBJLIST_LEN+1];
+  io_object_t parent;
+  IOReturn rc;
+
+  memset (displays, 0, sizeof(displays));
+  cuda_api_get_device_pci_bus_info (dev_id, &cuda_pci_bus_id, &cuda_pci_dev_id);
+
 
   /* Get IODisplayConnect objects */
-  memset (displays, 0, sizeof(displays));
   rc = DarwinGetObjects (kIOMasterPortDefault, &count, displays, "IODisplayConnect");
   if (rc != kIOReturnSuccess)
     return true;
 
-  /* Not a single display attached*/
+  /* CUDA device is unlikely to be used for graphics in absence of displays */
   if (count == 0) return false;
-  rc = DarwinGetObjectsPCIParent (displays, count);
-  if (rc != kIOReturnSuccess)
-    return true;
 
-  /* Map displays to GPUs*/
-  for (i = 0;i < count; i++)
-    {
-      idx = object_index_in_list (cuda_gpus, displays[i]);
-      /* Display attached to non-nvidia GPU*/
-      if (idx < 0) continue;
-
-      cuda_gpu_status[idx] |= CUDA_GPU_HAS_DISPLAY;
-    }
-
-  /* Get NVDA objects */
-  memset (nvdas, 0, sizeof(nvdas));
-  rc = DarwinGetObjects (kIOMasterPortDefault, &count, nvdas, "NVDA");
-  if (rc != kIOReturnSuccess || count == 0)
-    return true;
-
-  /* Map framebuffer and compute users to GPUs*/
+  /* Iterate over IODisplayConnect objects*/
   for (i=0;i<count;i++)
     {
-      rc = DarwinGetParentOfType (nvdas[i], &parent, "IOPCIDevice");
+      /* Find PCI device display connected to */
+      rc = DarwinGetParentOfType (displays[i], &parent, "IOPCIDevice");
       if (rc != kIOReturnSuccess || parent == 0)
         return true;
-      idx = object_index_in_list (cuda_gpus, parent);
-      if (idx < 0)
-        return true;
-      rc = DarwinGetChildsOfTypeCount (nvdas[i], "NVDAUser");
-      if (rc < 0) return true;
-      if (rc > 0) cuda_gpu_status[idx] |= CUDA_GPU_HAS_COMPUTE_USERS;
-      if (rc < 0) return true;
-      if (rc > 0) cuda_gpu_status[idx] |= CUDA_GPU_HAS_FB_USERS;
+      /* Get devices bus/dev ids*/
+      rc = DarwinGetPCIBusInfo (parent, &pci_bus_id, &pci_dev_id, NULL);
+      if (rc != kIOReturnSuccess) return true;
+      if (pci_bus_id != cuda_pci_bus_id || pci_dev_id != cuda_pci_dev_id) continue;
+      /* Found CUDA device with display attached to it */
+      /* Not safe to use unless we are in console mode */
+      rc = DarwinGetSiblingsOfTypeCount (displays[i], "IOFramebufferUserClient");
+      if (rc != 0) return true;
     }
 
-  /* Check if there are any GPUs that has compute and framebuffer clients as well as display attached */
-  for (idx = 0; (cuda_gpu_status[idx]&CUDA_GPU_PRESENT) != 0; idx++)
-    if (cuda_gpu_status[idx] == CUDA_GPU_HAS_ALL) return true;
-	
   return false;
 }
 
-static int 
+static int
 darwin_find_session_leader (int *pPid, char *name)
 {
   int pid, rc;

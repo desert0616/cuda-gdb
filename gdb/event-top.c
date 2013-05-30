@@ -862,10 +862,10 @@ handle_sigint (int sig)
 
   /* We could be running in a loop reading in symfiles or something so
      it may be quite a while before we get back to the event loop.  So
-     set quit_flag to 1 here. Then if QUIT is called before we get to
-     the event loop, we will unwind as expected.  */
+     increment quit_flag here. Then if QUIT or QUIT2 is called before
+     we get to the event loop, we will unwind as expected.  */
 
-  quit_flag = 1;
+  quit_flag++;
 
   /* If immediate_quit is set, we go ahead and process the SIGINT right
      away, even if we usually would defer this to the event loop. The

@@ -1763,7 +1763,7 @@ target_read (struct target_ops *ops,
       if (xfer < 0)
 	return -1;
       xfered += xfer;
-      QUIT;
+      QUIT2;
     }
   return len;
 }
@@ -1830,7 +1830,7 @@ target_read_until_error (struct target_ops *ops,
 	  return xfered;
 	}
       xfered += xfer;
-      QUIT;
+      QUIT2;
     }
   return len;
 }
@@ -1865,7 +1865,7 @@ target_write_with_progress (struct target_ops *ops,
 	(*progress) (xfer, baton);
 
       xfered += xfer;
-      QUIT;
+      QUIT2;
     }
   return len;
 }
@@ -1937,7 +1937,7 @@ target_read_alloc_1 (struct target_ops *ops, enum target_object object,
 	  buf = xrealloc (buf, buf_alloc);
 	}
 
-      QUIT;
+      QUIT2;
     }
 }
 

@@ -907,7 +907,7 @@ static struct line_header *(dwarf_decode_line_header
 static void dwarf_decode_lines (struct line_header *, char *, bfd *,
 				struct dwarf2_cu *, struct partial_symtab *);
 
-static void dwarf2_start_subfile (char *, char *, char *);
+static void dwarf2_start_subfile (char *, char *, char *, struct objfile *);
 
 static struct symbol *new_symbol (struct die_info *, struct type *,
 				  struct dwarf2_cu *);
@@ -8456,7 +8456,7 @@ dwarf_decode_lines (struct line_header *lh, char *comp_dir, bfd *abfd,
           if (fe->dir_index)
             dir = lh->include_dirs[fe->dir_index - 1];
 
-	  dwarf2_start_subfile (fe->name, dir, comp_dir);
+	  dwarf2_start_subfile (fe->name, dir, comp_dir, objfile);
 	}
 
       /* Decode the table.  */
@@ -8638,7 +8638,7 @@ dwarf_decode_lines (struct line_header *lh, char *comp_dir, bfd *abfd,
                     if (!decode_for_pst_p)
                       {
                         last_subfile = current_subfile;
-                        dwarf2_start_subfile (fe->name, dir, comp_dir);
+                        dwarf2_start_subfile (fe->name, dir, comp_dir, objfile);
                       }
                   }
               }
@@ -8751,7 +8751,7 @@ dwarf_decode_lines (struct line_header *lh, char *comp_dir, bfd *abfd,
 	  fe = &lh->file_names[i];
 	  if (fe->dir_index)
 	    dir = lh->include_dirs[fe->dir_index - 1];
-	  dwarf2_start_subfile (fe->name, dir, comp_dir);
+	  dwarf2_start_subfile (fe->name, dir, comp_dir, objfile);
 
 	  /* Skip the main file; we don't need it, and it must be
 	     allocated last, so that it will show up before the
@@ -8792,7 +8792,7 @@ dwarf_decode_lines (struct line_header *lh, char *comp_dir, bfd *abfd,
    subfile's name.  */
 
 static void
-dwarf2_start_subfile (char *filename, char *dirname, char *comp_dir)
+dwarf2_start_subfile_darwin (char *filename, char *dirname, char *comp_dir)
 {
   char *fullname;
   char *fullpath;
@@ -8832,6 +8832,54 @@ dwarf2_start_subfile (char *filename, char *dirname, char *comp_dir)
   xfree (dir);
   xfree (fullname);
   xfree (fullpath);
+}
+
+static void
+dwarf2_start_subfile (char *filename, char *dirname, char *comp_dir, struct objfile *objfile)
+{
+  char *fullname;
+
+  if (objfile != NULL && objfile->gdbarch != NULL &&
+      gdbarch_osabi (objfile->gdbarch) == GDB_OSABI_DARWIN)
+    {
+      dwarf2_start_subfile_darwin (filename, dirname, comp_dir);
+      return;
+    }
+
+  /* Strip GPU objfiles path in case of local Darwin debugging session */
+#ifdef __APPLE__
+  if (!cuda_remote && objfile != NULL && objfile->gdbarch != NULL &&
+      gdbarch_bfd_arch_info (objfile->gdbarch)->arch == bfd_arch_m68k)
+    {
+      dwarf2_start_subfile_darwin (filename, dirname, comp_dir);
+      return;
+    }
+#endif
+
+  if (dirname != NULL && comp_dir != NULL &&
+      strcmp (dirname, comp_dir)==0)
+    dirname = NULL;
+
+  /* While reading the DIEs, we call start_symtab(DW_AT_name, DW_AT_comp_dir).
+     `start_symtab' will always pass the contents of DW_AT_comp_dir as
+     second argument to start_subfile.  To be consistent, we do the
+     same here.  In order not to lose the line information directory,
+     we concatenate it to the filename when it makes sense.
+     Note that the Dwarf3 standard says (speaking of filenames in line
+     information): ``The directory index is ignored for file names
+     that represent full path names''.  Thus ignoring dirname in the
+     `else' branch below isn't an issue.  */
+
+
+  if (!IS_ABSOLUTE_PATH (filename) && dirname != NULL)
+    fullname = concat (dirname, SLASH_STRING, filename, (char *)NULL);
+  else
+    fullname = filename;
+
+  start_subfile (fullname, comp_dir);
+
+  if (fullname != filename)
+    xfree (fullname);
 }
 
 static void
@@ -13109,7 +13157,7 @@ cuda_decode_lines (struct line_header *lh, struct objfile *objfile)
       if (fe->dir_index)
         dir = lh->include_dirs[fe->dir_index - 1];
 
-      dwarf2_start_subfile (fe->name, dir, comp_dir);
+      dwarf2_start_subfile (fe->name, dir, comp_dir, objfile);
     }
 
     /* Decode the table.  */
@@ -13295,7 +13343,7 @@ cuda_decode_lines (struct line_header *lh, struct objfile *objfile)
               if (fe->dir_index)
                 dir = lh->include_dirs[fe->dir_index - 1];
               last_subfile = current_subfile;
-              dwarf2_start_subfile (fe->name, dir, comp_dir);
+              dwarf2_start_subfile (fe->name, dir, comp_dir, objfile);
             }
           }
           break;
@@ -13364,7 +13412,7 @@ cuda_decode_lines (struct line_header *lh, struct objfile *objfile)
     fe = &lh->file_names[i];
     if (fe->dir_index)
       dir = lh->include_dirs[fe->dir_index - 1];
-    dwarf2_start_subfile (fe->name, dir, comp_dir);
+    dwarf2_start_subfile (fe->name, dir, comp_dir, objfile);
 
     /* Skip the main file; we don't need it, and it must be
        allocated last, so that it will show up before the
@@ -13418,7 +13466,7 @@ cuda_populate_blockvectors (struct line_header *lh,
     fe = &lh->file_names[i];
     if (fe->dir_index)
       dir = lh->include_dirs[fe->dir_index - 1];
-    dwarf2_start_subfile (fe->name, dir, NULL);
+    dwarf2_start_subfile (fe->name, dir, NULL, objfile);
 
     gdb_assert (!current_subfile->symtab->blockvector);
     current_subfile->symtab->blockvector = blockvector;
@@ -13479,7 +13527,7 @@ cuda_populate_line_table (struct line_header *lh, struct objfile *objfile)
     fe = &lh->file_names[i];
     if (fe->dir_index)
       dir = lh->include_dirs[fe->dir_index - 1];
-    dwarf2_start_subfile (fe->name, dir, NULL);
+    dwarf2_start_subfile (fe->name, dir, NULL, objfile);
 
     if (!current_subfile->line_vector)
       continue;

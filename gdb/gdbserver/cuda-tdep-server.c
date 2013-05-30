@@ -49,6 +49,9 @@ static bool inferior_in_debug_mode = false;
 static char cuda_gdb_session_dir[CUDA_GDB_TMP_BUF_SIZE] = {0};
 static uint32_t cuda_gdb_session_id = 0;
 
+bool cuda_launch_blocking;
+bool cuda_memcheck;
+bool cuda_software_preemption;
 bool cuda_debug_general;
 bool cuda_debug_libcudbg;
 bool cuda_debug_notifications;
@@ -242,6 +245,23 @@ cuda_cleanup_trace_messages ()
     }
 }
 
+bool
+cuda_options_memcheck ()
+{
+  return cuda_memcheck;
+}
+
+bool
+cuda_options_launch_blocking ()
+{
+  return cuda_launch_blocking;
+}
+
+bool
+cuda_options_software_preemption ()
+{
+  return cuda_software_preemption;
+}
 
 bool
 cuda_options_debug_general ()
@@ -368,6 +388,7 @@ cuda_initialize ()
 bool
 cuda_initialize_target ()
 {
+  const unsigned char zero = 0;
   const unsigned char one = 1;
   CORE_ADDR debugFlagAddr;
   CORE_ADDR rpcFlagAddr;
@@ -412,6 +433,9 @@ cuda_initialize_target ()
   write_inferior_memory (rpcFlagAddr, &one, 1);
   write_inferior_memory (apiClientRevAddr, (unsigned char*)&apiClientRev, sizeof(apiClientRev));
   write_inferior_memory (sessionIdAddr, (unsigned char*)&sessionId, sizeof(sessionId));
+  write_inferior_memory (preemptionAddr, cuda_options_software_preemption () ? &one : &zero, 1);
+  write_inferior_memory (memcheckAddr, cuda_options_memcheck () ? &one : &zero, 1);
+  write_inferior_memory (launchblockingAddr, cuda_options_launch_blocking () ? &one : &zero, 1);
   inferior_in_debug_mode = true;
   return true;
 }

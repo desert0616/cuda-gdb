@@ -59,7 +59,6 @@ void cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t
 /* Breakpoints */
 bool cuda_api_set_breakpoint (uint32_t dev, uint64_t addr);
 bool cuda_api_unset_breakpoint (uint32_t dev, uint64_t addr);
-void cuda_api_get_adjusted_code_address (uint32_t dev, uint64_t addr, uint64_t *adjusted_addr, CUDBGAdjAddrAction adj_action);
 
 /* Device State Inspection */
 void cuda_api_read_grid_id (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *grid_id);
@@ -111,11 +110,11 @@ void cuda_api_get_num_sms (uint32_t dev, uint32_t *numSMs);
 void cuda_api_get_num_warps (uint32_t dev, uint32_t *numWarps);
 void cuda_api_get_num_lanes (uint32_t dev, uint32_t *numLanes);
 void cuda_api_get_num_registers (uint32_t dev, uint32_t *numRegs);
+void cuda_api_get_device_pci_bus_info (uint32_t dev, uint32_t *pci_bus_id, uint32_t *pci_dev_id);
 
 /* DWARF-related routines */
 void cuda_api_disassemble (uint32_t dev, uint64_t addr, uint32_t *instSize, char *buf, uint32_t bufSize);
 void cuda_api_is_device_code_address (uint64_t addr, bool *is_device_address);
-bool cuda_api_lookup_device_code_symbol (char *name, uint64_t *addr);
 
 /* Events */
 void cuda_api_handle_set_callback_api_error (CUDBGResult res);
@@ -123,7 +122,7 @@ void cuda_api_set_notify_new_event_callback (CUDBGNotifyNewEventCallback callbac
 void cuda_api_acknowledge_sync_events (void);
 void cuda_api_get_next_sync_event (CUDBGEvent *event);
 void cuda_api_get_next_async_event (CUDBGEvent *event);
-void cuda_api_set_async_launch_notifications (bool);
+void cuda_api_set_kernel_launch_notification_mode (CUDBGKernelLaunchNotifyMode mode);
 
 /* Memcheck related */
 void cuda_api_memcheck_read_error_address(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint64_t *address, ptxStorageKind *storage);

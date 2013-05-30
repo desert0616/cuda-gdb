@@ -38,6 +38,9 @@ CUDBGResult api_finalize_res;
 CUDBGResult get_debugger_api_res;
 CUDBGResult set_callback_api_res;
 
+extern bool cuda_launch_blocking;
+extern bool cuda_memcheck;
+extern bool cuda_software_preemption;
 extern bool cuda_debug_general;
 extern bool cuda_debug_libcudbg;
 extern bool cuda_debug_notifications;
@@ -71,6 +74,12 @@ int  cuda_get_debugger_api (void);
 int  cuda_get_symbol_cache_size (void);
 
 void cuda_trace (char *fmt, ...);
+
+bool cuda_options_memcheck ();
+
+bool cuda_options_launch_blocking ();
+
+bool cuda_options_software_preemption ();
 
 bool cuda_options_debug_general ();
 
