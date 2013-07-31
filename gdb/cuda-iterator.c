@@ -109,6 +109,9 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
       if (filter && filter->dev != CUDA_WILDCARD && filter->dev != dev)
         continue;
 
+      if (at_exception)
+        device_filter_exception_state (dev);
+
       for (sm = 0; sm < device_get_num_sms (dev); ++sm)
         {
           if (single && itr->num_elements)

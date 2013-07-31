@@ -190,7 +190,7 @@ clean-info:
 gdbserver$(EXEEXT): $(OBS) ${ADD_DEPS} ${CDEPS}
 	rm -f gdbserver$(EXEEXT)
 	${CC-LD} $(INTERNAL_CFLAGS) $(INTERNAL_LDFLAGS) -o gdbserver$(EXEEXT) $(OBS) \
-	  $(GDBSERVER_LIBS) $(XM_CLIBS)
+	  $(GDBSERVER_LIBS) $(XM_CLIBS) $(LD_FLAGS)
 
 gdbreplay$(EXEEXT): $(GDBREPLAY_OBS)
 	rm -f gdbreplay$(EXEEXT)

@@ -88,7 +88,7 @@ struct gdb_dyld_all_image_infos
 /* Current all_image_infos version.  */
 /* CUDA - Support static linker on Mac OS X 10.7 */
 #define DYLD_VERSION_MIN 1
-#define DYLD_VERSION_MAX 12
+#define DYLD_VERSION_MAX 14
 
 /* Address of structure dyld_all_image_infos in inferior.  */
 static CORE_ADDR dyld_all_image_addr;

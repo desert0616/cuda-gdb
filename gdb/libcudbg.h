@@ -173,6 +173,7 @@ typedef enum {
     CUDBGAPIREQ_getGridStatus,
     CUDBGAPIREQ_setKernelLaunchNotificationMode,
     CUDBGAPIREQ_getDevicePCIBusInfo,
+    CUDBGAPIREQ_readDeviceExceptionState,
 } CUDBGAPIREQ_t;
 
 typedef enum {

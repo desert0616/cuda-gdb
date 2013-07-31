@@ -1895,6 +1895,25 @@ cudbgGetDevicePCIBusInfo (uint32_t dev, uint32_t *pciBusId, uint32_t *pciDevId)
     return ipcres->result;
 }
 
+static CUDBGResult
+cudbgReadDeviceExceptionState (uint32_t dev, uint64_t *exceptionSMMask)
+{
+    void *d;
+    CUDBGAPIMSG_t ipcreq, *ipcres;
+
+    memset(&ipcreq, 0, sizeof ipcreq);
+    ipcreq.kind = CUDBGAPIREQ_readDeviceExceptionState;
+    ipcreq.apiData.request.dev = dev;
+
+    CUDBG_IPC_APPEND(&ipcreq, sizeof ipcreq);
+    CUDBG_IPC_REQUEST((void *)&d);
+
+    ipcres = (CUDBGAPIMSG_t *)d;
+
+    *exceptionSMMask = ipcres->apiData.result.value;
+
+    return ipcres->result;
+}
 
 /*Stubs (Unused functions) Assert if they are called */
 
@@ -2191,6 +2210,7 @@ static const struct CUDBGAPI_st cudbgCurrentApi = {
     cudbgGetGridStatus,
     cudbgSetKernelLaunchNotificationMode,
     cudbgGetDevicePCIBusInfo,
+    cudbgReadDeviceExceptionState,
 };
 
 CUDBGResult

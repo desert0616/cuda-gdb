@@ -813,6 +813,29 @@ cuda_api_read_virtual_return_address (uint32_t dev, uint32_t sm, uint32_t wp, ui
 }
 
 void
+cuda_api_read_device_exception_state (uint32_t dev, uint64_t *exceptionSMMask)
+{
+  CUDBGResult res;
+
+  gdb_assert (exceptionSMMask);
+
+  if (!api_initialized)
+    return;
+
+  if (cuda_remote)
+    res = cuda_remote_api_read_device_exception_state (dev, exceptionSMMask);
+  else
+    res = cudbgAPI->readDeviceExceptionState (dev, exceptionSMMask);
+  cuda_api_print_api_call_result(res);
+  if (res != CUDBG_SUCCESS)
+    {
+      error (_("Error: Could not read device exception state"
+               "(dev=%u, error=%u).\n"),
+             dev, res);
+    }
+}
+
+void
 cuda_api_write_global_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint64_t addr, const void *buf, uint32_t sz)
 {
   CUDBGResult res;

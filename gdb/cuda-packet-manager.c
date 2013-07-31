@@ -981,6 +981,24 @@ cuda_remote_api_get_grid_info (uint32_t dev, uint64_t grid_id, CUDBGGridInfo *in
   return res;
 }
 
+CUDBGResult
+cuda_remote_api_read_device_exception_state (uint32_t dev, uint64_t *exceptionSMMask)
+{
+  char *p;
+  CUDBGResult res;
+  cuda_packet_type_t packet_type = READ_DEVICE_EXCEPTION_STATE;
+
+  p = append_string ("qnv.", pktbuf.buf, false);
+  p = append_bin ((gdb_byte *) &packet_type, p, sizeof (packet_type), true);
+  p = append_bin ((gdb_byte *) &dev, p, sizeof (dev), false);
+
+  putpkt (pktbuf.buf);
+  getpkt (&pktbuf.buf, &pktbuf.buf_size, 1);
+  extract_bin (pktbuf.buf, (gdb_byte *) &res, sizeof (res));
+  extract_bin (NULL, (gdb_byte *) exceptionSMMask, sizeof (*exceptionSMMask));
+  return res;
+}
+
 bool
 cuda_remote_notification_pending (void)
 {

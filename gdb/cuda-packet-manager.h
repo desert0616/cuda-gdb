@@ -91,6 +91,7 @@ typedef enum {
     REQUEST_CLEANUP_ON_DETACH,
     SET_OPTION,
     SET_ASYNC_LAUNCH_NOTIFICATIONS,
+    READ_DEVICE_EXCEPTION_STATE,
 } cuda_packet_type_t;
 
 extern int hex2bin (const char *hex, gdb_byte *bin, int count);
@@ -186,6 +187,8 @@ CUDBGResult cuda_remote_api_clear_attach_state (void);
 CUDBGResult cuda_remote_api_request_cleanup_on_detach (void);
 CUDBGResult cuda_remote_api_get_host_addr_from_device_addr (uint32_t dev, uint64_t addr, uint64_t *hostaddr);
 CUDBGResult cuda_remote_api_set_kernel_launch_notification_mode (CUDBGKernelLaunchNotifyMode);
+CUDBGResult cuda_remote_api_read_device_exception_state (uint32_t dev, uint64_t *smMask);
+
 void cuda_remote_set_option (void);
 void cuda_remote_query_trace_message (void);
 #endif

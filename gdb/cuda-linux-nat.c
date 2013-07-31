@@ -1220,6 +1220,7 @@ cuda_nat_attach (void)
   unsigned int timeOut = 5000000; /* 5 seconds */
   unsigned int timeElapsed = 0;
   const unsigned int sleepTime = 1000;
+  uint64_t internal_error_code;
   struct cleanup *cleanup = NULL;
 
   debugFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_IPC_FLAG_NAME));
@@ -1247,6 +1248,16 @@ cuda_nat_attach (void)
   cmd_func (cmd, cudbgApiInitForAttach, 0);
   do_cleanups (cleanup);
 
+  internal_error_code = cuda_get_last_driver_internal_error_code();
+
+  if ((unsigned int)internal_error_code == CUDBG_ERROR_ATTACH_NOT_POSSIBLE)
+     error (_("Attaching not possible. "
+              "Please verify that software preemption is disabled "
+              "and that nvidia-cuda-mps-server is not running."));
+  if (internal_error_code)
+    error (_("Attach failed due to the internal driver error 0x%llx\n"),
+            (unsigned long long) internal_error_code);
+
   attachDataAvailableFlagAddr = cuda_get_symbol_address (_STRING_(CUDBG_ATTACH_HANDLER_AVAILABLE));
 
   /* If this is not available, the CUDA driver doesn't support attaching.  */
@@ -1256,6 +1267,16 @@ cuda_nat_attach (void)
   /* Wait till the backend has started up and is ready to service API calls */
   while (cuda_api_initialize () != CUDBG_SUCCESS)
     {
+      internal_error_code = cuda_get_last_driver_internal_error_code();
+
+      if ((unsigned int)internal_error_code == CUDBG_ERROR_ATTACH_NOT_POSSIBLE)
+         error (_("Attaching not possible. "
+                  "Please verify that software preemption is disabled "
+                  "and that nvidia-cuda-mps-server is not running."));
+      if (internal_error_code)
+        error (_("Attach failed due to the internal driver error 0x%llx\n"),
+                (unsigned long long) internal_error_code);
+
       if (timeElapsed < timeOut)
         usleep(sleepTime);
       else

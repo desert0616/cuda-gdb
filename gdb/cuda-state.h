@@ -47,6 +47,7 @@ uint32_t    device_get_num_warps           (uint32_t dev_id);
 uint32_t    device_get_num_lanes           (uint32_t dev_id);
 uint32_t    device_get_num_registers       (uint32_t dev_id);
 uint32_t    device_get_num_kernels         (uint32_t dev_id);
+void        device_filter_exception_state  (uint32_t dev_id);
 
 bool        device_is_valid                (uint32_t dev_id);
 bool        device_is_any_context_present  (uint32_t dev_id);

@@ -712,7 +712,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 	  memcpy (name, string, p - string);
 	  name[p - string] = '\0';
 	  new_name = cp_canonicalize_string (name);
-	  cp_scan_for_anonymous_namespaces (sym);
+	  cp_scan_for_anonymous_namespaces (sym, objfile);
 	}
       if (new_name != NULL)
 	{

@@ -3399,7 +3399,8 @@ print_it_typical (bpstat bs)
       else
         error (_("The CUDA driver has hit an internal error.\n"
                  "Error code: 0x%"PRIx64"\n"
-                 "Further execution or debugging is unreliable.\n"), res);
+                 "Further execution or debugging is unreliable.\n"
+                 "Please ensure that your temporary directory is mounted with write and exec permissions.\n"), res);
 
       result = PRINT_NOTHING;
       break;
