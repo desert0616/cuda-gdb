@@ -141,9 +141,15 @@ kernel_new (uint32_t dev_id, uint64_t grid_id, uint64_t virt_code_base,
       kernels_add_parent_kernel (dev_id, grid_id, &parent_grid_id); 
       parent_kernel = kernels_find_kernel_by_grid_id (dev_id, parent_grid_id);
     }
-  name_len  = strlen (name);
-  name_copy = xmalloc (name_len + 1);
-  memcpy (name_copy, name, name_len + 1);
+
+  if (name)
+    {
+      name_len  = strlen (name);
+      name_copy = xmalloc (name_len + 1);
+      memcpy (name_copy, name, name_len + 1);
+    }
+  else
+    name_copy = NULL;
 
   kernel = xmalloc (sizeof *kernel);
 
@@ -219,7 +225,7 @@ const char *
 kernel_get_name (kernel_t kernel)
 {
   gdb_assert (kernel);
-  return kernel->name;
+  return kernel->name ? kernel->name : "??";
 }
 
 static void

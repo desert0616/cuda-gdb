@@ -114,7 +114,9 @@ extern int fnmatch (const char *pattern, const char *string, int flags);
 
 #  if (HAVE_MBSTATE_T && HAVE_MBSRTOWCS) || _LIBC
 /* In this case we are implementing the multibyte character handling.  */
-#   define HANDLE_MULTIBYTE     1
+#   ifndef __ANDROID__
+#    define HANDLE_MULTIBYTE     1
+#   endif
 #  endif
 
 # else

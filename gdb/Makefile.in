@@ -144,6 +144,9 @@ CC_LD=$(CC)
 INCLUDE_DIR =  $(srcdir)/../include
 INCLUDE_CFLAGS = -I$(INCLUDE_DIR)
 
+# CUDA libcudacore
+LIBCUDACORE = ../libcudacore/libcudacore.a
+
 # Where is the "-liberty" library?  Typically in ../libiberty.
 LIBIBERTY = ../libiberty/libiberty.a
 
@@ -496,7 +499,8 @@ INTERNAL_LDFLAGS = $(CFLAGS) $(GLOBAL_CFLAGS) $(MH_LDFLAGS) $(LDFLAGS) $(CONFIG_
 CLIBS = $(SIM) $(READLINE) $(OPCODES) $(BFD) $(INTL) $(LIBIBERTY) $(LIBDECNUMBER) \
 	$(XM_CLIBS) $(NAT_CLIBS) $(GDBTKLIBS) @LIBS@ \
 	$(LIBEXPAT) $(LIBLZMA) \
-	$(LIBIBERTY) $(WIN32LIBS) $(LIBGNU)
+	$(LIBIBERTY) $(WIN32LIBS) $(LIBGNU) \
+	$(LIBCUDACORE)
 CDEPS = $(XM_CDEPS) $(NAT_CDEPS) $(SIM) $(BFD) $(READLINE_DEPS) \
 	$(OPCODES) $(INTL_DEPS) $(LIBIBERTY) $(CONFIG_DEPS) $(LIBGNU)
 
@@ -563,7 +567,7 @@ ALL_TARGET_OBS = \
 	cris-tdep.o \
 	cuda-api.o cuda-autostep.o cuda-asm.o cuda-commands.o cuda-context.o \
 	cuda-coords.o cuda-elf-image.o cuda-events.o cuda-exceptions.o \
-	cuda-frame.o cuda-gdb.o cuda-darwin-nat.o \
+	cuda-frame.o cuda-gdb.o cuda-darwin-nat.o cuda-corelow.o \
 	cuda-iterator.o cuda-kernel.o  cuda-linux-nat.o cuda-modules.o \
 	cuda-notifications.o cuda-options.o cuda-packet-manager.o cuda-regmap.o \
 	cuda-special-register.o cuda-state.o cuda-tdep.o cuda-textures.o \
@@ -1491,7 +1495,7 @@ ALLDEPFILES = \
 	core-regset.c \
 	cuda-api.c cuda-autostep.c cuda-asm.c cuda-commands.c cuda-context.c \
 	cuda-coords.c cuda-elf-image.c cuda-events.c cuda-exceptions.c \
-	cuda-frame.c cuda-gdb.c cuda-darwin-nat.c \
+	cuda-frame.c cuda-gdb.c cuda-darwin-nat.c cuda-corelow.c \
 	cuda-iterator.c cuda-kernel.c cuda-linux-nat.c cuda-modules.c \
 	cuda-notifications.c cuda-options.c cuda-packet-manager.c cuda-regmap.c \
 	cuda-special-register.c cuda-state.c cuda-tdep.c  cuda-textures.c \

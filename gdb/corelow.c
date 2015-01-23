@@ -30,6 +30,7 @@
 #include "inferior.h"
 #include "symtab.h"
 #include "command.h"
+#include "completer.h"
 #include "bfd.h"
 #include "target.h"
 #include "gdbcore.h"
@@ -46,6 +47,11 @@
 #include "progspace.h"
 #include "objfiles.h"
 #include "gdb_bfd.h"
+
+#include "cuda-tdep.h"
+#include "cuda-corelow.h"
+#include "cuda-linux-nat.h"
+
 
 #ifndef O_LARGEFILE
 #define O_LARGEFILE 0
@@ -218,6 +224,9 @@ core_close (int quitting)
     }
   core_vec = NULL;
   core_gdbarch = NULL;
+
+  /* cuda_core_free() is always safe to call*/
+  cuda_core_free ();
 }
 
 static void
@@ -274,16 +283,22 @@ add_to_thread_list (bfd *abfd, asection *asect, void *reg_sect_arg)
 /* This routine opens and sets up the core file bfd.  */
 
 static void
-core_open (char *filename, int from_tty)
+core_open (char *args, int from_tty)
 {
   const char *p;
   int siggy;
-  struct cleanup *old_chain;
+  struct cleanup *old_chain, *old_chain2;
   char *temp;
   bfd *temp_bfd;
   int scratch_chan;
   int flags;
   volatile struct gdb_exception except;
+  char *filename, *cudacorename;
+
+  /* Parse filenames. Spaces in filenames are not supported */
+  filename = strtok (args, " ");
+  cudacorename = strtok (NULL, " ");
+  gdb_assert (strtok (NULL, " ") == NULL);
 
   target_preopen (from_tty);
   if (!filename)
@@ -305,6 +320,20 @@ core_open (char *filename, int from_tty)
     }
 
   old_chain = make_cleanup (xfree, filename);
+
+  if (cudacorename)
+    {
+      cudacorename = tilde_expand (cudacorename);
+      if (!IS_ABSOLUTE_PATH (cudacorename))
+	{
+	  temp = concat (current_directory, "/",
+	    		 cudacorename, (char *) NULL);
+	  xfree (cudacorename);
+	  cudacorename = temp;
+	}
+
+      make_cleanup (xfree, cudacorename);
+    }
 
   flags = O_BINARY | O_LARGEFILE;
   if (write_files)
@@ -336,10 +365,9 @@ core_open (char *filename, int from_tty)
   /* Looks semi-reasonable.  Toss the old core file and work on the
      new.  */
 
-  do_cleanups (old_chain);
   unpush_target (&core_ops);
   core_bfd = temp_bfd;
-  old_chain = make_cleanup (core_close_cleanup, 0 /*ignore*/);
+  old_chain2 = make_cleanup (core_close_cleanup, 0 /*ignore*/);
 
   core_gdbarch = gdbarch_from_bfd (core_bfd);
 
@@ -364,8 +392,10 @@ core_open (char *filename, int from_tty)
   if (!exec_bfd)
     set_gdbarch_from_file (core_bfd);
 
+  if (cudacorename)
+    cuda_core_load_api (cudacorename);
+
   push_target (&core_ops);
-  discard_cleanups (old_chain);
 
   /* Do this before acknowledging the inferior, so if
      post_create_inferior throws (can happen easilly if you're loading
@@ -446,12 +476,22 @@ core_open (char *filename, int from_tty)
 		       siggy, gdb_signal_to_string (sig));
     }
 
+  if (cudacorename)
+    cuda_core_initialize_events_exceptions ();
+
   /* Fetch all registers from core file.  */
   target_fetch_registers (get_current_regcache (), -1);
 
   /* Now, set up the frame cache, and print the top of stack.  */
   reinit_frame_cache ();
+
+  if (cudacorename && cuda_focus_is_device ())
+    cuda_print_message_focus (false);
+
   print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC);
+
+  discard_cleanups (old_chain2);
+  do_cleanups (old_chain);
 }
 
 static void
@@ -615,6 +655,16 @@ get_core_registers (struct target_ops *ops,
   for (i = 0; i < gdbarch_num_regs (get_regcache_arch (regcache)); i++)
     if (regcache_register_status (regcache, i) == REG_UNKNOWN)
       regcache_raw_supply (regcache, i, NULL);
+}
+
+static void
+core_fetch_registers (struct target_ops *ops,
+                      struct regcache *regcache, int regno)
+{
+  if (!cuda_focus_is_device ())
+    get_core_registers (ops, regcache, regno);
+  else
+    cuda_core_fetch_registers (ops, regcache, regno);
 }
 
 static void
@@ -949,13 +999,14 @@ init_core_ops (void)
   core_ops.to_close = core_close;
   core_ops.to_attach = find_default_attach;
   core_ops.to_detach = core_detach;
-  core_ops.to_fetch_registers = get_core_registers;
+  core_ops.to_fetch_registers = core_fetch_registers;
   core_ops.to_xfer_partial = core_xfer_partial;
   core_ops.to_files_info = core_files_info;
   core_ops.to_insert_breakpoint = ignore;
   core_ops.to_remove_breakpoint = ignore;
   core_ops.to_create_inferior = find_default_create_inferior;
   core_ops.to_thread_alive = core_thread_alive;
+  core_ops.to_thread_architecture = cuda_nat_thread_architecture;
   core_ops.to_read_description = core_read_description;
   core_ops.to_pid_to_str = core_pid_to_str;
   core_ops.to_stratum = process_stratum;
@@ -975,7 +1026,10 @@ init_core_ops (void)
 void
 _initialize_corelow (void)
 {
+  struct cmd_list_element *c;
+
   init_core_ops ();
 
-  add_target (&core_ops);
+  c = add_target (&core_ops);
+  set_cmd_completer (c, filename_completer);
 }

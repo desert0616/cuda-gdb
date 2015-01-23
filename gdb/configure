@@ -641,6 +641,7 @@ TCL_VERSION
 WIN32LDAPP
 GUI_CFLAGS_X
 LIBGUI
+LIBELF
 LTLIBLZMA
 LIBLZMA
 HAVE_LIBLZMA
@@ -1534,6 +1535,8 @@ Optional Packages:
   --with-tcl              directory containing tcl configuration (tclConfig.sh)
   --with-tk               directory containing tk configuration (tkConfig.sh)
   --with-x                use the X Window System
+  --with-libelf-prefix=DIR
+                          search for libelf in DIR/include and DIR/lib
 
 Some influential environment variables:
   CC          C compiler command
@@ -6574,6 +6577,11 @@ if test "$ac_res" != no; then :
 fi
 
 
+
+# Check whether --with-libelf-prefix was given.
+if test "${with_libelf_prefix+set}" = set; then :
+  LIBELF="$with_libelf_prefix/lib/libelf.a"
+fi
 
 
 

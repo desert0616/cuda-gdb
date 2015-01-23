@@ -138,6 +138,7 @@ modules_delete (modules_t modules)
       module_delete (module);
       module = next_module;
     }
+  xfree (modules);
 }
 
 void

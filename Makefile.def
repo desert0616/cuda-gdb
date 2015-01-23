@@ -113,6 +113,7 @@ host_modules= { module= utils; no_check=true; };
 host_modules= { module= gnattools; };
 host_modules= { module= lto-plugin; bootstrap=true;
 		extra_configure_flags=--enable-shared; };
+host_modules= { module= libcudacore; };
 
 target_modules = { module= libstdc++-v3;
 		   bootstrap=true;
@@ -358,6 +359,7 @@ dependencies = { module=all-gdb; on=all-build-bison; };
 dependencies = { module=all-gdb; on=all-sim; };
 dependencies = { module=all-gdb; on=all-libdecnumber; };
 dependencies = { module=all-gdb; on=all-libtermcap; };
+dependencies = { module=all-gdb; on=all-libcudacore; };
 
 dependencies = { module=configure-libgui; on=configure-tcl; };
 dependencies = { module=configure-libgui; on=configure-tk; };

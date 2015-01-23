@@ -28,6 +28,7 @@
 #define TEXTURE_TYPE_NAME     "__texture_type__"
 #define IS_TEXTURE_TYPE(type) ((type) && \
                                TYPE_CODE (type) == TYPE_CODE_TYPEDEF && \
+                               TYPE_NAME (type) != NULL && \
                                !strcmp (TYPE_NAME (type), TEXTURE_TYPE_NAME))
 
 

@@ -6261,7 +6261,7 @@ _bfd_xcoff_bfd_final_link (bfd *abfd, struct bfd_link_info *info)
       irel = flinfo.section_info[o->target_index].relocs;
       irelend = irel + o->reloc_count;
       rel_hash = flinfo.section_info[o->target_index].rel_hashes;
-      for (; irel < irelend; irel++, rel_hash++, erel += relsz)
+      for (; irel < irelend; irel++, rel_hash++)
 	{
 	  if (*rel_hash != NULL)
 	    {

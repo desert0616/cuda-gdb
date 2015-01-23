@@ -411,6 +411,7 @@ cuda_remote_set_option ()
   bool libcudbg_trace      = cuda_options_debug_libcudbg ();
   bool notifications_trace = cuda_options_debug_notifications ();
   bool notify_youngest     = cuda_options_notify_youngest ();
+  unsigned stop_signal     = cuda_options_stop_signal ();
 
   cuda_packet_type_t packet_type = SET_OPTION;
 
@@ -419,7 +420,8 @@ cuda_remote_set_option ()
   p = append_bin ((gdb_byte *) &general_trace,       p, sizeof (general_trace), true);
   p = append_bin ((gdb_byte *) &libcudbg_trace,      p, sizeof (libcudbg_trace), true);
   p = append_bin ((gdb_byte *) &notifications_trace, p, sizeof (notifications_trace), true);
-  p = append_bin ((gdb_byte *) &notify_youngest,     p, sizeof (notify_youngest), false);
+  p = append_bin ((gdb_byte *) &notify_youngest,     p, sizeof (notify_youngest), true);
+  p = append_string (stop_signal == GDB_SIGNAL_TRAP ? "SIGTRAP" : "SIGURG", p, false);
 
   putpkt (pktbuf.buf);
   getpkt (&pktbuf.buf, &pktbuf.buf_size, 1);

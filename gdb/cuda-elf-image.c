@@ -39,6 +39,7 @@ struct elf_image_st {
   uint64_t           size;        /* the size of the relocated ELF image */
   bool               loaded;      /* is the ELF image in memory? */
   bool               uses_abi;    /* does the ELF image uses the ABI to call functions */
+  bool               system;      /* is this the system ELF image? */
   module_t           module;      /* the parent module */
 
   elf_image_t        prev;
@@ -55,6 +56,7 @@ cuda_elf_image_new (void *image, uint64_t size, module_t module)
   elf_image->size     = size;
   elf_image->loaded   = false;
   elf_image->uses_abi = false;
+  elf_image->system   = false;
   elf_image->module   = module;
   elf_image->prev     = NULL;
   elf_image->next     = NULL;
@@ -118,6 +120,13 @@ cuda_elf_image_is_loaded (elf_image_t elf_image)
 {
   gdb_assert (elf_image);
   return elf_image->loaded;
+}
+
+bool
+cuda_elf_image_is_system (elf_image_t elf_image)
+{
+  gdb_assert (elf_image);
+  return elf_image->system;
 }
 
 bool
@@ -207,7 +216,7 @@ cuda_elf_image_load (elf_image_t elf_image, bool is_system)
   gdb_assert (!elf_image->loaded);
 
   /* auto breakpoints */
-  VEC_truncate (CORE_ADDR, cuda_kernel_entry_addresses, 0);
+  cuda_set_current_elf_image (elf_image);
 
   /* Open the object file and make sure to adjust its arch_info before reading
      its symbols. */
@@ -235,13 +244,17 @@ cuda_elf_image_load (elf_image_t elf_image, bool is_system)
   /* Initialize the elf_image object */
   elf_image->objfile  = objfile;
   elf_image->loaded   = true;
+  elf_image->system   = is_system;
   elf_image->uses_abi = cuda_is_bfd_version_call_abi (objfile->obfd);
   cuda_trace ("loaded ELF image (name=%s, module=%p, abi=%d, objfile=%p)",
               objfile->name, elf_image->module,
               elf_image->uses_abi, objfile);
 
   cuda_resolve_breakpoints (0, elf_image);
-  cuda_auto_breakpoints_add_locations (elf_image, is_system);
+  if (cuda_options_auto_breakpoints_needed ())
+      cuda_auto_breakpoints_add_locations ();
+
+  cuda_set_current_elf_image (NULL);
 }
 
 void

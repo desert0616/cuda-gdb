@@ -35,6 +35,7 @@ bool cuda_options_break_on_launch_system (void);
 bool cuda_options_disassemble_from_device_memory (void);
 bool cuda_options_disassemble_from_elf_image (void);
 bool cuda_options_hide_internal_frames (void);
+void cuda_options_force_set_launch_notification_update (void);
 unsigned int cuda_options_show_kernel_events_depth (void);
 bool cuda_options_show_kernel_events_application (void);
 bool cuda_options_show_kernel_events_system (void);
@@ -56,6 +57,11 @@ bool cuda_options_statistics_collection_enabled (void);
 bool cuda_options_value_extrapolation_enabled (void);
 bool cuda_options_trace_domain_enabled (cuda_trace_domain_t);
 bool cuda_options_single_stepping_optimizations_enabled (void);
+/* Return GDB_SIGNAL_TRAP or GDB_SIGNAL_URG */
+unsigned cuda_options_stop_signal (void);
+
+/* Return true of BOL/KE breakpoints needs to be inserted */
+bool cuda_options_auto_breakpoints_needed (void);
 
 #endif
 

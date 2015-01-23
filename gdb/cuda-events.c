@@ -76,6 +76,7 @@ cuda_event_create_context (uint32_t dev_id, uint64_t context_id, uint32_t tid)
 
 #ifdef __APPLE__
   if ( cuda_remote ||
+       current_target.to_resume == NULL ||
        !cuda_options_gpu_busy_check () ||
        !cuda_darwin_cuda_device_used_for_graphics (dev_id))
     return;
@@ -301,8 +302,9 @@ cuda_event_internal_error (CUDBGResult errorType)
   // We don't kill the app or do the cleanup here. That is done upon
   // exiting cuda-gdb.
 
-  error (_("Error: Internal error reported by CUDA debugger API (error=%u). "
-         "The application cannot be further debugged.\n"), errorType);
+  error (_("Error: Internal error reported by CUDA debugger API (error=%s(0x%x)). "
+         "The application cannot be further debugged.\n"), 
+         cudbgGetErrorString(errorType), errorType);
 }
 
 static void

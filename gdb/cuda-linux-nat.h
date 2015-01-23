@@ -26,6 +26,7 @@
 extern void cuda_sigtrap_restore_settings (void);
 extern void cuda_nat_add_target (struct target_ops *t);
 extern void cuda_sigtrap_set_silent (void);
+extern struct gdbarch * cuda_nat_thread_architecture (struct target_ops *ops, ptid_t ptid);
 
 #endif
 

@@ -58,6 +58,7 @@ bool cuda_debug_general;
 bool cuda_debug_libcudbg;
 bool cuda_debug_notifications;
 bool cuda_notify_youngest;
+unsigned cuda_stop_signal = GDB_SIGNAL_URG;
 struct cuda_trace_msg *cuda_first_trace_msg = NULL;
 struct cuda_trace_msg *cuda_last_trace_msg = NULL;
 
@@ -287,6 +288,12 @@ bool
 cuda_options_notify_youngest ()
 {
   return cuda_notify_youngest;
+}
+
+unsigned
+cuda_options_stop_signal (void)
+{
+  return cuda_stop_signal;
 }
 
 void

@@ -16385,34 +16385,6 @@ cuda_dwarf2_process_segmented_types (void)
   cuda_types_to_be_segmented = NULL;
 }
 
-/* CUDA - Runtime Built-in Variables */
-static void
-cuda_decode_builtin_variable (struct symbol *sym)
-{
-  CORE_ADDR offset;
-
-  if (!strcmp (sym->ginfo.name, "threadIdx"))
-    offset = CUDBG_THREADIDX_OFFSET;
-  else if (!strcmp (sym->ginfo.name, "blockIdx"))
-    offset = CUDBG_BLOCKIDX_OFFSET;
-  else if (!strcmp (sym->ginfo.name, "blockDim"))
-    offset = CUDBG_BLOCKDIM_OFFSET;
-  else if (!strcmp (sym->ginfo.name, "gridDim"))
-    offset = CUDBG_GRIDDIM_OFFSET;
-  /* deprecated: use $cuda_num_lanes instead */
-  else if (!strcmp (sym->ginfo.name, "warpSize"))
-    offset = CUDBG_WARPSIZE_OFFSET;
-  else
-    return;
-
-  /* Set the unique address */
-  sym->ginfo.value.address = offset;
-
-  /* Indicate this is a static in the variable domain */
-  sym->domain = VAR_DOMAIN;
-  sym->aclass = LOC_STATIC;
-}
-
 /* Given a pointer to a DWARF information entry, figure out if we need
    to make a symbol table entry for it, and if so, create a new entry
    and return a pointer to it.
@@ -16682,9 +16654,6 @@ new_symbol_full (struct die_info *die, struct type *type, struct dwarf2_cu *cu,
 		}
 	      else if (attr2 && (DW_UNSND (attr2) != 0))
 		{
-                  /* CUDA - Built-in Variables */
-                  cuda_decode_builtin_variable (sym);
-
 		  /* Workaround gfortran PR debug/40040 - it uses
 		     DW_AT_location for variables in -fPIC libraries which may
 		     get overriden by other libraries/executable and get
@@ -21977,6 +21946,27 @@ cuda_decode_lines (struct line_header *lh, struct objfile *objfile)
   }
 }
 
+/* Allocate blockvector as well as global block on the obstack */
+static struct blockvector *
+allocate_blockvector (struct obstack *obstack, int nblocks)
+{
+  struct block *blk = NULL;
+  struct blockvector *bv = NULL;
+
+  bv =  (struct blockvector *) 
+     obstack_alloc (obstack,
+                    (sizeof (struct blockvector)
+                     + nblocks * sizeof (struct block *)));
+
+  BLOCKVECTOR_NBLOCKS (bv) = nblocks;
+  BLOCKVECTOR_MAP (bv) = 0;
+
+  blk = allocate_global_block (obstack);
+  BLOCKVECTOR_BLOCK (bv, 0) = blk;
+
+  return bv;
+}
+
 static void
 cuda_populate_blockvectors (struct line_header *lh,
                             struct objfile *objfile)
@@ -21994,18 +21984,6 @@ cuda_populate_blockvectors (struct line_header *lh,
 
   nblocks = objfile->minimal_symbol_count + 1;
 
-  blockvector = (struct blockvector *)
-    obstack_alloc (&objfile->objfile_obstack,
-                   (sizeof (struct blockvector)
-                    + nblocks * sizeof (struct block *)));
-
-  BLOCKVECTOR_NBLOCKS (blockvector) = nblocks;
-  BLOCKVECTOR_MAP (blockvector) = 0;
-
-  global_block  = allocate_global_block (obstack);
-
-  BLOCKVECTOR_BLOCK (blockvector, 0) = global_block;
-
   for (i = 0; i < lh->num_file_names; i++)
   {
     fe = &lh->file_names[i];
@@ -22013,8 +21991,13 @@ cuda_populate_blockvectors (struct line_header *lh,
       dir = lh->include_dirs[fe->dir_index - 1];
     dwarf2_start_subfile (fe->name, dir, NULL, objfile);
 
-    gdb_assert (!current_subfile->symtab->blockvector);
-    current_subfile->symtab->blockvector = blockvector;
+    /* Allocate blockvector if necessary */
+    if (!current_subfile->symtab->blockvector)
+      {
+        if (blockvector == NULL)
+          blockvector = allocate_blockvector (obstack, nblocks);
+        current_subfile->symtab->blockvector = blockvector;
+      }
 
     current_subfile->symtab->primary = 1;
 
@@ -22023,6 +22006,11 @@ cuda_populate_blockvectors (struct line_header *lh,
         first_symtab = current_subfile->symtab;
       }
   }
+
+  if (blockvector == NULL)
+    blockvector = current_subfile->symtab->blockvector;
+  global_block = BLOCKVECTOR_BLOCK (blockvector, 0);
+
   set_block_symtab (global_block, first_symtab); /* dummy */
 
   for (j = 1; j < nblocks; ++j)
@@ -22103,16 +22091,20 @@ cuda_decode_line_table (struct objfile *objfile)
 
   start_symtab (objfile->name, NULL, 0);
 
-  lh = cuda_decode_line_header (line_offset, objfile);
-  if (lh == NULL)
-    return;
+  do
+    {
+      lh = cuda_decode_line_header (line_offset, objfile);
+      if (lh == NULL)
+        return;
+      line_offset += lh->total_length + 4;
 
-  cuda_decode_lines (lh, objfile);
+      cuda_decode_lines (lh, objfile);
 
-  cuda_populate_blockvectors (lh, objfile);
-  cuda_populate_line_table (lh, objfile);
+      cuda_populate_blockvectors (lh, objfile);
+      cuda_populate_line_table (lh, objfile);
 
-  free_line_header (lh);
+      free_line_header (lh);
+    } while (line_offset < dwarf2_per_objfile->line.size);
 }
 
 

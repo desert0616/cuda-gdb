@@ -61,9 +61,14 @@
 #ifndef __ANDROID__
 #include <sys/procfs.h>		/* for elf_gregset etc. */
 #else
+
+#ifndef __aarch64__
 #include <asm/elf.h>
-#define PT_KILL 8
 #define __SIGRTMIN SIGRTMIN
+#else
+#include <fake-aarch64-elf.h>
+#endif
+#define PT_KILL 8
 #define W_STOPCODE(sig) ((sig) << 8 | 0x7f)
 #endif
 #include "elf-bfd.h"		/* for elfcore_write_* */
@@ -95,6 +100,7 @@
 #include "cuda-exceptions.h"
 #include "cuda-notifications.h"
 #include "cuda-tdep.h"
+#include "cuda-options.h"
 
 #ifndef SPUFS_MAGIC
 #define SPUFS_MAGIC 0x23c9b64e
@@ -587,7 +593,7 @@ linux_enable_tracesysgood (ptid_t ptid)
 
   current_ptrace_options |= PTRACE_O_TRACESYSGOOD;
 
-  ptrace (PTRACE_SETOPTIONS, pid, 0, (PTRACE_TYPE_ARG4)current_ptrace_options);
+  ptrace (PTRACE_SETOPTIONS, pid, 0, (PTRACE_TYPE_ARG4)(long)current_ptrace_options);
 }
 
 
@@ -611,7 +617,7 @@ linux_enable_event_reporting (ptid_t ptid)
   /* Do not enable PTRACE_O_TRACEEXIT until GDB is more prepared to support
      read-only process state.  */
 
-  ptrace (PTRACE_SETOPTIONS, pid, 0, (PTRACE_TYPE_ARG4)current_ptrace_options);
+  ptrace (PTRACE_SETOPTIONS, pid, 0, (PTRACE_TYPE_ARG4)(long)current_ptrace_options);
 }
 
 static void
@@ -1834,7 +1840,7 @@ detach_callback (struct lwp_info *lp, void *data)
 	linux_nat_prepare_to_resume (lp);
       errno = 0;
       if (ptrace (PTRACE_DETACH, GET_LWP (lp->ptid), 0,
-		  (PTRACE_TYPE_ARG4)WSTOPSIG (status)) < 0)
+		  (PTRACE_TYPE_ARG4)(long)WSTOPSIG (status)) < 0)
 	error (_("Can't detach %s: %s"), target_pid_to_str (lp->ptid),
 	       safe_strerror (errno));
 
@@ -3769,9 +3775,16 @@ retry:
     {
       enum gdb_signal signo = gdb_signal_from_host (WSTOPSIG (status));
 
+      /* CUDA - Check if we have received an urgent message (aka sync event) */
+      if (cuda_notification_received () && cuda_options_stop_signal() == GDB_SIGNAL_URG
+          && WSTOPSIG(status) == SIGURG)
+        {
+          lp->stopped = 1;
+        }
+
       /* When using hardware single-step, we need to report every signal.
 	 Otherwise, signals in pass_mask may be short-circuited.  */
-      if (!lp->step
+      else if (!lp->step && !cuda_notification_pending ()
 	  && WSTOPSIG (status) && sigismember (&pass_mask, WSTOPSIG (status)))
 	{
 	  /* FIMXE: kettenis/2001-06-06: Should we resume all threads

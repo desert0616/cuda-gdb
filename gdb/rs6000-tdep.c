@@ -48,6 +48,7 @@
 
 #include "elf-bfd.h"
 #include "elf/ppc.h"
+#include "elf/ppc64.h"
 
 #include "solib-svr4.h"
 #include "ppc-tdep.h"
@@ -1616,7 +1617,19 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  continue;
 
 	}
-      else if ((op & 0xffff0000) == 0x60000000)
+      else if ((op & 0xffff0000) == 0x3c4c0000
+	       || (op & 0xffff0000) == 0x3c400000
+	       || (op & 0xffff0000) == 0x38420000)
+	{
+	  /* .	0:	addis 2,12,.TOC.-0b@ha
+	     .		addi 2,2,.TOC.-0b@l
+	     or
+	     .		lis 2,.TOC.@ha
+	     .		addi 2,2,.TOC.@l
+	     used by ELFv2 global entry points to set up r2.  */
+	  continue;
+	}
+      else if (op == 0x60000000)
         {
 	  /* nop */
 	  /* Allow nops in the prologue, but do not consider them to
@@ -1627,8 +1640,7 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 
 	}
       else if ((op & 0xffff0000) == 0x3c000000)
-	{			/* addis 0,0,NUM, used
-				   for >= 32k frames */
+	{			/* addis 0,0,NUM, used for >= 32k frames */
 	  fdata->offset = (op & 0x0000ffff) << 16;
 	  fdata->frameless = 0;
           r0_contains_arg = 0;
@@ -1636,8 +1648,7 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 
 	}
       else if ((op & 0xffff0000) == 0x60000000)
-	{			/* ori 0,0,NUM, 2nd ha
-				   lf of >= 32k frames */
+	{			/* ori 0,0,NUM, 2nd half of >= 32k frames */
 	  fdata->offset |= (op & 0x0000ffff);
 	  fdata->frameless = 0;
           r0_contains_arg = 0;
@@ -2671,10 +2682,10 @@ dfp_pseudo_register_read (struct gdbarch *gdbarch, struct regcache *regcache,
   else
     {
       status = regcache_raw_read (regcache, tdep->ppc_fp0_regnum +
-				  2 * reg_index + 1, buffer + 8);
+				  2 * reg_index + 1, buffer);
       if (status == REG_VALID)
 	status = regcache_raw_read (regcache, tdep->ppc_fp0_regnum +
-				    2 * reg_index, buffer);
+				    2 * reg_index, buffer + 8);
     }
 
   return status;
@@ -2700,9 +2711,9 @@ dfp_pseudo_register_write (struct gdbarch *gdbarch, struct regcache *regcache,
   else
     {
       regcache_raw_write (regcache, tdep->ppc_fp0_regnum +
-			  2 * reg_index + 1, buffer + 8);
+			  2 * reg_index + 1, buffer);
       regcache_raw_write (regcache, tdep->ppc_fp0_regnum +
-			  2 * reg_index, buffer);
+			  2 * reg_index, buffer + 8);
     }
 }
 
@@ -2780,7 +2791,8 @@ efpr_pseudo_register_read (struct gdbarch *gdbarch, struct regcache *regcache,
   int reg_index = reg_nr - tdep->ppc_efpr0_regnum;
 
   /* Read the portion that overlaps the VMX register.  */
-  return regcache_raw_read_part (regcache, tdep->ppc_vr0_regnum + reg_index, 0,
+  int offset = gdbarch_byte_order (gdbarch) == BFD_ENDIAN_BIG ? 0 : 8;
+  return regcache_raw_read_part (regcache, tdep->ppc_vr0_regnum + reg_index, offset,
 				 register_size (gdbarch, reg_nr), buffer);
 }
 
@@ -2793,7 +2805,8 @@ efpr_pseudo_register_write (struct gdbarch *gdbarch, struct regcache *regcache,
   int reg_index = reg_nr - tdep->ppc_efpr0_regnum;
 
   /* Write the portion that overlaps the VMX register.  */
-  regcache_raw_write_part (regcache, tdep->ppc_vr0_regnum + reg_index, 0,
+  int offset = gdbarch_byte_order (gdbarch) == BFD_ENDIAN_BIG ? 0 : 8;
+  regcache_raw_write_part (regcache, tdep->ppc_vr0_regnum + reg_index, offset,
 			   register_size (gdbarch, reg_nr), buffer);
 }
 
@@ -2849,7 +2862,7 @@ rs6000_pseudo_register_write (struct gdbarch *gdbarch,
 
 /* Convert a DBX STABS register number to a GDB register number.  */
 static int
-rs6000_stab_reg_to_regnum (struct gdbarch *gdbarch, int num)
+rs6000_stab_reg_to_regnum (struct gdbarch *gdbarch, reg_t num)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
 
@@ -2891,7 +2904,7 @@ rs6000_stab_reg_to_regnum (struct gdbarch *gdbarch, int num)
 
 /* Convert a Dwarf 2 register number to a GDB register number.  */
 static int
-rs6000_dwarf2_reg_to_regnum (struct gdbarch *gdbarch, int num)
+rs6000_dwarf2_reg_to_regnum (struct gdbarch *gdbarch, reg_t num)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
 
@@ -3549,6 +3562,7 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   enum auto_boolean soft_float_flag = powerpc_soft_float_global;
   int soft_float;
   enum powerpc_vector_abi vector_abi = powerpc_vector_abi_global;
+  enum powerpc_elf_abi elf_abi = POWERPC_ELF_AUTO;
   int have_fpu = 1, have_spe = 0, have_mq = 0, have_altivec = 0, have_dfp = 0,
       have_vsx = 0;
   int tdesc_wordsize = -1;
@@ -3855,6 +3869,21 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
     }
 
 #ifdef HAVE_ELF
+  if (from_elf_exec)
+    {
+      switch (elf_elfheader (info.abfd)->e_flags & EF_PPC64_ABI)
+	{
+	case 1:
+	  elf_abi = POWERPC_ELF_V1;
+	  break;
+	case 2:
+	  elf_abi = POWERPC_ELF_V2;
+	  break;
+	default:
+	  break;
+	}
+    }
+
   if (soft_float_flag == AUTO_BOOLEAN_AUTO && from_elf_exec)
     {
       switch (bfd_elf_get_obj_attr_int (info.abfd, OBJ_ATTR_GNU,
@@ -3890,6 +3919,15 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 	}
     }
 #endif
+
+  /* Default to ELFv2 ABI on 64-bit little-endian, and ELFv1 otherwise.  */
+  if (elf_abi == POWERPC_ELF_AUTO)
+    {
+      if (wordsize == 8 && info.byte_order == BFD_ENDIAN_LITTLE)
+        elf_abi = POWERPC_ELF_V2;
+      else
+        elf_abi = POWERPC_ELF_V1;
+    }
 
   if (soft_float_flag == AUTO_BOOLEAN_TRUE)
     soft_float = 1;
@@ -3933,6 +3971,8 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
          meaningful, because 64-bit CPUs can run in 32-bit mode.  So, perform
          separate word size check.  */
       tdep = gdbarch_tdep (arches->gdbarch);
+      if (tdep && tdep->elf_abi != elf_abi)
+	continue;
       if (tdep && tdep->soft_float != soft_float)
 	continue;
       if (tdep && tdep->vector_abi != vector_abi)
@@ -3955,6 +3995,7 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 
   tdep = XCALLOC (1, struct gdbarch_tdep);
   tdep->wordsize = wordsize;
+  tdep->elf_abi = elf_abi;
   tdep->soft_float = soft_float;
   tdep->vector_abi = vector_abi;
 
@@ -4247,14 +4288,15 @@ show_powerpc_exact_watchpoints (struct ui_file *file, int from_tty,
   fprintf_filtered (file, _("Use of exact watchpoints is %s.\n"), value);
 }
 
-/* Read a PPC instruction from memory.  PPC instructions are always
-   big-endian, no matter what endianness the program is running in, so
-   we can hardcode BFD_ENDIAN_BIG for read_memory_unsigned_integer.  */
+/* Read a PPC instruction from memory.  */
 
 static unsigned int
-read_insn (CORE_ADDR pc)
+read_insn (struct frame_info *frame, CORE_ADDR pc)
 {
-  return read_memory_unsigned_integer (pc, 4, BFD_ENDIAN_BIG);
+  struct gdbarch *gdbarch = get_frame_arch (frame);
+  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
+
+  return read_memory_unsigned_integer (pc, 4, byte_order);
 }
 
 /* Return non-zero if the instructions at PC match the series
@@ -4271,19 +4313,25 @@ read_insn (CORE_ADDR pc)
    i'th instruction in memory.  */
 
 int
-ppc_insns_match_pattern (CORE_ADDR pc, struct ppc_insn_pattern *pattern,
-			 unsigned int *insn)
+ppc_insns_match_pattern (struct frame_info *frame, CORE_ADDR pc,
+			 struct ppc_insn_pattern *pattern,
+			 unsigned int *insns)
 {
   int i;
+  unsigned int insn;
 
-  for (i = 0; pattern[i].mask; i++)
+  for (i = 0, insn = 0; pattern[i].mask; i++)
     {
-      insn[i] = read_insn (pc);
-      if ((insn[i] & pattern[i].mask) == pattern[i].data)
-	pc += 4;
-      else if (pattern[i].optional)
-	insn[i] = 0;
-      else
+      if (insn == 0)
+	insn = read_insn (frame, pc);
+      insns[i] = 0;
+      if ((insn & pattern[i].mask) == pattern[i].data)
+	{
+	  insns[i] = insn;
+	  pc += 4;
+	  insn = 0;
+	}
+      else if (!pattern[i].optional)
 	return 0;
     }
 

@@ -991,13 +991,13 @@ info_threads_command (char *arg, int from_tty)
 void
 switch_to_thread (ptid_t ptid)
 {
+  struct inferior *inf;
+
   /* Switch the program space as well, if we can infer it from the now
      current thread.  Otherwise, it's up to the caller to select the
      space it wants.  */
   if (!ptid_equal (ptid, null_ptid))
     {
-      struct inferior *inf;
-
       inf = find_inferior_pid (ptid_get_pid (ptid));
       gdb_assert (inf != NULL);
       set_current_program_space (inf->pspace);
@@ -1013,6 +1013,11 @@ switch_to_thread (ptid_t ptid)
   if (!cuda_focus_is_device ())
     if (ptid_equal (ptid, inferior_ptid))
       return;
+
+  /* CUDA - coredumps */
+  inf = find_inferior_pid (ptid_get_pid (ptid));
+  if (inf != NULL && inf->fake_pid_p)
+    return;
 
   /* CUDA - focus */
   cuda_coords_invalidate_current ();

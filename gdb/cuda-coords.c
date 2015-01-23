@@ -43,6 +43,13 @@ cuda_coords_invalidate_current (void)
   cuda_trace ("focus set to invalid");
 }
 
+/* Scrub the current coordinates */
+void
+cuda_coords_reset_current (void)
+{
+    current_coords = CUDA_INVALID_COORDS;
+}
+
 bool
 cuda_focus_is_device ()
 {

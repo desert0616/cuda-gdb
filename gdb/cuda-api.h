@@ -38,7 +38,7 @@ typedef enum {
 void cuda_api_handle_initialization_error (CUDBGResult res);
 void cuda_api_handle_get_api_error (CUDBGResult res);
 void cuda_api_handle_finalize_api_error (CUDBGResult res);
-int  cuda_api_get_api (void);
+void cuda_api_set_api (CUDBGAPI api);
 int  cuda_api_initialize (void);
 void cuda_api_initialize_attach_stub (void);
 void cuda_api_finalize (void);

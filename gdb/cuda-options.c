@@ -522,6 +522,8 @@ cuda_show_notify (struct ui_file *file, int from_tty,
 static void
 cuda_set_notify (char *args, int from_tty, struct cmd_list_element *c)
 {
+  if (cuda_remote)
+    cuda_remote_set_option ();
 }
 
 static void
@@ -570,9 +572,6 @@ const char *cuda_break_on_launch_enums[] = {
 
 static const char *cuda_break_on_launch;
 
-/* Forward Declearation */
-static int cuda_defer_kernel_launch_notifications;
-
 static void
 cuda_show_break_on_launch (struct ui_file *file, int from_tty,
                            struct cmd_list_element *c, const char *value)
@@ -583,6 +582,8 @@ cuda_show_break_on_launch (struct ui_file *file, int from_tty,
 static void
 cuda_set_break_on_launch (char *args, int from_tty, struct cmd_list_element *c)
 {
+  if (cuda_options_auto_breakpoints_needed ())
+    cuda_auto_breakpoints_add_locations ();
   cuda_auto_breakpoints_update_breakpoints ();
 }
 
@@ -746,9 +747,24 @@ cuda_show_show_kernel_events (struct ui_file *file, int from_tty,
   fprintf_filtered (file, _("Show CUDA kernel events is set to '%s'.\n"), value);
 }
 
+void
+cuda_options_force_set_launch_notification_update (void)
+{
+  if (!cuda_options_auto_breakpoints_needed () &&
+      cuda_show_kernel_events != cuda_show_kernel_events_none &&
+      cuda_show_kernel_events_depth == 1)
+    cuda_api_set_kernel_launch_notification_mode (CUDBG_KNL_LAUNCH_NOTIFY_EVENT);
+  else
+    cuda_api_set_kernel_launch_notification_mode (CUDBG_KNL_LAUNCH_NOTIFY_DEFER);
+}
+
 static void
 cuda_set_show_kernel_events (char *args, int from_tty, struct cmd_list_element *c)
 {
+  if (cuda_options_auto_breakpoints_needed ())
+    cuda_auto_breakpoints_add_locations ();
+
+  cuda_options_force_set_launch_notification_update ();
   cuda_auto_breakpoints_update_breakpoints ();
 }
 
@@ -785,8 +801,10 @@ cuda_options_initialize_show_kernel_events (void)
                             _("Controls the maximum depth of the kernels after which no kernel event notifications will be displayed.\n"
                               "A value of zero means that there is no maximum and that all the kernel notifications are displayed.\n"
                               "A value of one means that the debugger will display kernel event notifications only for kernels launched from the CPU (default)."),
-                            NULL, cuda_show_show_kernel_events_depth,
+                            cuda_set_show_kernel_events, cuda_show_show_kernel_events_depth,
                             &setcudalist, &showcudalist);
+
+  cuda_options_force_set_launch_notification_update ();
 }
 
 unsigned int
@@ -809,35 +827,13 @@ cuda_options_show_kernel_events_application (void)
           cuda_show_kernel_events == cuda_show_kernel_events_all);
 }
 
-/* set cuda defer_kernel_launch_notifications */
-static int cuda_defer_kernel_launch_notifications = 0;
 
-static void
-cuda_show_defer_kernel_launch_notifications (struct ui_file *file, int from_tty,
-                                            struct cmd_list_element *c, const char *value)
+bool
+cuda_options_auto_breakpoints_needed (void)
 {
-  fprintf_filtered (file, _("CUDA defer kernel launch notifications is %s.\n"), value);
-}
-
-static void
-cuda_set_defer_kernel_launch_notifications (char *args, int from_tty, struct cmd_list_element *c)
-{
-  printf_filtered ("Warning: CUDA defer kernel launch notifications has been deprecated and has no effect.\n");
-}
-
-static void
-cuda_options_initialize_defer_kernel_launch_notifications (void)
-{
-  cuda_defer_kernel_launch_notifications = 0;
-  add_setshow_boolean_cmd ("defer_kernel_launch_notifications", class_cuda,
-                            &cuda_defer_kernel_launch_notifications,
-                            _("Turn on/off deferral of kernel launch messages (deprecated)."),
-                            _("Show whether kernel launch notifications are deferred."),
-                            _("When turned on, the kernel launch and termination events are deferred until the debugger hits a breakpoint or an exception.\n"
-                              "This option has been deprecated and has no effect any more."),
-                            cuda_set_defer_kernel_launch_notifications,
-                            cuda_show_defer_kernel_launch_notifications,
-                            &setcudalist, &showcudalist);
+  return (cuda_show_kernel_events_depth > 1 &&
+          cuda_show_kernel_events != cuda_show_kernel_events_none) ||
+            cuda_break_on_launch != cuda_break_on_launch_none;
 }
 
 /*
@@ -1338,6 +1334,50 @@ cuda_options_initialize_single_stepping_optimization (void)
 
 }
 
+static unsigned cuda_stop_signal = GDB_SIGNAL_URG;
+static const char *cuda_stop_signal_string = NULL;
+static const char *cuda_stop_signal_enum[] = {
+  "SIGURG",
+  "SIGTRAP",
+  NULL
+};
+
+static void
+cuda_show_stop_signal (struct ui_file *file, int from_tty,
+                       struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("CUDA stop signal is %s\n"), value);
+}
+
+static void
+cuda_set_stop_signal (char *args, int from_tty, struct cmd_list_element *c)
+{
+  if (strcasecmp(cuda_stop_signal_string,"SIGURG")==0)
+     cuda_stop_signal = GDB_SIGNAL_URG;
+  if (strcasecmp(cuda_stop_signal_string,"SIGTRAP")==0)
+     cuda_stop_signal = GDB_SIGNAL_TRAP;
+
+  if (cuda_remote)
+    cuda_remote_set_option ();
+}
+
+unsigned cuda_options_stop_signal (void)
+{
+  return cuda_stop_signal;
+}
+
+static void
+cuda_options_initialize_stop_signal (void)
+{
+  add_setshow_enum_cmd ("stop_signal", class_cuda,
+                          cuda_stop_signal_enum, &cuda_stop_signal_string,
+                          _("Set signal used to notify the debugger of the CUDA event"),
+                          _("Show signal used to notify the debugger of the CUDA event"),
+                          _("Could be set to SIGURG (default) or SIGTRAP (legacy)"),
+                          cuda_set_stop_signal, cuda_show_stop_signal,
+                          &setcudalist, &showcudalist);
+}
+
 /*Initialization */
 void
 cuda_options_initialize ()
@@ -1356,7 +1396,6 @@ cuda_options_initialize ()
   cuda_options_initialize_disassemble_from ();
   cuda_options_initialize_hide_internal_frames ();
   cuda_options_initialize_show_kernel_events ();
-  cuda_options_initialize_defer_kernel_launch_notifications ();
   cuda_options_initialize_show_context_events ();
   cuda_options_initialize_launch_blocking ();
   cuda_options_initialize_thread_selection ();
@@ -1367,5 +1406,6 @@ cuda_options_initialize ()
   cuda_options_initialize_variable_value_cache_enabled ();
   cuda_options_initialize_stats ();
   cuda_options_initialize_value_extrapolation ();
-  cuda_options_initialize_single_stepping_optimization();
+  cuda_options_initialize_single_stepping_optimization ();
+  cuda_options_initialize_stop_signal ();
 }

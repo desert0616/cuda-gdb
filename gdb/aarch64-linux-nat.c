@@ -34,6 +34,10 @@
 #include <sys/ptrace.h>
 #include <sys/utsname.h>
 
+#if __ANDROID__ && __aarch64__
+#include <fake-aarch64-elf.h>  /* for elf_greg_set_t */
+#include <linux/uio.h> /* for iovec */
+#endif
 #include "gregset.h"
 
 #include "features/aarch64.c"
@@ -329,7 +333,7 @@ aarch64_linux_set_debug_regs (const struct aarch64_debug_reg_state *state,
     }
 
   if (ptrace (PTRACE_SETREGSET, tid,
-	      watchpoint ? NT_ARM_HW_WATCH : NT_ARM_HW_BREAK,
+	      (PTRACE_TYPE_ARG3)(long) (watchpoint ? NT_ARM_HW_WATCH : NT_ARM_HW_BREAK),
 	      (void *) &iov))
     error (_("Unexpected error setting hardware debug registers"));
 }
@@ -472,7 +476,7 @@ fetch_gregs_from_thread (struct regcache *regcache)
   iovec.iov_base = &regs;
   iovec.iov_len = sizeof (regs);
 
-  ret = ptrace (PTRACE_GETREGSET, tid, NT_PRSTATUS, &iovec);
+  ret = ptrace (PTRACE_GETREGSET, tid, (PTRACE_TYPE_ARG3)NT_PRSTATUS, (PTRACE_TYPE_ARG3)&iovec);
   if (ret < 0)
     perror_with_name (_("Unable to fetch general registers."));
 
@@ -496,7 +500,7 @@ store_gregs_to_thread (const struct regcache *regcache)
   iovec.iov_base = &regs;
   iovec.iov_len = sizeof (regs);
 
-  ret = ptrace (PTRACE_GETREGSET, tid, NT_PRSTATUS, &iovec);
+  ret = ptrace (PTRACE_GETREGSET, tid, (PTRACE_TYPE_ARG3)NT_PRSTATUS, &iovec);
   if (ret < 0)
     perror_with_name (_("Unable to fetch general registers."));
 
@@ -505,7 +509,7 @@ store_gregs_to_thread (const struct regcache *regcache)
       regcache_raw_collect (regcache, regno,
 			    (char *) &regs[regno - AARCH64_X0_REGNUM]);
 
-  ret = ptrace (PTRACE_SETREGSET, tid, NT_PRSTATUS, &iovec);
+  ret = ptrace (PTRACE_SETREGSET, tid, (PTRACE_TYPE_ARG3)NT_PRSTATUS, &iovec);
   if (ret < 0)
     perror_with_name (_("Unable to store general registers."));
 }
@@ -525,7 +529,7 @@ fetch_fpregs_from_thread (struct regcache *regcache)
   iovec.iov_base = &regs;
   iovec.iov_len = sizeof (regs);
 
-  ret = ptrace (PTRACE_GETREGSET, tid, NT_FPREGSET, &iovec);
+  ret = ptrace (PTRACE_GETREGSET, tid, (PTRACE_TYPE_ARG3)NT_FPREGSET, &iovec);
   if (ret < 0)
     perror_with_name (_("Unable to fetch FP/SIMD registers."));
 
@@ -552,7 +556,7 @@ store_fpregs_to_thread (const struct regcache *regcache)
   iovec.iov_base = &regs;
   iovec.iov_len = sizeof (regs);
 
-  ret = ptrace (PTRACE_GETREGSET, tid, NT_FPREGSET, &iovec);
+  ret = ptrace (PTRACE_GETREGSET, tid, (PTRACE_TYPE_ARG3)NT_FPREGSET, &iovec);
   if (ret < 0)
     perror_with_name (_("Unable to fetch FP/SIMD registers."));
 
@@ -566,7 +570,7 @@ store_fpregs_to_thread (const struct regcache *regcache)
   if (REG_VALID == regcache_register_status (regcache, AARCH64_FPCR_REGNUM))
     regcache_raw_collect (regcache, AARCH64_FPCR_REGNUM, (char *) &regs.fpcr);
 
-  ret = ptrace (PTRACE_SETREGSET, tid, NT_FPREGSET, &iovec);
+  ret = ptrace (PTRACE_SETREGSET, tid, (PTRACE_TYPE_ARG3)NT_FPREGSET, &iovec);
   if (ret < 0)
     perror_with_name (_("Unable to store FP/SIMD registers."));
 }
@@ -762,7 +766,7 @@ ps_get_thread_area (const struct ps_prochandle *ph,
   iovec.iov_base = &reg;
   iovec.iov_len = sizeof (reg);
 
-  if (ptrace (PTRACE_GETREGSET, lwpid, NT_ARM_TLS, &iovec) != 0)
+  if (ptrace (PTRACE_GETREGSET, lwpid, (PTRACE_TYPE_ARG3)NT_ARM_TLS, &iovec) != 0)
     return PS_ERR;
 
   /* IDX is the bias from the thread pointer to the beginning of the
@@ -788,7 +792,7 @@ aarch64_linux_get_debug_reg_capacity (void)
   iov.iov_len = sizeof (dreg_state);
 
   /* Get hardware watchpoint register info.  */
-  if (ptrace (PTRACE_GETREGSET, tid, NT_ARM_HW_WATCH, &iov) == 0
+  if (ptrace (PTRACE_GETREGSET, tid, (PTRACE_TYPE_ARG3)NT_ARM_HW_WATCH, &iov) == 0
       && AARCH64_DEBUG_ARCH (dreg_state.dbg_info) == AARCH64_DEBUG_ARCH_V8)
     {
       aarch64_num_wp_regs = AARCH64_DEBUG_NUM_SLOTS (dreg_state.dbg_info);
@@ -808,7 +812,7 @@ aarch64_linux_get_debug_reg_capacity (void)
     }
 
   /* Get hardware breakpoint register info.  */
-  if (ptrace (PTRACE_GETREGSET, tid, NT_ARM_HW_BREAK, &iov) == 0
+  if (ptrace (PTRACE_GETREGSET, tid, (PTRACE_TYPE_ARG3)NT_ARM_HW_BREAK, &iov) == 0
       && AARCH64_DEBUG_ARCH (dreg_state.dbg_info) == AARCH64_DEBUG_ARCH_V8)
     {
       aarch64_num_bp_regs = AARCH64_DEBUG_NUM_SLOTS (dreg_state.dbg_info);

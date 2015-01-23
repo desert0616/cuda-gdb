@@ -26,7 +26,7 @@
  * states only: ready, pending, and sent. When ready, there has been
  * notification. When pending, a notification was tentatively sent but got
  * postponed because the notification mechanism was 'blocked'. When sent, a
- * notification was sent as a SIGTRAP signal. Those 3 producer states are
+ * notification was sent as a stop signal. Those 3 producer states are
  * implemeted as:
  *
  *         ready   == !sent && !pending
@@ -37,9 +37,9 @@
  * From the consumer's point of view, the notification framework can be in 3
  * states as well: none, received, and pending. When none, there is no
  * notification to process. When received, a notification is ready to be
- * processed associated with host thread GDB woke up upon and the SIGTRAP signal
+ * processed associated with host thread GDB woke up upon and the stop signal
  * that was sent has been consumed. When pending, a notification has been sent
- * but not to the host thread GDB woke up upon, and the SIGTRAP signal that was
+ * but not to the host thread GDB woke up upon, and the stop signal that was
  * sent has not been consumed yet. Those 3 consumer states are implemented as:
  *
  *          none     == !sent && !received
@@ -55,7 +55,7 @@
  * from (producer) pending state to (producer) sent state.
  * Additionally, if a notification is received before a previous event has been
  * serviced, it is marked as an aliased_event, and an attempt is made to service
- * it before the inferior is resumed. No new SIGTRAP is sent for an aliased_event.
+ * it before the inferior is resumed. No new stop signal is sent for an aliased_event.
  */
 
 #include <ctype.h>
@@ -75,7 +75,6 @@
 #include "gdb_assert.h"
 #include "gdbthread.h"
 #include "inferior.h"
-#include "cuda-options.h"
 #include "cuda-packet-manager.h"
 #endif
 
@@ -83,12 +82,12 @@
 
 static struct {
   bool initialized;       /* True if the mutex is initialized */
-  bool blocked;           /* When blocked, SIGTRAPs will be marked pending and handled later. */
-  bool pending_send;      /* True if a SIGTRAP was received while blocked was true. */
-  bool aliased_event;     /* True if a SIGTRAP was received while a previous event was being processed. */
+  bool blocked;           /* When blocked, stop signal will be marked pending and handled later. */
+  bool pending_send;      /* True if a stop signal was received while blocked was true. */
+  bool aliased_event;     /* True if a stop signal was received while a previous event was being processed. */
   bool sent;              /* If already sent, do not send duplicates. */
-  bool received;          /* True if the SIGTRAP has been received. */
-  uint32_t tid;           /* The thread id of the thread to which the SIGTRAP was sent to. */
+  bool received;          /* True if the stop signal has been received. */
+  uint32_t tid;           /* The thread id of the thread to which the stop signal was sent to. */
   pthread_mutex_t mutex;  /* Mutex for the cuda_notification_* functions */
   CUDBGEventCallbackData pending_send_data;
 } cuda_notification_info;
@@ -160,7 +159,8 @@ cuda_notification_release_lock (void)
 static int
 cuda_notification_notify_thread (int tid)
 {
-#ifdef __linux__ 
+  unsigned signal = cuda_options_stop_signal () == GDB_SIGNAL_URG ? SIGURG : SIGTRAP;
+#ifdef __linux__
   {
     static int tkill_failed;
 
@@ -169,7 +169,7 @@ cuda_notification_notify_thread (int tid)
         int ret;
 
         errno = 0;
-        ret = syscall (__NR_tkill, tid, SIGTRAP);
+        ret = syscall (__NR_tkill, tid, signal);
         if (errno != ENOSYS)
           return ret;
         tkill_failed = 1;
@@ -177,7 +177,7 @@ cuda_notification_notify_thread (int tid)
   }
 #endif
 
-  return kill (tid, SIGTRAP);
+  return kill (tid, signal);
 }
 
 static int
@@ -472,12 +472,12 @@ cuda_notification_analyze (ptid_t ptid, struct target_waitstatus *ws, int trap_e
 
   cuda_notification_acquire_lock ();
 
-  /* A notification is deemed received when its corresponding SIGTRAP is the
+  /* A notification is deemed received when its corresponding signal is the
      reason we stopped. */
   if (cuda_notification_info.sent &&
       cuda_notification_info.tid == cuda_gdb_get_tid (ptid) &&
       ws->kind == TARGET_WAITKIND_STOPPED &&
-      ws->value.sig == GDB_SIGNAL_TRAP &&
+      (ws->value.sig == GDB_SIGNAL_URG || ws->value.sig == GDB_SIGNAL_TRAP) &&
       !trap_expected)
     {
       cuda_notification_trace ("received notification to thread %d", cuda_notification_info.tid);

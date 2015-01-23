@@ -1221,10 +1221,16 @@ cuda_process_api_request_cleanup_on_detach_packet (char *buf)
 void
 cuda_process_set_option_packet (char *buf)
 {
+  const char *stop_signal_str = NULL;
   extract_bin (NULL, (unsigned char *) &cuda_debug_general,       sizeof (cuda_debug_general));
   extract_bin (NULL, (unsigned char *) &cuda_debug_libcudbg,      sizeof (cuda_debug_libcudbg));
   extract_bin (NULL, (unsigned char *) &cuda_debug_notifications, sizeof (cuda_debug_notifications));
   extract_bin (NULL, (unsigned char *) &cuda_notify_youngest,     sizeof (cuda_notify_youngest));
+
+  stop_signal_str = extract_string (NULL);
+  /* Be lenient towards older clients: if extra argument was not passed, use SIGTRAP */
+  cuda_stop_signal = (stop_signal_str == NULL || strcmp (stop_signal_str, "SIGTRAP")==0) ?
+                     GDB_SIGNAL_TRAP : GDB_SIGNAL_URG;
 
   append_string ("OK", buf, false);
 }

@@ -182,6 +182,15 @@ extern void ppc_collect_vsxregset (const struct regset *regset,
 
 /* Private data that this module attaches to struct gdbarch.  */
 
+/* ELF ABI version used by the inferior.  */
+enum powerpc_elf_abi
+{
+  POWERPC_ELF_AUTO,
+  POWERPC_ELF_V1,
+  POWERPC_ELF_V2,
+  POWERPC_ELF_LAST
+};
+
 /* Vector ABI used by the inferior.  */
 enum powerpc_vector_abi
 {
@@ -196,6 +205,8 @@ struct gdbarch_tdep
   {
     int wordsize;		/* Size in bytes of fixed-point word.  */
     int soft_float;		/* Avoid FP registers for arguments?  */
+
+    enum powerpc_elf_abi elf_abi;	/* ELF ABI version.  */
 
     /* How to pass vector arguments.  Never set to AUTO or LAST.  */
     enum powerpc_vector_abi vector_abi;
@@ -300,9 +311,9 @@ struct ppc_insn_pattern
   int optional;                 /* If non-zero, this insn may be absent.  */
 };
 
-extern int ppc_insns_match_pattern (CORE_ADDR pc,
+extern int ppc_insns_match_pattern (struct frame_info *frame, CORE_ADDR pc,
 				    struct ppc_insn_pattern *pattern,
-				    unsigned int *insn);
+				    unsigned int *insns);
 extern CORE_ADDR ppc_insn_d_field (unsigned int insn);
 
 extern CORE_ADDR ppc_insn_ds_field (unsigned int insn);

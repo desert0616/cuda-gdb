@@ -31,7 +31,7 @@ esac
 # CUDA files
 gdb_target_cuda_obs="cuda-api.o  cuda-autostep.o  cuda-asm.o  cuda-commands.o  cuda-context.o \
    cuda-coords.o cuda-elf-image.o  cuda-events.o  cuda-exceptions.o cuda-frame.o cuda-gdb.o \
-   cuda-iterator.o  cuda-kernel.o cuda-linux-nat.o cuda-modules.o cuda-convvars.o \
+   cuda-iterator.o  cuda-kernel.o cuda-linux-nat.o cuda-modules.o cuda-convvars.o cuda-corelow.o \
    cuda-notifications.o cuda-options.o cuda-packet-manager.o cuda-regmap.o cuda-special-register.o \
    cuda-state.o cuda-tdep.o cuda-textures.o cuda-utils.o cuda-darwin-nat.o \
    libcudbg.o libcudbgipc.o remote-cuda.o"
@@ -444,7 +444,7 @@ powerpc-*-aix* | rs6000-*-*)
 			ppc-sysv-tdep.o solib-svr4.o \
 			ravenscar-thread.o ppc-ravenscar-thread.o"
 	;;
-powerpc-*-linux* | powerpc64-*-linux*)
+powerpc*-*-linux*)
 	# Target: PowerPC running Linux
 	gdb_target_obs="rs6000-tdep.o ppc-linux-tdep.o ppc-sysv-tdep.o \
 			ppc64-tdep.o solib-svr4.o solib-spu.o \
@@ -452,6 +452,9 @@ powerpc-*-linux* | powerpc64-*-linux*)
 			glibc-tdep.o symfile-mem.o linux-tdep.o \
 			ravenscar-thread.o ppc-ravenscar-thread.o"
 	gdb_sim=../sim/ppc/libsim.a
+	if test "x$enable_cuda" = "xyes"; then
+	    gdb_target_obs="${gdb_target_cuda_obs} ${gdb_target_obs}"
+	fi
 	build_gdbserver=yes
 	;;
 powerpc-*-lynx*178)

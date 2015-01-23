@@ -50,6 +50,7 @@ extern bool cuda_debug_general;
 extern bool cuda_debug_libcudbg;
 extern bool cuda_debug_notifications;
 extern bool cuda_notify_youngest;
+extern unsigned cuda_stop_signal;
 
 struct cuda_trace_msg
 {
@@ -80,19 +81,19 @@ int  cuda_get_symbol_cache_size (void);
 
 void cuda_trace (char *fmt, ...);
 
-bool cuda_options_memcheck ();
+bool cuda_options_memcheck (void);
 
-bool cuda_options_launch_blocking ();
+bool cuda_options_launch_blocking (void);
 
-bool cuda_options_software_preemption ();
+bool cuda_options_software_preemption (void);
 
-bool cuda_options_debug_general ();
+bool cuda_options_debug_general (void);
 
-bool cuda_options_debug_libcudbg ();
+bool cuda_options_debug_libcudbg (void);
 
-bool cuda_options_debug_notifications ();
+bool cuda_options_debug_notifications (void);
 
-bool cuda_options_notify_youngest ();
+bool cuda_options_notify_youngest (void);
 
 bool cuda_check_pending_sigint (ptid_t ptid);
 
@@ -105,4 +106,7 @@ int         cuda_gdb_session_create (void);
 void        cuda_gdb_session_destroy (void);
 const char *cuda_gdb_session_get_dir (void);
 uint32_t    cuda_gdb_session_get_id (void);
+
+/* SIGTRAP vs SIGURG option */
+unsigned cuda_options_stop_signal (void);
 #endif

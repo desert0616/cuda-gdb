@@ -527,6 +527,7 @@ m:int:return_in_first_hidden_param_p:struct type *type:type::default_return_in_f
 
 m:CORE_ADDR:skip_prologue:CORE_ADDR ip:ip:0:0
 M:CORE_ADDR:skip_main_prologue:CORE_ADDR ip:ip
+M:CORE_ADDR:skip_entrypoint:CORE_ADDR ip:ip
 f:int:inner_than:CORE_ADDR lhs, CORE_ADDR rhs:lhs, rhs:0:0
 m:const gdb_byte *:breakpoint_from_pc:CORE_ADDR *pcptr, int *lenptr:pcptr, lenptr::0:
 # Return the adjusted address and kind to use for Z0/Z1 packets.

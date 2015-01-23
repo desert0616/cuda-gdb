@@ -1319,7 +1319,8 @@ quit_target (void *arg)
       cuda_cleanup();
       cuda_exception_reset (cuda_exception);
 
-      target_kill ();
+      if (target_has_execution)
+        target_kill ();
     }
 
   /* Kill or detach all inferiors.  */

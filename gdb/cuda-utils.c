@@ -483,15 +483,17 @@ struct cleanup *
 cuda_gdb_bypass_signals (void)
 {
   unsigned char *sigs;
+  unsigned cuda_stop_signal = cuda_options_stop_signal();
   int i;
 
   sigs = cuda_nat_save_gdb_signal_handlers ();
   for (i=0;i< GDB_SIGNAL_LAST; i++)
     {
-      if ( i == GDB_SIGNAL_TRAP ||
-           i == GDB_SIGNAL_KILL ||
-           i == GDB_SIGNAL_STOP ||
-           i == GDB_SIGNAL_CHLD ||
+      if ( i == cuda_stop_signal ||
+           i == GDB_SIGNAL_TRAP  ||
+           i == GDB_SIGNAL_KILL  ||
+           i == GDB_SIGNAL_STOP  ||
+           i == GDB_SIGNAL_CHLD  ||
            i >= GDB_SIGNAL_CUDA_UNKNOWN_EXCEPTION ) continue;
       signal_stop_update (i, 0);
       signal_pass_update (i, 1);

@@ -21,7 +21,9 @@
 
 #include "server.h"
 #include "linux-low.h"
+#if ! (__ANDROID__ && __aarch64__)
 #include "elf/common.h"
+#endif
 
 #include <signal.h>
 #include <sys/user.h>
@@ -619,7 +621,7 @@ aarch64_linux_set_debug_regs (const struct aarch64_debug_reg_state *state,
     }
 
   if (ptrace (PTRACE_SETREGSET, tid,
-	      watchpoint ? NT_ARM_HW_WATCH : NT_ARM_HW_BREAK,
+	      (PTRACE_ARG3_TYPE) (long) (watchpoint ? NT_ARM_HW_WATCH : NT_ARM_HW_BREAK),
 	      (void *) &iov))
     error (_("Unexpected error setting hardware debug registers"));
 }
@@ -1102,7 +1104,7 @@ ps_get_thread_area (const struct ps_prochandle *ph,
   iovec.iov_base = &reg;
   iovec.iov_len = sizeof (reg);
 
-  if (ptrace (PTRACE_GETREGSET, lwpid, NT_ARM_TLS, &iovec) != 0)
+  if (ptrace (PTRACE_GETREGSET, lwpid, (PTRACE_ARG3_TYPE)NT_ARM_TLS, &iovec) != 0)
     return PS_ERR;
 
   /* IDX is the bias from the thread pointer to the beginning of the
@@ -1202,7 +1204,7 @@ aarch64_arch_setup (void)
   iov.iov_len = sizeof (dreg_state);
 
   /* Get hardware watchpoint register info.  */
-  if (ptrace (PTRACE_GETREGSET, pid, NT_ARM_HW_WATCH, &iov) == 0
+  if (ptrace (PTRACE_GETREGSET, pid, (PTRACE_ARG3_TYPE)NT_ARM_HW_WATCH, &iov) == 0
       && AARCH64_DEBUG_ARCH (dreg_state.dbg_info) == AARCH64_DEBUG_ARCH_V8)
     {
       aarch64_num_wp_regs = AARCH64_DEBUG_NUM_SLOTS (dreg_state.dbg_info);
@@ -1222,7 +1224,7 @@ aarch64_arch_setup (void)
     }
 
   /* Get hardware breakpoint register info.  */
-  if (ptrace (PTRACE_GETREGSET, pid, NT_ARM_HW_BREAK, &iov) == 0
+  if (ptrace (PTRACE_GETREGSET, pid, (PTRACE_ARG3_TYPE)NT_ARM_HW_BREAK, &iov) == 0
       && AARCH64_DEBUG_ARCH (dreg_state.dbg_info) == AARCH64_DEBUG_ARCH_V8)
     {
       aarch64_num_bp_regs = AARCH64_DEBUG_NUM_SLOTS (dreg_state.dbg_info);

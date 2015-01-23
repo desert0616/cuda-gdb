@@ -79,18 +79,28 @@ extern "C" {
 /* Windows 32- and 64-bit */
 #define PRIx64  "I64x"
 #define PRId64  "I64d"
+#ifndef __cplusplus
 typedef unsigned char bool;
+#endif
 #undef false
 #undef true
 #define false 0
 #define true  1
 #endif
 
+/* OS-agnostic _CUDBG_INLINE */
+#if defined(_WIN32)
+#define _CUDBG_INLINE __inline
+#else
+#define _CUDBG_INLINE inline
+#endif
+
+
 /*--------------------------------- API Version ------------------------------*/
 
-#define CUDBG_API_VERSION_MAJOR       6 /* Major release version number */
-#define CUDBG_API_VERSION_MINOR       5 /* Minor release version number */
-#define CUDBG_API_VERSION_REVISION  121 /* Revision (build) number */
+#define CUDBG_API_VERSION_MAJOR       7 /* Major release version number */
+#define CUDBG_API_VERSION_MINOR       0 /* Minor release version number */
+#define CUDBG_API_VERSION_REVISION  122 /* Revision (build) number */
 
 /*---------------------------------- Constants -------------------------------*/
 
@@ -163,7 +173,7 @@ typedef enum {
     CUDBG_ERROR_INVALID_COORDINATES         = 0x0006,  /* Invalid block or thread coordinates were provided */
     CUDBG_ERROR_INVALID_MEMORY_SEGMENT      = 0x0007,  /* Invalid memory segment requested (read/write) */
     CUDBG_ERROR_INVALID_MEMORY_ACCESS       = 0x0008,  /* Requested address (+size) is not within proper segment boundaries */
-    CUDBG_ERROR_MEMORY_MAPPING_FAILED       = 0x0009,  /* Memory is not mapped and can't be mapped */
+    CUDBG_ERROR_MEMORY_MAPPING_FAILED       = 0x0009,  /* Memory is not mapped and cannot be mapped */
     CUDBG_ERROR_INTERNAL                    = 0x000a,  /* A debugger internal error occurred */
     CUDBG_ERROR_INVALID_DEVICE              = 0x000b,  /* Specified device cannot be found */
     CUDBG_ERROR_INVALID_SM                  = 0x000c,  /* Specified sm cannot be found */
@@ -171,6 +181,7 @@ typedef enum {
     CUDBG_ERROR_INVALID_LANE                = 0x000e,  /* Specified lane cannot be found */
     CUDBG_ERROR_SUSPENDED_DEVICE            = 0x000f,  /* device is suspended */
     CUDBG_ERROR_RUNNING_DEVICE              = 0x0010,  /* device is running and not suspended */
+    CUDBG_ERROR_RESERVED_0                  = 0x0011,  /* Reserved error code */
     CUDBG_ERROR_INVALID_ADDRESS             = 0x0012,  /* address is out-of-range */
     CUDBG_ERROR_INCOMPATIBLE_API            = 0x0013,  /* API version does not match */
     CUDBG_ERROR_INITIALIZATION_FAILURE      = 0x0014,  /* The CUDA Driver failed to initialize */
@@ -184,7 +195,7 @@ typedef enum {
     CUDBG_ERROR_COMMUNICATION_FAILURE       = 0x001c,  /* Communication error between the debugger and the application. */
     CUDBG_ERROR_INVALID_CONTEXT             = 0x001d,  /* Specified context cannot be found */
     CUDBG_ERROR_ADDRESS_NOT_IN_DEVICE_MEM   = 0x001e,  /* Requested address was not originally allocated from device memory (most likely visible in system memory) */
-    CUDBG_ERROR_MEMORY_UNMAPPING_FAILED     = 0x001f,  /* Memory is not unmapped and can't be unmapped */
+    CUDBG_ERROR_MEMORY_UNMAPPING_FAILED     = 0x001f,  /* Memory is not unmapped and cannot be unmapped */
     CUDBG_ERROR_INCOMPATIBLE_DISPLAY_DRIVER = 0x0020,  /* The display driver is incompatible with the API */
     CUDBG_ERROR_INVALID_MODULE              = 0x0021,  /* The specified module is not valid */
     CUDBG_ERROR_LANE_NOT_IN_SYSCALL         = 0x0022,  /* The specified lane is not inside a device syscall */
@@ -199,6 +210,61 @@ typedef enum {
     CUDBG_ERROR_AMBIGUOUS_MEMORY_ADDRESS    = 0x002b,  /* Address cannot be resolved to a GPU unambiguously */
     CUDBG_ERROR_RECURSIVE_API_CALL          = 0x002c,  /* Debug API entry point called from within a debug API callback */
 } CUDBGResult;
+
+static const char *CUDBGResultNames[45] = {
+    "CUDBG_SUCCESS",
+    "CUDBG_ERROR_UNKNOWN",
+    "CUDBG_ERROR_BUFFER_TOO_SMALL",
+    "CUDBG_ERROR_UNKNOWN_FUNCTION",
+    "CUDBG_ERROR_INVALID_ARGS",
+    "CUDBG_ERROR_UNINITIALIZED",
+    "CUDBG_ERROR_INVALID_COORDINATES",
+    "CUDBG_ERROR_INVALID_MEMORY_SEGMENT",
+    "CUDBG_ERROR_INVALID_MEMORY_ACCESS",
+    "CUDBG_ERROR_MEMORY_MAPPING_FAILED",
+    "CUDBG_ERROR_INTERNAL",
+    "CUDBG_ERROR_INVALID_DEVICE",
+    "CUDBG_ERROR_INVALID_SM",
+    "CUDBG_ERROR_INVALID_WARP",
+    "CUDBG_ERROR_INVALID_LANE",
+    "CUDBG_ERROR_SUSPENDED_DEVICE",
+    "CUDBG_ERROR_RUNNING_DEVICE",
+    "CUDBG_ERROR_RESERVED_0",
+    "CUDBG_ERROR_INVALID_ADDRESS",
+    "CUDBG_ERROR_INCOMPATIBLE_API",
+    "CUDBG_ERROR_INITIALIZATION_FAILURE",
+    "CUDBG_ERROR_INVALID_GRID",
+    "CUDBG_ERROR_NO_EVENT_AVAILABLE",
+    "CUDBG_ERROR_SOME_DEVICES_WATCHDOGGED",
+    "CUDBG_ERROR_ALL_DEVICES_WATCHDOGGED",
+    "CUDBG_ERROR_INVALID_ATTRIBUTE",
+    "CUDBG_ERROR_ZERO_CALL_DEPTH",
+    "CUDBG_ERROR_INVALID_CALL_LEVEL",
+    "CUDBG_ERROR_COMMUNICATION_FAILURE",
+    "CUDBG_ERROR_INVALID_CONTEXT",
+    "CUDBG_ERROR_ADDRESS_NOT_IN_DEVICE_MEM",
+    "CUDBG_ERROR_MEMORY_UNMAPPING_FAILED",
+    "CUDBG_ERROR_INCOMPATIBLE_DISPLAY_DRIVER",
+    "CUDBG_ERROR_INVALID_MODULE",
+    "CUDBG_ERROR_LANE_NOT_IN_SYSCALL",
+    "CUDBG_ERROR_MEMCHECK_NOT_ENABLED",
+    "CUDBG_ERROR_INVALID_ENVVAR_ARGS",
+    "CUDBG_ERROR_OS_RESOURCES",
+    "CUDBG_ERROR_FORK_FAILED",
+    "CUDBG_ERROR_NO_DEVICE_AVAILABLE",
+    "CUDBG_ERROR_ATTACH_NOT_POSSIBLE",
+    "CUDBG_ERROR_WARP_RESUME_NOT_POSSIBLE",
+    "CUDBG_ERROR_INVALID_WARP_MASK",
+    "CUDBG_ERROR_AMBIGUOUS_MEMORY_ADDRESS",
+    "CUDBG_ERROR_RECURSIVE_API_CALL"
+};
+
+static _CUDBG_INLINE const char *cudbgGetErrorString (CUDBGResult error)
+{
+    if (((unsigned)error)*sizeof(char *) >= sizeof(CUDBGResultNames))
+        return "*UNDEFINED*";
+    return CUDBGResultNames[(unsigned)error];
+}
 
 
 /*------------------------- API Error Reporting Flags -------------------------*/

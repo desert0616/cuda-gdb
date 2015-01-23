@@ -35,7 +35,7 @@
 #include "demangle.h"
 #include "regcache.h"
 #include "arch-utils.h"
-#include "cuda-builtins.h"
+#include "buildsym.h"
 #include "cuda-commands.h"
 #include "cuda-events.h"
 #include "cuda-exceptions.h"
@@ -47,10 +47,10 @@
 #include "cuda-utils.h"
 #include "cuda-packet-manager.h"
 #include "cuda-convvars.h"
-#include "gdbthread.h"
 #include "valprint.h"
 #include "command.h"
 #include "gdbcmd.h"
+#include "observer.h"
 #if defined(__linux__) && defined(GDB_NM_FILE)
 #include "linux-nat.h"
 #endif
@@ -61,8 +61,6 @@
 #define CUDA_NUM_CUDART_FRAME_ENTRIES 3
 
 static struct {
-  char *objfile_path;
-  bool created;
   struct objfile *objfile;
 } cuda_cudart_symbols;
 
@@ -316,6 +314,8 @@ cuda_sigtrap_set_silent (void)
 {
   enum gdb_signal sigtrap = gdb_signal_from_host (SIGTRAP);
 
+  if (cuda_options_stop_signal() != GDB_SIGNAL_TRAP) return;
+
   cuda_sigtrap_info.stop = signal_stop_state (sigtrap);
   cuda_sigtrap_info.print = signal_print_state (sigtrap);
   cuda_sigtrap_info.saved = true;
@@ -328,6 +328,8 @@ void
 cuda_sigtrap_restore_settings (void)
 {
   enum gdb_signal sigtrap = gdb_signal_from_host (SIGTRAP);
+
+  if (cuda_options_stop_signal() != GDB_SIGNAL_TRAP) return;
 
   if (cuda_sigtrap_info.saved)
     {
@@ -700,12 +702,17 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
   else if (cuda_breakpoint_hit_p (cuda_clock ()))
     {
       cuda_trace ("cuda_wait: stopped because of a breakpoint");
+      /* Alias received signal to SIGTRAP when hitting a trap */
       cuda_set_signo (GDB_SIGNAL_TRAP);
+      ws->value.sig = GDB_SIGNAL_TRAP;
       cuda_coords_update_current (true, false);
     }
   else if (cuda_system_is_broken (cuda_clock ()))
     {
       cuda_trace ("cuda_wait: stopped because there are broken warps (induced trap?)");
+      /* Alias received signal to SIGTRAP when hitting a breakpoint */
+      cuda_set_signo (GDB_SIGNAL_TRAP);
+      ws->value.sig = GDB_SIGNAL_TRAP;
       cuda_coords_update_current (false, false);
     }
   else if (cuda_api_get_attach_state () == CUDA_ATTACH_STATE_APP_READY)
@@ -917,7 +924,7 @@ cuda_nat_remove_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_t
   return !removed;
 }
 
-static struct gdbarch *
+struct gdbarch *
 cuda_nat_thread_architecture (struct target_ops *ops, ptid_t ptid)
 {
   if (cuda_focus_is_device ())
@@ -978,104 +985,28 @@ switch_to_cuda_thread (cuda_coords_t *coords)
   stop_pc = lane_get_virtual_pc (c.dev, c.sm, c.wp, c.ln);
 }
 
+
+static struct objfile *cuda_create_builtins_objfile (void);
+
 void
 cuda_update_cudart_symbols (void)
 {
-  int fd;
-  unsigned int *cuda_builtins = NULL;
-  size_t cuda_builtins_size = 0;
-  struct stat s;
-  char tmp_sym_file[CUDA_GDB_TMP_BUF_SIZE];
-
   /* If not done yet, create a CUDA runtime symbols file */
-  if (!cuda_cudart_symbols.created)
-    {
-      snprintf (tmp_sym_file, sizeof (tmp_sym_file),
-                "%s/builtins.XXXXXX", cuda_gdb_session_get_dir ());
-
-      if (!(fd = mkstemp (tmp_sym_file)))
-        error (_("Failed to create the cudart symbol file."));
-
-      /* Select builtins appropriate for the target architecture*/
-      if (gdbarch_bfd_arch_info(target_gdbarch())->arch == bfd_arch_arm)
-        {
-          if (gdbarch_bfd_arch_info(target_gdbarch())->bits_per_address == 32)
-            {
-              cuda_builtins = cuda_builtins_arm;
-              cuda_builtins_size = sizeof(cuda_builtins_arm);
-            }
-        }
-      else if (gdbarch_bfd_arch_info(target_gdbarch())->arch == bfd_arch_aarch64)
-        {
-          cuda_builtins = cuda_builtins_arm;
-          cuda_builtins_size = sizeof(cuda_builtins_arm);
-        }
-      else if (gdbarch_bfd_arch_info(target_gdbarch())->arch == bfd_arch_i386)
-        {
-          if (gdbarch_bfd_arch_info(target_gdbarch())->bits_per_address == 32)
-            {
-              cuda_builtins = cuda_builtins_i386;
-              cuda_builtins_size = sizeof(cuda_builtins_i386);
-            }
-          else
-            {
-              cuda_builtins = cuda_builtins_x86_64;
-              cuda_builtins_size = sizeof(cuda_builtins_x86_64);
-            }
-        }
-      else
-       error (_("Builtins not defined for the arch you are debugging."));
-
-      if (cuda_builtins && !write (fd, cuda_builtins, cuda_builtins_size))
-        error (_("Failed to write the cudart symbole file."));
-
-      close (fd);
-
-      if (stat (tmp_sym_file, &s))
-        error (_("Failed to stat the cudart symbol file."));
-
-      if (s.st_size != cuda_builtins_size)
-        error (_("The cudart symbol file size is incorrect."));
-
-      cuda_cudart_symbols.created = true;
-      cuda_cudart_symbols.objfile_path = xmalloc (strlen (tmp_sym_file) + 1);
-      strncpy (cuda_cudart_symbols.objfile_path, tmp_sym_file,
-               strlen (tmp_sym_file) + 1);
-    }
-
-  /* Load the CUDA runtime symbols */
   if (!cuda_cudart_symbols.objfile)
     {
-      cuda_cudart_symbols.objfile =
-        symbol_file_add (cuda_cudart_symbols.objfile_path,
-                         SYMFILE_DEFER_BP_RESET, NULL, 0);
-      if (!cuda_cudart_symbols.objfile)
-        error (_("Failed to add cudart symbols."));
+      cuda_cudart_symbols.objfile = cuda_create_builtins_objfile ();
     }
+
 }
 
 void
 cuda_cleanup_cudart_symbols (void)
 {
-  struct stat s;
-
-  /* Unload any loaded CUDA runtime symbols */
+  /* Free the objfile if allocated */
   if (cuda_cudart_symbols.objfile)
     {
       free_objfile (cuda_cudart_symbols.objfile);
       cuda_cudart_symbols.objfile = NULL;
-    }
-
-  /* Delete the CUDA runtime symbols file */
-  if (cuda_cudart_symbols.objfile_path &&
-      !stat (cuda_cudart_symbols.objfile_path, &s))
-    {
-      if (unlink (cuda_cudart_symbols.objfile_path))
-        error (_("Failed to remove cudart symbol file!"));
-
-      cuda_cudart_symbols.created= false;
-      xfree (cuda_cudart_symbols.objfile_path);
-      cuda_cudart_symbols.objfile_path = NULL;
     }
 }
 
@@ -1242,13 +1173,34 @@ bool cuda_debugging_enabled = false;
 /* Provide a prototype to silence -Wmissing-prototypes.  */
 extern initialize_file_ftype _initialize_cuda_nat;
 
+
+static bool
+cuda_get_cudbg_api (void)
+{
+  CUDBGAPI api = NULL;
+  CUDBGResult res;
+
+
+  res = cudbgGetAPI (CUDBG_API_VERSION_MAJOR,
+                     CUDBG_API_VERSION_MINOR,
+                     CUDBG_API_VERSION_REVISION,
+
+                     &api);
+  if (res == CUDBG_SUCCESS)
+    cuda_api_set_api (api);
+
+  cuda_api_handle_get_api_error (res);
+
+  return (res != CUDBG_SUCCESS);
+}
+
 void
 _initialize_cuda_nat (void)
 {
   struct target_ops *t = NULL;
 
   /* Check the required CUDA debugger files are present */
-  if (cuda_api_get_api ())
+  if (cuda_get_cudbg_api ())
     {
       warning ("CUDA support disabled: could not obtain the CUDA debugger API\n");
       cuda_debugging_enabled = false;
@@ -1280,6 +1232,7 @@ cuda_nat_attach (void)
   unsigned char resumeAppOnAttach;
   unsigned int timeOut = 5000000; /* 5 seconds */
   unsigned int timeElapsed = 0;
+  unsigned dev = 0;
   const unsigned int sleepTime = 1000;
   uint64_t internal_error_code;
   struct cleanup *cleanup = NULL;
@@ -1318,7 +1271,7 @@ cuda_nat_attach (void)
               "Please verify that software preemption is disabled "
               "and that nvidia-cuda-mps-server is not running."));
   if ((unsigned int)internal_error_code == CUDBG_ERROR_SOME_DEVICES_WATCHDOGGED)
-     error (_("Attaching to a process running on a watchdogged GPU is not possible.\n"
+     error (_("Attaching to process running on watchdogged GPU is not possible.\n"
               "Please repeat the attempt in console mode or "
               "restart the process with CUDA_VISIBLE_DEVICES environment variable set."));
   if (internal_error_code)
@@ -1380,6 +1333,13 @@ cuda_nat_attach (void)
       /* No data to collect, attach complete. */
       cuda_api_set_attach_state (CUDA_ATTACH_STATE_COMPLETE);
     }
+
+  /* Initialize CUDA and suspend the devices */
+  cuda_initialize ();
+  for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
+    device_suspend (dev);
+
+
 }
 
 
@@ -1480,5 +1440,136 @@ cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
 
   /* Call the host detach routine. */
   host_target_ops.to_detach (ops, args, from_tty);
+}
+
+/*
+ * CUDA builtins construction routines
+ */
+
+/* cuda_alloc_dim3_type helper routine: initializes one of the structure fields
+ * with a given name, offset and type */
+static void
+cuda_init_field (struct field *fp, const char *name, const int offs, struct type *type)
+{
+  fp->name = name;
+  fp->type = type;
+  SET_FIELD_BITPOS(*fp, offs*8);
+  FIELD_BITSIZE(*fp) = 16;
+}
+
+
+/* Allocates dim3 type as structure of 3 packed unsigned shorts: x, y and z */
+static struct type *
+cuda_alloc_dim3_type (struct objfile *objfile)
+{
+  struct type *uint32_type = builtin_type (objfile->gdbarch)->builtin_unsigned_int;
+  struct type *dim3 = NULL;
+
+  dim3 = alloc_type (objfile);
+
+  TYPE_NAME(dim3) = "dim3";
+  TYPE_LENGTH(dim3) = 12;
+  TYPE_CODE(dim3) = TYPE_CODE_STRUCT;
+
+  TYPE_NFIELDS(dim3) = 3;
+  TYPE_FIELDS(dim3) = (struct field *)TYPE_ALLOC(dim3, sizeof (struct field) * 3);
+
+  cuda_init_field (&TYPE_FIELD(dim3, 0), "x", 0, uint32_type);
+  cuda_init_field (&TYPE_FIELD(dim3, 1), "y", 4, uint32_type);
+  cuda_init_field (&TYPE_FIELD(dim3, 2), "z", 8, uint32_type);
+
+  return dim3;
+}
+
+
+/* Create symbol of a given type inside the objfile */
+static struct symbol *
+cuda_create_symbol (struct objfile *objfile, const char *name, CORE_ADDR addr, struct type *type)
+{
+  struct symbol *sym = NULL;
+  struct gdbarch *gdbarch = get_objfile_arch (objfile);
+  struct blockvector *bv = BLOCKVECTOR (objfile->symtabs);
+
+  sym = OBSTACK_ZALLOC (&objfile->objfile_obstack, struct symbol);
+
+  SYMBOL_SET_LANGUAGE (sym, language_c);
+  SYMBOL_SET_NAMES (sym, name, strlen (name), 0, objfile);
+  SYMBOL_TYPE (sym) = type;
+  SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
+  SYMBOL_CLASS (sym) = LOC_STATIC;
+  SYMBOL_VALUE_ADDRESS (sym) = addr;
+
+  /* Register symbol as global symbol with symtab */
+  SYMBOL_SYMTAB (sym) = objfile->symtabs;
+  add_symbol_to_list (sym, &global_symbols);
+  dict_add_symbol (BLOCK_DICT (BLOCKVECTOR_BLOCK (bv, GLOBAL_BLOCK)), sym);
+
+  return sym;
+}
+
+/* Symtab initialization helper routine:
+ * Allocates blockvector as well as global and static blocks inside symtab 
+ */
+static void
+cuda_alloc_blockvector (struct symtab *symtab)
+{
+  struct obstack *obstack = &symtab->objfile->objfile_obstack;
+  struct blockvector *bv;
+  struct block *bl;
+
+  bv = (struct blockvector *) obstack_alloc (obstack, sizeof(struct blockvector) + sizeof(struct block *));
+  BLOCKVECTOR_NBLOCKS (bv) = 1;
+
+  /* Allocate global block */
+  bl = allocate_global_block (obstack);
+  BLOCK_DICT (bl) = dict_create_hashed_expandable ();
+  BLOCKVECTOR_BLOCK (bv, GLOBAL_BLOCK) = bl;
+  set_block_symtab (bl, symtab);
+
+  /* Allocate static block*/
+  bl = allocate_global_block (obstack);
+  BLOCK_DICT (bl) = dict_create_hashed_expandable ();
+  BLOCKVECTOR_BLOCK (bv, STATIC_BLOCK) = bl;
+  set_block_symtab (bl, symtab);
+
+  BLOCKVECTOR (symtab) = bv;
+}
+
+/* Allocate virtual objfile and construct the following symbols inside it:
+ * threadIdx of type dim3 located at CUDBG_THREADIDX_OFFSET
+ * blockIdx of type dim3 located at CUDBG_BLOCKIDX_OFFSET
+ * blockDim of type dim3 located at CUDBG_BLOCKDIM_OFFSET
+ * threadDim of type dim3 located at CUDBG_THREADDIM_OFFSET
+ * warpSize of type int located at CUDBG_WARPSIZE_OFFSET
+ */
+static struct objfile *
+cuda_create_builtins_objfile (void)
+{
+  struct objfile *objfile = NULL;
+  struct type *int32_type = NULL;
+  struct type *dim3_type = NULL;
+  struct symtab *symtab = NULL;
+  struct blockvector *bv = NULL;
+
+  objfile = allocate_objfile (NULL, OBJF_SHARED);
+  objfile->gdbarch = cuda_get_gdbarch ();
+
+  /* Get/allocate types */
+  int32_type = builtin_type (objfile->gdbarch)->builtin_int32;
+  dim3_type = cuda_alloc_dim3_type (objfile);
+
+  symtab = allocate_symtab ("<cuda-builtins>", objfile);
+  symtab->language = language_c;
+  symtab->primary = 1;
+
+  cuda_alloc_blockvector (symtab);
+
+  cuda_create_symbol (objfile, "threadIdx", CUDBG_THREADIDX_OFFSET, dim3_type);
+  cuda_create_symbol (objfile, "blockIdx", CUDBG_BLOCKIDX_OFFSET, dim3_type);
+  cuda_create_symbol (objfile, "blockDim", CUDBG_BLOCKDIM_OFFSET, dim3_type);
+  cuda_create_symbol (objfile, "gridDim", CUDBG_GRIDDIM_OFFSET, dim3_type);
+  cuda_create_symbol (objfile, "warpSize", CUDBG_WARPSIZE_OFFSET, int32_type);
+
+  return objfile;
 }
 

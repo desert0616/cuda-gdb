@@ -72,9 +72,6 @@ typedef enum {
 
 typedef enum return_value_convention rvc_t;
 
-extern CuDim3 gridDim;
-extern CuDim3 blockDim;
-
 typedef bool (*cuda_thread_func)(cuda_coords_t *, void *);
 
 /*------------------------------ Global Variables ------------------------------*/
@@ -83,15 +80,22 @@ extern bool cuda_debugging_enabled;
 struct gdbarch * cuda_get_gdbarch (void);
 bool cuda_is_cuda_gdbarch (struct gdbarch *);
 
-extern VEC(CORE_ADDR) *cuda_kernel_entry_addresses;
+typedef struct {
+  CORE_ADDR addr;
+  elf_image_t elf_image;
+} kernel_entry_point_t;
+DEF_VEC_O(kernel_entry_point_t);
+extern VEC(kernel_entry_point_t) *cuda_kernel_entry_points;
+extern void cuda_set_current_elf_image (elf_image_t);
+
 cuda_coords_t cuda_coords_current;
 
 /* Offsets of the CUDA built-in variables */
 #define CUDBG_BUILTINS_BASE                        ((CORE_ADDR) 0)
-#define CUDBG_THREADIDX_OFFSET           (CUDBG_BUILTINS_BASE - 6)
-#define CUDBG_BLOCKIDX_OFFSET         (CUDBG_THREADIDX_OFFSET - 6)
-#define CUDBG_BLOCKDIM_OFFSET          (CUDBG_BLOCKIDX_OFFSET - 6)
-#define CUDBG_GRIDDIM_OFFSET           (CUDBG_BLOCKDIM_OFFSET - 6)
+#define CUDBG_THREADIDX_OFFSET           (CUDBG_BUILTINS_BASE - 12)
+#define CUDBG_BLOCKIDX_OFFSET         (CUDBG_THREADIDX_OFFSET - 12)
+#define CUDBG_BLOCKDIM_OFFSET          (CUDBG_BLOCKIDX_OFFSET - 12)
+#define CUDBG_GRIDDIM_OFFSET           (CUDBG_BLOCKDIM_OFFSET - 12)
 #define CUDBG_WARPSIZE_OFFSET          (CUDBG_GRIDDIM_OFFSET - 32)
 #define CUDBG_BUILTINS_MAX                 (CUDBG_WARPSIZE_OFFSET)
 
@@ -114,6 +118,7 @@ void cuda_kill (void);
 void cuda_cleanup (void);
 void cuda_final_cleanup (void *unused);
 bool cuda_initialize_target (void);
+void cuda_initialize (void);
 bool cuda_inferior_in_debug_mode (void);
 void cuda_inferior_update_suspended_devices_mask (void);
 void cuda_load_device_info (char *, struct partial_symtab *);

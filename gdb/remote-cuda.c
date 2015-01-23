@@ -432,27 +432,32 @@ cuda_remote_wait (struct target_ops *ops,
     {
       cuda_trace ("cuda_wait: stopped because of a breakpoint");
       cuda_set_signo (GDB_SIGNAL_TRAP);
+      ws->value.sig = GDB_SIGNAL_TRAP;
       cuda_coords_update_current (true, false);
     }
   else if (cuda_system_is_broken (cuda_clock ()))
     {
       cuda_trace ("cuda_wait: stopped because there are broken warps (induced trap?)");
+      cuda_set_signo (GDB_SIGNAL_TRAP);
+      ws->value.sig = GDB_SIGNAL_TRAP;
       cuda_coords_update_current (false, false);
     }
   else if (cuda_api_get_attach_state () == CUDA_ATTACH_STATE_APP_READY)
     {
       /* Finished attaching to the CUDA app.
          Preferably switch focus to a device if possible */
+      struct inferior *inf = find_inferior_pid (ptid_get_pid (r));
       cuda_trace ("cuda_wait: stopped because we attached to the CUDA app");
       cuda_api_set_attach_state (CUDA_ATTACH_STATE_COMPLETE);
-      cuda_set_signo (GDB_SIGNAL_INT);
+      inf->control.stop_soon = STOP_QUIETLY;
       cuda_coords_update_current (false, false);
     }
   else if (cuda_api_get_attach_state () == CUDA_ATTACH_STATE_DETACH_COMPLETE)
     {
       /* Finished detaching from the CUDA app. */
+      struct inferior *inf = find_inferior_pid (ptid_get_pid (r));
       cuda_trace ("cuda_wait: stopped because we detached from the CUDA app");
-      cuda_set_signo (GDB_SIGNAL_INT);
+      inf->control.stop_soon = STOP_QUIETLY;
     }
   else if (cuda_event_found)
     {
@@ -597,27 +602,22 @@ static int
 cuda_remote_insert_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_tgt)
 {
   uint32_t dev;
-  bool is_cuda_addr;
   bool inserted;
 
-  gdb_assert (host_target_ops);
-  cuda_api_is_device_code_address (bp_tgt->placed_address, &is_cuda_addr);
+  gdb_assert (bp_tgt->owner != NULL ||
+              gdbarch_bfd_arch_info (gdbarch)->arch == bfd_arch_arm ||
+              gdbarch_bfd_arch_info (gdbarch)->arch == bfd_arch_aarch64);
 
-  if (is_cuda_addr)
-    {
-      /* Insert the breakpoint on whatever device accepts it (valid address). */
-      inserted = false;
-      for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
-        {
-          if (!device_is_any_context_present (dev))
-            continue;
-
-          inserted |= cuda_api_set_breakpoint (dev, bp_tgt->placed_address);
-        }
-      return !inserted;
-    }
-  else
+  if (!bp_tgt->owner || !bp_tgt->owner->cuda_breakpoint)
     return host_target_ops->to_insert_breakpoint (gdbarch, bp_tgt);
+
+  /* Insert the breakpoint on whatever device accepts it (valid address). */
+  inserted = false;
+  for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
+    {
+      inserted |= cuda_api_set_breakpoint (dev, bp_tgt->placed_address);
+    }
+  return !inserted;
 }
 
 static int
@@ -625,28 +625,23 @@ cuda_remote_remove_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *b
 {
   uint32_t dev;
   CORE_ADDR cuda_addr;
-  bool is_cuda_addr;
   bool removed;
 
-  gdb_assert (host_target_ops);
-  cuda_api_is_device_code_address (bp_tgt->placed_address, &is_cuda_addr);
+  gdb_assert (bp_tgt->owner != NULL ||
+              gdbarch_bfd_arch_info (gdbarch)->arch == bfd_arch_arm ||
+              gdbarch_bfd_arch_info (gdbarch)->arch == bfd_arch_aarch64);
 
-  if (is_cuda_addr)
-    {
-      /* Removed the breakpoint on whatever device accepts it (valid address). */
-      removed = false;
-      for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
-        {
-          if (!device_is_any_context_present (dev))
-            continue;
-
-          /* We need to remove breakpoints even if no kernels remain on the device */
-          removed |= cuda_api_unset_breakpoint (dev, bp_tgt->placed_address);
-        }
-      return !removed;
-    }
-  else
+  if (!bp_tgt->owner || !bp_tgt->owner->cuda_breakpoint)
     return host_target_ops->to_remove_breakpoint (gdbarch, bp_tgt);
+
+  /* Removed the breakpoint on whatever device accepts it (valid address). */
+  removed = false;
+  for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
+    {
+      /* We need to remove breakpoints even if no kernels remain on the device */
+      removed |= cuda_api_unset_breakpoint (dev, bp_tgt->placed_address);
+    }
+  return !removed;
 }
 
 /* The whole Linux siginfo structure is presented to the user, but, internally,

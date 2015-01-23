@@ -85,6 +85,7 @@ typedef enum {
 bool  cuda_focus_is_device (void);
 void  cuda_coords_update_current (bool breakpoint_hit, bool exception_hit);
 void  cuda_coords_invalidate_current (void);
+void  cuda_coords_reset_current (void);
 int   cuda_coords_set_current (cuda_coords_t *c);
 int   cuda_coords_set_current_logical (uint64_t kernelId, uint64_t gridId, CuDim3 blockIdx, CuDim3 threadIdx);
 int   cuda_coords_set_current_physical (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln);

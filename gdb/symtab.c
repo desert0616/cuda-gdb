@@ -2268,14 +2268,7 @@ find_pc_sect_symtab (CORE_ADDR pc, struct obj_section *section)
 	/* In order to better support objfiles that contain both
 	   stabs and coff debugging info, we continue on if a psymtab
 	   can't be found.  */
-        /* CUDA - no psymtab-based optimization */
-        /* In CUDA objfiles, the device kernels are not allocated contiguously.
-           Therefore the memory block from BLOCK_START to BLOCK_END contains
-           holes that the objfile does not cover. Because of it, the
-           optimization below returns the wrong symtab. We simply disable it
-           for CUDA objfiles.
-         */
-	if ((objfile->flags & OBJF_REORDERED) && objfile->sf && !objfile->cuda_objfile)
+	if ((objfile->flags & OBJF_REORDERED) && objfile->sf)
 	  {
 	    struct symtab *result;
 
@@ -3033,6 +3026,8 @@ skip_prologue_sal (struct symtab_and_line *sal)
 
       /* Skip "first line" of function (which is actually its prologue).  */
       pc += gdbarch_deprecated_function_start_offset (gdbarch);
+      if (gdbarch_skip_entrypoint_p (gdbarch))
+        pc = gdbarch_skip_entrypoint (gdbarch, pc);
       if (skip)
 	pc = gdbarch_skip_prologue (gdbarch, pc);
 

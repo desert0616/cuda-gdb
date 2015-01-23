@@ -24,6 +24,7 @@
 #include "cuda-coords.h"
 #include "cuda-exceptions.h"
 #include "cuda-iterator.h"
+#include "cuda-options.h"
 #include "cuda-state.h"
 
 struct cuda_exception_st {
@@ -264,21 +265,31 @@ cuda_exception_hit_p (cuda_exception_t exception)
   if (cuda_sstep_is_active())
     {
       filter.dev = cuda_sstep_dev_id();
-      filter.sm = cuda_sstep_sm_id();
-      /* If only one bit is set in warp mask limit iteration to it */
-      if (((1LL)<<cuda_sstep_wp_id()) == cuda_sstep_wp_mask())
-        filter.wp = cuda_sstep_wp_id();
+      /* Performance optimization below is not applicable if software
+         preemption is enabled, since physical coordinates can change
+         between the steps, so the debugger must have to iterate over the
+         whole device in order to find the exception */
+      if (!cuda_options_software_preemption ())
+        {
+          filter.sm = cuda_sstep_sm_id();
+          /* If only one bit is set in warp mask limit iteration to it */
+          if (((1LL)<<cuda_sstep_wp_id()) == cuda_sstep_wp_mask())
+            filter.wp = cuda_sstep_wp_id();
+        }
     }
 
-  itr = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter,
-                               CUDA_SELECT_VALID | CUDA_SELECT_EXCPT | CUDA_SELECT_SNGL);
-  cuda_iterator_start (itr);
-  if (!cuda_iterator_end (itr))
+  if (filter.dev == CUDA_WILDCARD || device_has_exception (filter.dev))
     {
-      c = cuda_iterator_get_current (itr);
-      exception_type = lane_get_exception (c.dev, c.sm, c.wp, c.ln);
+      itr = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter,
+                                  CUDA_SELECT_VALID | CUDA_SELECT_EXCPT | CUDA_SELECT_SNGL);
+      cuda_iterator_start (itr);
+      if (!cuda_iterator_end (itr))
+        {
+          c = cuda_iterator_get_current (itr);
+          exception_type = lane_get_exception (c.dev, c.sm, c.wp, c.ln);
+        }
+      cuda_iterator_destroy (itr);
     }
-  cuda_iterator_destroy (itr);
 
   exception->coords = c;
 

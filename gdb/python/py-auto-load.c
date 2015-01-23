@@ -199,6 +199,10 @@ auto_load_section_scripts (struct objfile *objfile, const char *section_name)
   asection *scripts_sect;
   bfd_byte *data = NULL;
 
+  /* CUDA: do not search for sections in the file that does not have a physical backstore */
+  if (abfd == NULL)
+    return;
+
   scripts_sect = bfd_get_section_by_name (abfd, section_name);
   if (scripts_sect == NULL)
     return;

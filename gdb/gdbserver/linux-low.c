@@ -44,6 +44,10 @@
 #include <sys/vfs.h>
 #include <sys/uio.h>
 #include "../cuda-notifications.h"
+
+#if __ANDROID__ && __aarch64__
+#include <linux/auxvec.h>
+#endif
 bool cuda_has_resumed_devices (void);
 
 #ifndef ELFMAG0
@@ -57,6 +61,9 @@ bool cuda_has_resumed_devices (void);
 #ifdef __ANDROID__
 #undef HAVE_ELF32_AUXV_T
 #undef HAVE_ELF64_AUXV_T
+#ifdef __aarch64__
+#include <fake-aarch64-elf.h>
+#endif
 #endif
 
 #ifndef SPUFS_MAGIC
@@ -2612,6 +2619,8 @@ Check if we're already there.\n",
      thread library?  */
   if (WIFSTOPPED (w)
       && current_inferior->last_resume_kind != resume_step
+  /* CUDA - do we have an urgent message from the backend */
+      && WSTOPSIG (w) != SIGURG
       && (
 #if defined (USE_THREAD_DB) && !defined (__ANDROID__)
 	  (current_process ()->private->thread_db != NULL
@@ -4060,7 +4069,7 @@ regsets_fetch_inferior_registers (struct regcache *regcache)
       else
 	data = buf;
 #ifdef __ANDROID__
-      res = ptrace (regset->get_request, pid, (void *)nt_type, (void *)data);
+      res = ptrace (regset->get_request, pid, (void *)(long)nt_type, (void *)data);
 #elif !defined(__sparc__)
       res = ptrace (regset->get_request, pid,
 		    (PTRACE_ARG3_TYPE) (long) nt_type, data);
@@ -4136,7 +4145,7 @@ regsets_store_inferior_registers (struct regcache *regcache)
 	data = buf;
 
 #ifdef __ANDROID__
-      res = ptrace (regset->get_request, pid, (void *)nt_type, (void *)data);
+      res = ptrace (regset->get_request, pid, (void *)(long)nt_type, (void *)data);
 #elif !defined(__sparc__)
       res = ptrace (regset->get_request, pid,
 		    (PTRACE_ARG3_TYPE) (long) nt_type, data);
@@ -4151,7 +4160,7 @@ regsets_store_inferior_registers (struct regcache *regcache)
 
 	  /* Only now do we write the register set.  */
 #ifdef __ANDROID__
-      res = ptrace (regset->get_request, pid, (void *)nt_type, (void *)data);
+      res = ptrace (regset->get_request, pid, (void *)(long)nt_type, (void *)data);
 #elif !defined(__sparc__)
 	  res = ptrace (regset->set_request, pid,
 			(PTRACE_ARG3_TYPE) (long) nt_type, data);

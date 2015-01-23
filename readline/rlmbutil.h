@@ -43,7 +43,8 @@
       defined (HAVE_TOWLOWER) && \
       defined (HAVE_TOWUPPER) && \
       defined (HAVE_WCHAR_T) && \
-      defined (HAVE_WCWIDTH)
+      defined (HAVE_WCWIDTH) && \
+      !defined (__ANDROID__)
      /* system is supposed to support XPG5 */
 #    define HANDLE_MULTIBYTE      1
 #  endif

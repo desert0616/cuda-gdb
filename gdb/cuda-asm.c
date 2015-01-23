@@ -270,10 +270,14 @@ disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
   char text[INSN_MAX_LENGTH];
   bool header_found = false;
 
-  /* early exit if already cached */
   entry_pc = get_pc_function_start (pc);
+  /* Exit early if PC does not belong to the code segment */
+  if (entry_pc == 0)
+    return;
+  /* early exit if already cached */
   if (disasm_cache->cached && disasm_cache->entry_pc == entry_pc)
     return;
+
   disasm_cache_flush (disasm_cache);
   disasm_cache->cached = true;
   disasm_cache->entry_pc = entry_pc;
@@ -285,6 +289,10 @@ disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
   objfile     = cuda_elf_image_get_objfile (elf_img);
   filename    = objfile->name;
   function_name = cuda_find_function_name_from_pc (pc, false);
+
+  /* Could not disasemble outside of the symbol boundaries */
+  if (!function_name)
+    return;
 
   /* generate the dissassembled code using cuobjdump if available */
   snprintf (command, sizeof (command), "%s --function %s --dump-sass %s",

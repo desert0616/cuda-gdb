@@ -267,26 +267,35 @@ handle_autostep_device ()
   filter.gridId = CUDA_CURRENT;
   cuda_coords_evaluate_current (&filter, false);
 
-  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_WARPS, &filter,
+  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter,
     CUDA_SELECT_BKPT | CUDA_SELECT_VALID);
   old_cleanups = make_cleanup ((make_cleanup_ftype*)cuda_iterator_destroy,
     (void*)iter);
 
-  for (cuda_iterator_start (iter);
-       cuda_focus_is_device () && !cuda_iterator_end (iter);
-       cuda_iterator_next (iter))
+  cuda_iterator_start (iter);
+  while (cuda_focus_is_device () && !cuda_iterator_end (iter))
     {
-      cuda_coords_t c = cuda_iterator_get_current (iter);
+      cuda_coords_t curc, nextc, c;
+      int before_ln;
+
+      /* We look only at logical coordinates from iterator.
+         Physical coordinates can change with Software Preemption enabled
+         after each step (on all warps, not just currently stepped). */
+      curc = cuda_iterator_get_current (iter);
+      c = curc; /* This will be used as an up to date physical coordinate holder. */
+
+      /* Update physical coordinates */
+      cuda_coords_complete_physical (&c);
 
       /* Make sure the warp didn't become invalid */
       if (!warp_is_valid (c.dev, c.sm, c.wp))
-        continue;
+        goto next_warp;
 
       /* Check we're at the autostep bp */
       before_pc = warp_get_active_virtual_pc (c.dev, c.sm, c.wp);
       astep = cuda_find_autostep_by_addr (before_pc);
       if (astep == NULL || astep->enable_state != bp_enabled)
-        continue;
+        goto next_warp;
 
       /* Check that the device is Fermi or better */
       /* Must check here in case user re-enabled it */
@@ -296,20 +305,20 @@ handle_autostep_device ()
           warning ("Disabling autostep %d on device %d because autostep "
             "requires compute capability 2.0 or higher.", astep->number, c.dev);
           astep->enable_state = bp_disabled;
-          continue;
+          goto next_warp;
         }
 
       /* Check if we single step or step by lines */
       single_inst = astep->cuda_autostep_length_type == cuda_autostep_insts;
 
       /* Set focus to current warp */
-      c.ln = warp_get_lowest_active_lane (c.dev, c.sm, c.wp);
-      cuda_coords_set_current_physical (c.dev, c.sm, c.wp, c.ln);
+      before_ln = warp_get_lowest_active_lane (c.dev, c.sm, c.wp);
+      cuda_coords_set_current_physical (c.dev, c.sm, c.wp, before_ln);
 
       /* Step until we are out of the autostep range */
       remaining = astep->cuda_autostep_length;
 
-      while (remaining>0)
+      while (remaining > 0)
         {
           before_pc = warp_get_active_virtual_pc (c.dev, c.sm, c.wp);
 
@@ -327,15 +336,14 @@ handle_autostep_device ()
           /* Basically does a next/nexti */
           step_1 (false, single_inst, NULL);
 
-          /* Make sure we can continue stepping this warp */
-          if (!cuda_focus_is_device () || !warp_is_valid (c.dev, c.sm, c.wp))
+          /* Check if logical coordinates are still valid and update physical
+             coordinates. If logical coordinates are not valid, warp ran to
+             completion. */
+          if (cuda_coords_complete_physical (&c))
             break;
 
-          /* If warp changed, it means the original warp ran to completion so we
-             should move on to next warp. */
-          cuda_coords_get_current (&after_coords);
-          if (after_coords.dev != c.dev || after_coords.sm != c.sm
-              || after_coords.wp != c.wp)
+          /* Make sure we can continue stepping this warp */
+          if (!cuda_focus_is_device () || !warp_is_valid (c.dev, c.sm, c.wp))
             break;
 
           after_pc = warp_get_active_virtual_pc (c.dev, c.sm, c.wp);
@@ -350,7 +358,7 @@ handle_autostep_device ()
               if (tp && signal_pass_state (tp->suspend.stop_signal))
                 {
                   /* This is an exception */
-                  autostep_report_exception_device (c.ln, before_pc, after_pc);
+                  autostep_report_exception_device (before_ln, before_pc, after_pc);
                   cuda_set_autostep_pending (false);
                 }
               else
@@ -386,6 +394,15 @@ handle_autostep_device ()
                 }
             }
         }
+
+next_warp:
+      /* Skip to next warp (by using possibly outdated physical coordinates,
+         but sorted correctly by logical coordinates) */
+      do {
+        cuda_iterator_next (iter);
+        nextc = cuda_iterator_get_current (iter);
+      } while (cuda_focus_is_device () && !cuda_iterator_end (iter) &&
+               curc.dev == nextc.dev && curc.sm == nextc.sm && curc.wp == nextc.wp);
     }
 
   /* Mark that autostepping has been handled */

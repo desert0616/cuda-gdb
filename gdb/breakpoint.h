@@ -1638,7 +1638,7 @@ struct breakpoint *cuda_find_autostep_by_addr (CORE_ADDR address);
 bool cuda_eval_thread_at_breakpoint (uint64_t pc, cuda_coords_t *c, int b_number);
 
 /* CUDA - auto breakpoints */
-void cuda_auto_breakpoints_add_locations (elf_image_t elf_image, bool is_system);
+void cuda_auto_breakpoints_add_locations (void);
 void cuda_auto_breakpoints_remove_locations (elf_image_t elf_image);
 void cuda_auto_breakpoints_update_breakpoints (void);
 void cuda_auto_breakpoints_cleanup_breakpoints (void);

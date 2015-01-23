@@ -303,7 +303,7 @@ inf_ptrace_detach (struct target_ops *ops, char *args, int from_tty)
      previously attached to the inferior.  It *might* work if we
      started the process ourselves.  */
   errno = 0;
-  ptrace (PT_DETACH, pid, (PTRACE_TYPE_ARG3)1, (PTRACE_TYPE_ARG4)sig);
+  ptrace (PT_DETACH, pid, (PTRACE_TYPE_ARG3)1, (PTRACE_TYPE_ARG4)(long)sig);
   if (errno != 0)
     perror_with_name (("ptrace"));
 #else
@@ -382,7 +382,7 @@ inf_ptrace_resume (struct target_ops *ops,
      where it was.  If GDB wanted it to start some other way, we have
      already written a new program counter value to the child.  */
   errno = 0;
-  ptrace (request, pid, (PTRACE_TYPE_ARG3)1, (PTRACE_TYPE_ARG4)gdb_signal_to_host (signal));
+  ptrace (request, pid, (PTRACE_TYPE_ARG3)1, (PTRACE_TYPE_ARG4)(long)gdb_signal_to_host (signal));
 
   /* ptracing zombie is illegal (ptrace(PT_CONTINUE,ZOMBIE_PID) sets errno to ESRCH)
    * but POSIX endorses shooting zeroth signal at it (i.e. kill(ZOMBIE_PID,0)==0) */

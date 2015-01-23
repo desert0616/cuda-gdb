@@ -2459,6 +2459,17 @@ svr4_android_find_and_open_solib (char *soname, unsigned flags, char **temp_name
         return rc;
     }
 
+#ifdef __aarch64__
+  /* Search for the library in system folders: /vendor/lib64 and /system/lib64 */
+  rc = openp ("/vendor/lib64", 0, soname, flags, temp_name);
+  if (rc >= 0)
+    return rc;
+
+  rc = openp ("/system/lib64", 0, soname, flags, temp_name);
+  if (rc >= 0)
+    return rc;
+#endif
+
   /* Search for the library in system folders: /vendor/lib and /system/lib */
   rc = openp ("/vendor/lib", 0, soname, flags, temp_name);
   if (rc >= 0)

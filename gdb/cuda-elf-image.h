@@ -45,6 +45,7 @@ elf_image_t      cuda_elf_image_get_next         (elf_image_t elf_image);
 
 bool             cuda_elf_image_is_loaded        (elf_image_t elf_image);
 bool             cuda_elf_image_uses_abi         (elf_image_t elf_image);
+bool             cuda_elf_image_is_system        (elf_image_t elf_image);
 
 void             cuda_elf_image_save             (elf_image_t elf_image, void *image);
 void             cuda_elf_image_load             (elf_image_t elf_image, bool is_system);

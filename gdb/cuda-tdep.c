@@ -292,7 +292,6 @@ cuda_find_function_name_from_pc (CORE_ADDR pc, bool demangle)
 {
   char *demangled = NULL;
   const char *name = NULL;
-  static char *unknown = "??";
   struct symbol *kernel = NULL;
   enum language lang = language_unknown;
   struct minimal_symbol *msymbol = lookup_minimal_symbol_by_pc (pc);
@@ -316,9 +315,11 @@ cuda_find_function_name_from_pc (CORE_ADDR pc, bool demangle)
       lang = SYMBOL_LANGUAGE (msymbol);
     }
 
-  /* process the mangled name */
+  /* Return early, if name is not found */
   if (!name)
-    return unknown;
+    return name;
+
+  /* process the mangled name */
   else if (demangle)
     {
       demangled = language_demangle (language_def (lang), name, DMGL_ANSI);
@@ -1086,7 +1087,7 @@ cuda_cleanup ()
   cuda_system_cleanup_breakpoints ();
   cuda_cleanup_cudart_symbols ();
   cuda_cleanup_tex_maps ();
-  cuda_coords_invalidate_current ();
+  cuda_coords_reset_current ();
   cuda_system_cleanup_contexts ();
   if (cuda_initialized)
     cuda_system_finalize ();
@@ -1172,7 +1173,7 @@ cuda_initialize_uvm_detection (void)
 
 /* Initialize the CUDA debugger API and collect the static data about
    the devices. Once per application run. */
-static void
+void
 cuda_initialize (void)
 {
   if (cuda_initialized)
@@ -1404,7 +1405,14 @@ cuda_print_lmem_address_type (void)
 #define STO_CUDA_MANAGED      4     /* CUDA - managed variables */
 #define STO_CUDA_ENTRY     0x10     /* CUDA - break_on_launch */
 
-VEC(CORE_ADDR) *cuda_kernel_entry_addresses = NULL;
+VEC(kernel_entry_point_t) *cuda_kernel_entry_points = NULL;
+static elf_image_t cuda_current_elf_image = NULL;
+
+void
+cuda_set_current_elf_image (elf_image_t img)
+{
+  cuda_current_elf_image = img;
+}
 
 static void
 cuda_elf_make_msymbol_special (asymbol *sym, struct minimal_symbol *msym)
@@ -1418,7 +1426,11 @@ cuda_elf_make_msymbol_special (asymbol *sym, struct minimal_symbol *msym)
 
   /* break_on_launch */
   if (((elf_symbol_type *) sym)->internal_elf_sym.st_other == STO_CUDA_ENTRY)
-    VEC_safe_push (CORE_ADDR, cuda_kernel_entry_addresses, SYMBOL_VALUE_ADDRESS(msym));
+    {
+      kernel_entry_point_t new_entry = { SYMBOL_VALUE_ADDRESS(msym),
+                                         cuda_current_elf_image };
+      VEC_safe_push (kernel_entry_point_t, cuda_kernel_entry_points, &new_entry);
+    }
 }
 
 /* Temporary: intercept memory addresses when accessing known
@@ -1431,8 +1443,6 @@ read_cudart_variable (uint64_t address, void * buffer, unsigned amount)
   CuDim3 block_idx, grid_dim;
   uint32_t num_lanes;
   uint32_t dev_id, sm_id, wp_id, ln_id;
-  struct {short x,y,z;} short_thread_idx, short_block_dim;
-  struct {short x,y,z;} short_block_idx, short_grid_dim;
   kernel_t kernel;
 
   if (address < CUDBG_BUILTINS_MAX)
@@ -1446,39 +1456,27 @@ read_cudart_variable (uint64_t address, void * buffer, unsigned amount)
   if (CUDBG_THREADIDX_OFFSET <= address)
     {
       thread_idx = lane_get_thread_idx (dev_id, sm_id, wp_id, ln_id);
-      short_thread_idx.x = (short) thread_idx.x;
-      short_thread_idx.y = (short) thread_idx.y;
-      short_thread_idx.z = (short) thread_idx.z;
-      memcpy (buffer, (char*)&short_thread_idx +
+      memcpy (buffer, (char*)&thread_idx +
              (int64_t)address - CUDBG_THREADIDX_OFFSET, amount);
     }
   else if (CUDBG_BLOCKIDX_OFFSET <= address)
     {
       block_idx = warp_get_block_idx (dev_id, sm_id, wp_id);
-      short_block_idx.x = (short) block_idx.x;
-      short_block_idx.y = (short) block_idx.y;
-      short_block_idx.z = (short) block_idx.z;
-      memcpy (buffer, (char*)&short_block_idx
+      memcpy (buffer, (char*)&block_idx
              + (int64_t)address - CUDBG_BLOCKIDX_OFFSET, amount);
     }
   else if (CUDBG_BLOCKDIM_OFFSET <= address)
     {
       kernel = warp_get_kernel (dev_id, sm_id, wp_id);
       block_dim = kernel_get_block_dim (kernel);
-      short_block_dim.x = (short) block_dim.x;
-      short_block_dim.y = (short) block_dim.y;
-      short_block_dim.z = (short) block_dim.z;
-      memcpy (buffer, (char*)&short_block_dim
+      memcpy (buffer, (char*)&block_dim
              + (int64_t)address - CUDBG_BLOCKDIM_OFFSET, amount);
     }
   else if (CUDBG_GRIDDIM_OFFSET <= address)
     {
       kernel = warp_get_kernel (dev_id, sm_id, wp_id);
       grid_dim = kernel_get_grid_dim (kernel);
-      short_grid_dim.x = (short) grid_dim.x;
-      short_grid_dim.y = (short) grid_dim.y;
-      short_grid_dim.z = (short) grid_dim.z;
-      memcpy (buffer, (char*)&short_grid_dim
+      memcpy (buffer, (char*)&grid_dim
              + (int64_t)address - CUDBG_GRIDDIM_OFFSET, amount);
     }
   else if (CUDBG_WARPSIZE_OFFSET <= address)
@@ -1817,23 +1815,25 @@ cuda_control_flow_instruction (const char *inst, bool skip_subroutines)
   if (strstr(inst, "BRA")!=0) return true;
   if (strstr(inst, "BRK")!=0) return true;
   if (strstr(inst, "NOP.S")!=0) return true;
+  if (strstr(inst, "SYNC")!=0) return true;
   if (strstr(inst, "EXIT")!=0) return true;
   if (strstr(inst, "RET")!=0) return true;
   if (strstr(inst, "JMP")!=0) return true;
   if (strstr(inst, "JCAL")!=0 && !skip_subroutines) return true;
+  if (strstr(inst, "CAL")!=0 && !skip_subroutines) return true;
 
   return false;
 }
 static bool
 cuda_sstep_fast (ptid_t ptid)
 {
-  uint32_t dev_id, sm_id,i;
+  uint32_t dev_id, sm_id, wp_id, i;
   struct thread_info *tp = inferior_thread();
   kernel_t kernel = cuda_current_kernel ();
   struct address_space *aspace = NULL;
   const char *inst;
   uint32_t inst_size;
-  uint64_t pc, end_pc, adj_pc;
+  uint64_t active_pc, pc, end_pc, adj_pc;
   bool skip_subroutines, rc;
 
   if (!cuda_options_single_stepping_optimizations_enabled ())
@@ -1858,7 +1858,7 @@ cuda_sstep_fast (ptid_t ptid)
 
   skip_subroutines = tp->control.step_over_calls == STEP_OVER_ALL;
 
-  cuda_coords_get_current_physical (&dev_id, &sm_id, NULL, NULL);
+  cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
   end_pc = pc = get_frame_pc (get_current_frame ());
 
   /* Iterate over instructions until the end of the step/next line range */
@@ -1902,10 +1902,15 @@ cuda_sstep_fast (ptid_t ptid)
        __func__, (long long)pc, (long long)end_pc,
        (inst == NULL || strlen(inst)> 20) ? 20 : (int)strlen(inst), inst);
 
-  /* If breakpoint is set at the current PC - unset it*/
+  /* If breakpoint is set at the current (or current active) PC - temporarily unset it*/
   aspace = target_thread_address_space (ptid);
+  active_pc = warp_get_active_virtual_pc (dev_id, sm_id, wp_id);
+
   if (breakpoint_here_p (aspace, pc))
     cuda_api_unset_breakpoint (dev_id, pc);
+
+  if (active_pc != pc && breakpoint_here_p (aspace, active_pc))
+    cuda_api_unset_breakpoint (dev_id, active_pc);
 
   /* Resume warp(s) until one of the lanes reaches end_pc */
   rc = warps_resume_until (dev_id, sm_id, cuda_sstep_info.warp_mask, end_pc);
@@ -1913,6 +1918,9 @@ cuda_sstep_fast (ptid_t ptid)
   /* Reset the breakpoint if warps_resume_until call failed */
   if (!rc && breakpoint_here_p (aspace, pc))
     cuda_api_set_breakpoint (dev_id, pc);
+
+  if (!rc && active_pc != pc && breakpoint_here_p (aspace, active_pc))
+    cuda_api_set_breakpoint (dev_id, active_pc);
 
   return rc;
 }

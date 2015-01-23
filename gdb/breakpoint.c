@@ -8053,6 +8053,37 @@ cuda_reset_invalid_breakpoint_location_section (struct objfile *objfile)
       loc->section = NULL;
 }
 
+static void
+cuda_remove_duplicate_locations (struct bp_location *promoted_loc, struct breakpoint *b)
+{
+  struct bp_location *loc = NULL;
+  struct bp_location **ploc = NULL;
+
+  /* Check if there is another location with the same address */
+  for (loc = b->loc; loc != NULL; loc = loc->next)
+    if (loc != promoted_loc && loc->address == promoted_loc->address)
+      break;
+  if (!loc)
+    return;
+
+  /* If that is the case, remove promoted location from breakpoint location chain */
+  for (ploc = &b->loc; *ploc ; ploc = &(*ploc)->next)
+    if (*ploc == promoted_loc)
+      break;
+
+  gdb_assert (*ploc == promoted_loc);
+
+  cuda_trace_breakpoint ("Removing promoted breakpoint location to avoid duplication");
+  *ploc = promoted_loc->next;
+
+  /* If another location type is yet not set, copy it from promoted location */
+  if (loc->cuda.type == cuda_bp_none)
+    memcpy(&loc->cuda, &promoted_loc->cuda, sizeof loc->cuda);
+
+  memset (&promoted_loc->cuda, 0, sizeof loc->cuda);
+  update_global_location_list (0);
+}
+
 void
 cuda_resolve_breakpoints (int bp_number_from, elf_image_t elf_image)
 {
@@ -8061,7 +8092,7 @@ cuda_resolve_breakpoints (int bp_number_from, elf_image_t elf_image)
   struct bp_location *loc = NULL;
   struct bp_location *promoted_loc = NULL;
   struct bp_location *created_loc = NULL;
-  struct bp_location **ploc = NULL;
+  bool locations_promoted = false;
   struct cleanup *cleanups = NULL;
   char *message = NULL;
 
@@ -8099,33 +8130,23 @@ cuda_resolve_breakpoints (int bp_number_from, elf_image_t elf_image)
       cuda_clean_shadow_host_breakpoints (b, elf_image);
 
       /* Promote existing host breakpoints to device breakpoints if possible */
-      for (loc = b->loc, promoted_loc = NULL; loc && !promoted_loc; loc = loc->next)
-        promoted_loc = cuda_promote_location (loc, elf_image);
-      if (promoted_loc)
+      loc = b->loc;
+      locations_promoted = false;
+      while (loc)
         {
-          /* Check if there is another location with the same address */
-          for (loc = b->loc; loc != NULL; loc = loc->next)
-            if (loc != promoted_loc && loc->address == promoted_loc->address)
-              break;
-          if (!loc)
-            continue;
-
-          /* If that is the case, remove promoted location from breakpoint location chain */
-          for (ploc = &b->loc; *ploc ; ploc = &(*ploc)->next)
-            if (*ploc == promoted_loc)
-              break;
-
-          gdb_assert (*ploc == promoted_loc);
-
-          cuda_trace_breakpoint ("Removing promoted breakpoint location to avoid duplication");
-          *ploc = promoted_loc->next;
-          /* If another location type is yet not set, copy it from promoted location */
-          if (loc->cuda.type == cuda_bp_none)
-            memcpy(&loc->cuda, &promoted_loc->cuda, sizeof loc->cuda);
-          memset (&promoted_loc->cuda, 0, sizeof loc->cuda);
-          update_global_location_list (0);
-          continue;
+          promoted_loc = cuda_promote_location (loc, elf_image);
+          if (promoted_loc)
+            {
+              cuda_remove_duplicate_locations (promoted_loc, b);
+              locations_promoted = true;
+              loc = b->loc;
+             continue;
+            }
+          loc = loc->next;
         }
+      /* Do not create new locations, if there were promotions. */
+      if (locations_promoted)
+        continue;
 
       /* Create a device location from scratch:
           - if the breakpoint is still pending (happens when __forceinline__ is
@@ -16888,10 +16909,10 @@ all_tracepoints (void)
 }
 
 static void
-cuda_auto_breakpoints_add_location (elf_image_t elf_image, CORE_ADDR addr, bool is_system)
+cuda_auto_breakpoints_add_location (elf_image_t elf_image, CORE_ADDR addr)
 {
   struct bp_location *loc;
-  struct breakpoint **bp = is_system
+  struct breakpoint **bp = cuda_elf_image_is_system (elf_image)
                          ? &cuda_auto_breakpoints_bp_system
                          : &cuda_auto_breakpoints_bp_application;
   struct gdbarch *cuda_gdbarch;
@@ -16963,21 +16984,38 @@ cuda_auto_breakpoints_remove_locations_from_bp (struct breakpoint *bp, elf_image
 }
 
 void
-cuda_auto_breakpoints_add_locations (elf_image_t elf_image, bool is_system)
+cuda_auto_breakpoints_add_locations (void)
 {
-  CORE_ADDR kern_addr;
+  kernel_entry_point_t *kern_entry;
   unsigned int ix;
 
   /* auto breakpoints */
-  for (ix = 0; VEC_iterate (CORE_ADDR, cuda_kernel_entry_addresses, ix, kern_addr); ix++)
-    cuda_auto_breakpoints_add_location (elf_image, kern_addr, is_system);
-  VEC_truncate (CORE_ADDR, cuda_kernel_entry_addresses, 0);
+  for (ix = 0; VEC_iterate (kernel_entry_point_t, cuda_kernel_entry_points, ix, kern_entry); ix++)
+    cuda_auto_breakpoints_add_location (kern_entry->elf_image, kern_entry->addr);
+  VEC_truncate (kernel_entry_point_t, cuda_kernel_entry_points, 0);
   cuda_auto_breakpoints_update_breakpoints ();
 }
 
 void
 cuda_auto_breakpoints_remove_locations (elf_image_t elf_image)
 {
+  kernel_entry_point_t *kern_entry;
+  unsigned ix, start=0, len=0;
+  bool repeat;
+
+  /* Remove still not-installed breakpoints from cuda_kernel_entry_points list */
+  /* It is safe to assume that breakpoints in the vector are grouped by elf_pointer
+   * i.e. can be removed as a single block */
+  for (ix = 0; VEC_iterate (kernel_entry_point_t, cuda_kernel_entry_points, ix, kern_entry); ix++)
+    if (kern_entry->elf_image == elf_image)
+      {
+        if (len++ == 0) start = ix;
+      }
+    else if (len != 0) break;
+
+  if (len > 0)
+    VEC_block_remove (kernel_entry_point_t, cuda_kernel_entry_points, start, len);
+
   cuda_auto_breakpoints_remove_locations_from_bp (cuda_auto_breakpoints_bp_system, elf_image);
   cuda_auto_breakpoints_remove_locations_from_bp (cuda_auto_breakpoints_bp_application, elf_image);
   update_global_location_list (0);
@@ -17028,6 +17066,8 @@ cuda_auto_breakpoints_cleanup_breakpoints (void)
 
   if (cuda_auto_breakpoints_bp_application)
     delete_breakpoint (cuda_auto_breakpoints_bp_application);
+
+  VEC_truncate (kernel_entry_point_t, cuda_kernel_entry_points, 0);
 }
 
 

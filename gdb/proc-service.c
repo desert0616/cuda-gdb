@@ -30,7 +30,11 @@
 #ifndef __ANDROID__
 #include <sys/procfs.h>
 #else
+#ifdef __aarch64__
+#include <fake-aarch64-elf.h>
+#else
 #include <asm/elf.h>
+#endif
 #include <thread_db.h>
 #endif
 

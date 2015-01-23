@@ -44,6 +44,7 @@
 #include "observer.h"
 #include "auxv.h"
 #include "elf/common.h"
+#include "elf/ppc64.h"
 #include "exceptions.h"
 #include "arch-utils.h"
 #include "spu-tdep.h"
@@ -360,7 +361,7 @@ ppc_skip_trampoline_code (struct frame_info *frame, CORE_ADDR pc)
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   CORE_ADDR target = 0;
 
-  if (ppc_insns_match_pattern (pc, powerpc32_plt_stub, insnbuf))
+  if (ppc_insns_match_pattern (frame, pc, powerpc32_plt_stub, insnbuf))
     {
       /* Insn pattern is
 		lis   r11, xxxx
@@ -372,7 +373,7 @@ ppc_skip_trampoline_code (struct frame_info *frame, CORE_ADDR pc)
       target = read_memory_unsigned_integer (target, 4, byte_order);
     }
 
-  if (ppc_insns_match_pattern (pc, powerpc32_plt_stub_so, insnbuf))
+  if (ppc_insns_match_pattern (frame, pc, powerpc32_plt_stub_so, insnbuf))
     {
       /* Insn pattern is
 		lwz   r11, xxxx(r30)
@@ -875,6 +876,43 @@ ppc_linux_core_read_description (struct gdbarch *gdbarch,
     }
 }
 
+/* If the ELF symbol has a local entry point, use it as SYMBOL_VALUE_ADDRESS
+   for the msymbol.  This matches the DWARF function start if present.  */
+
+static void
+ppc_elfv2_elf_make_msymbol_special (asymbol *sym, struct minimal_symbol *msym)
+{
+  elf_symbol_type *elf_sym = (elf_symbol_type *)sym;
+  switch (PPC64_LOCAL_ENTRY_OFFSET (elf_sym->internal_elf_sym.st_other))
+    {
+    default:
+      break;
+    case 8:
+      MSYMBOL_TARGET_FLAG_1 (msym) = 1;
+      break;
+    }
+}
+
+static CORE_ADDR
+ppc_elfv2_skip_entrypoint (struct gdbarch *gdbarch, CORE_ADDR pc)
+{
+  struct minimal_symbol *minsym;
+  int local_entry_offset = 0;
+
+  minsym = lookup_minimal_symbol_by_pc (pc);
+  if (minsym == NULL)
+    return pc;
+
+  if (MSYMBOL_TARGET_FLAG_1 (minsym))
+    local_entry_offset = 8;
+
+  if (SYMBOL_VALUE_ADDRESS (minsym) <= pc
+      && pc < SYMBOL_VALUE_ADDRESS (minsym) + local_entry_offset)
+    return SYMBOL_VALUE_ADDRESS (minsym) + local_entry_offset;
+
+  return pc;
+}
+
 /* Implementation of `gdbarch_stap_is_single_operand', as defined in
    gdbarch.h.  */
 
@@ -1331,13 +1369,23 @@ ppc_linux_init_abi (struct gdbarch_info info,
   
   if (tdep->wordsize == 8)
     {
-      /* Handle PPC GNU/Linux 64-bit function pointers (which are really
-	 function descriptors).  */
-      set_gdbarch_convert_from_func_ptr_addr
-	(gdbarch, ppc64_convert_from_func_ptr_addr);
+      if (tdep->elf_abi == POWERPC_ELF_V1)
+	{
+	  /* Handle PPC GNU/Linux 64-bit function pointers (which are really
+	     function descriptors).  */
+	  set_gdbarch_convert_from_func_ptr_addr
+	    (gdbarch, ppc64_convert_from_func_ptr_addr);
 
-      set_gdbarch_elf_make_msymbol_special (gdbarch,
-					    ppc64_elf_make_msymbol_special);
+	  set_gdbarch_elf_make_msymbol_special
+	    (gdbarch, ppc64_elf_make_msymbol_special);
+	}
+      else
+	{
+	  set_gdbarch_elf_make_msymbol_special
+	    (gdbarch, ppc_elfv2_elf_make_msymbol_special);
+
+	  set_gdbarch_skip_entrypoint (gdbarch, ppc_elfv2_skip_entrypoint);
+	}
 
       /* Shared library handling.  */
       set_gdbarch_skip_trampoline_code (gdbarch, ppc64_skip_trampoline_code);

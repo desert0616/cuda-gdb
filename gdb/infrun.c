@@ -3247,6 +3247,10 @@ fill_in_stop_func (struct gdbarch *gdbarch,
       ecs->stop_func_start
 	+= gdbarch_deprecated_function_start_offset (gdbarch);
 
+      if (gdbarch_skip_entrypoint_p (gdbarch))
+	ecs->stop_func_start = gdbarch_skip_entrypoint (gdbarch,
+							ecs->stop_func_start);
+
       ecs->stop_func_filled_in = 1;
     }
 }
@@ -6841,6 +6845,9 @@ siginfo_value_read (struct value *v)
       int signo;
 
       memcpy (&signo, contents, sizeof(int));
+      /* Map signo from OS specific to GDBs encoding */
+      signo = gdb_signal_from_host (signo);
+
       if (signo != GDB_SIGNAL_SEGV && signo != GDB_SIGNAL_BUS)
         return;
       signo = cuda_get_signo();

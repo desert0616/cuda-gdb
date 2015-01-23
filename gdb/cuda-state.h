@@ -51,11 +51,11 @@ uint32_t    device_get_num_predicates      (uint32_t dev_id);
 uint32_t    device_get_num_kernels         (uint32_t dev_id);
 uint32_t    device_get_pci_bus_id          (uint32_t dev_id);
 uint32_t    device_get_pci_dev_id          (uint32_t dev_id);
-void        device_filter_exception_state  (uint32_t dev_id);
 
 bool        device_is_valid                (uint32_t dev_id);
 bool        device_is_any_context_present  (uint32_t dev_id);
 bool        device_is_active_context       (uint32_t dev_id, context_t context);
+bool        device_has_exception           (uint32_t dev_id);
 uint64_t    device_get_active_sms_mask     (uint32_t dev_id);
 contexts_t  device_get_contexts            (uint32_t dev_id);
 
@@ -69,6 +69,7 @@ void        device_invalidate (uint32_t dev_id);
 
 /* SM State */
 bool        sm_is_valid                    (uint32_t dev_id, uint32_t sm_id);
+bool        sm_has_exception               (uint32_t dev_id, uint32_t sm_id);
 uint64_t    sm_get_valid_warps_mask        (uint32_t dev_id, uint32_t sm_id);
 uint64_t    sm_get_broken_warps_mask       (uint32_t dev_id, uint32_t sm_id);
 

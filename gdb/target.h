@@ -1841,7 +1841,7 @@ int target_verify_memory (const gdb_byte *data,
 
    pop_target:   Remove the top thing on the stack of current targets.  */
 
-extern void add_target (struct target_ops *);
+extern struct cmd_list_element *add_target (struct target_ops *);
 
 /* Adds a command ALIAS for target T and marks it deprecated.  This is useful
    for maintaining backwards compatibility when renaming targets.  */

@@ -386,7 +386,7 @@ target_has_execution_current (void)
 
 /* Add a possible target architecture to the list.  */
 
-void
+struct cmd_list_element *
 add_target (struct target_ops *t)
 {
   /* Provide default values for all "must have" methods.  */
@@ -431,7 +431,7 @@ Remaining arguments are interpreted by the target protocol.  For more\n\
 information on the arguments for a particular protocol, type\n\
 `help target ' followed by the protocol name."),
 		    &targetlist, "target ", 0, &cmdlist);
-  add_cmd (t->to_shortname, no_class, t->to_open, t->to_doc, &targetlist);
+  return add_cmd (t->to_shortname, no_class, t->to_open, t->to_doc, &targetlist);
 }
 
 /* See target.h.  */

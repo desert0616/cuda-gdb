@@ -60,6 +60,9 @@ typedef void *psaddr_t;
 #endif
 
 #ifndef HAVE_PRGREGSET_T
+#if __ANDROID__ && __aarch64__
+#include <fake-aarch64-elf.h>
+#endif
 typedef elf_gregset_t prgregset_t;
 #endif
 

@@ -156,11 +156,11 @@ cuda_iterator_step (cuda_iterator itr)
       if (filter && !cuda_val_matches (filter->dev, c->dev))
         continue;
 
-      if (at_exception)
-        device_filter_exception_state (c->dev);
-
       for (; c->sm < device_get_num_sms (c->dev); ++c->sm)
         {
+          if (at_exception && !sm_has_exception(c->dev, c->sm))
+            continue;
+
           if (filter && !cuda_val_matches (filter->sm, c->sm))
             continue;
 
