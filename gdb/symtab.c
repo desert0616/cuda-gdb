@@ -5079,6 +5079,40 @@ skip_prologue_using_sal (struct gdbarch *gdbarch, CORE_ADDR func_addr)
     return prologue_sal.pc;
 }
 
+
+/* Maintain the list of all possible names of MAIN routine throughout the gdb's lifetime */
+/* Because, pointers returned by main_name() should never become invalid */
+struct names_of_main_st {
+  char *name;
+  struct names_of_main_st *next;
+};
+static struct names_of_main_st *names_of_main = NULL;
+
+static char *find_or_alloc_names_of_main(const char *name)
+{
+  struct names_of_main_st *ptr = names_of_main;
+
+  /* No point in caching NULLs*/
+  if (name == NULL)
+    return (char *)name;
+
+  /* Search for the copy of name in the existing list of pointers */
+  while (ptr)
+    {
+      if (strcmp(ptr->name, name) == 0)
+        return ptr->name;
+      ptr = ptr->next;
+    }
+
+  /* If name was not found in the list, allocate new entry in names_of_main list */
+  ptr = malloc (sizeof (struct names_of_main_st));
+  ptr->name = xstrdup (name);
+  ptr->next = names_of_main;
+  names_of_main = ptr;
+
+  return ptr->name;
+}
+
 /* Track MAIN */
 static char *name_of_main;
 enum language language_of_main = language_unknown;
@@ -5088,13 +5122,13 @@ set_main_name (const char *name)
 {
   if (name_of_main != NULL)
     {
-      xfree (name_of_main);
       name_of_main = NULL;
       language_of_main = language_unknown;
     }
+
   if (name != NULL)
     {
-      name_of_main = xstrdup (name);
+      name_of_main = find_or_alloc_names_of_main (name);
       language_of_main = language_unknown;
     }
 }

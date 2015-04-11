@@ -293,6 +293,7 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
+AM_CFLAGS = -I$(srcdir)/../include
 lib_LIBRARIES = libcudacore.a
 libcudacore_a_SOURCES = cudacore.c cudaapi.c elf.c
 all: all-am

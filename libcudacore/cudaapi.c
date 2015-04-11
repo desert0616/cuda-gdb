@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2014-2015 NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,7 +31,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
-#include <unistd.h>
 
 #include "common.h"
 
@@ -252,7 +251,7 @@ DEF_API_CALL(readGlobalMemory)(uint64_t addr, void *buf, uint32_t sz)
 	if (cuCoreReadSectionData(memorySeg->e, memorySeg->scn, &data) != 0)
 		return CUDBG_ERROR_UNKNOWN;
 
-	memcpy(buf, data.d_buf + (addr - memorySeg->address), sz);
+	memcpy(buf, (char *)data.d_buf + (addr - memorySeg->address), sz);
 
 	return CUDBG_SUCCESS;
 
@@ -278,7 +277,7 @@ DEF_API_CALL(readSharedMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 	if (data.d_size < addr || sz > data.d_size - addr)
 		return CUDBG_ERROR_INVALID_MEMORY_ACCESS;
 
-	memcpy(buf, data.d_buf + addr, sz);
+	memcpy(buf, (char *)data.d_buf + addr, sz);
 
 	return CUDBG_SUCCESS;
 }
@@ -314,7 +313,7 @@ DEF_API_CALL(readLocalMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 	if (data.d_size < offset || sz > data.d_size - offset)
 		return CUDBG_ERROR_INVALID_MEMORY_ACCESS;
 
-	memcpy(buf, data.d_buf + offset, sz);
+	memcpy(buf, (char *)data.d_buf + offset, sz);
 
 	return CUDBG_SUCCESS;
 }
@@ -388,7 +387,7 @@ DEF_API_CALL(readParamMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 	if (data.d_size < offset || sz > data.d_size - offset)
 		return CUDBG_ERROR_INVALID_MEMORY_ACCESS;
 
-	memcpy(buf, data.d_buf + offset, sz);
+	memcpy(buf, (char *)data.d_buf + offset, sz);
 
 	return CUDBG_SUCCESS;
 }
@@ -734,7 +733,7 @@ DEF_API_CALL(readRegisterRange)(uint32_t devId, uint32_t sm, uint32_t wp,
 	if (size > data.d_size - offset)
 		size = data.d_size - offset;
 
-	memcpy(registers, data.d_buf + offset, size);
+	memcpy(registers, (char *)data.d_buf + offset, size);
 
 	return rc;
 }
@@ -1164,7 +1163,7 @@ DEF_API_CALL(isDeviceCodeAddress)(uintptr_t addr, bool *isDeviceAddress)
 		PTR2CS(NULL),
 	};
 
-	TRACE_FUNC("addr=0x%llx isDeviceAddress=%p", addr, isDeviceAddress);
+	TRACE_FUNC("addr=0x%llx isDeviceAddress=%p", (unsigned long long)addr, isDeviceAddress);
 
 	VERIFY_ARG(isDeviceAddress);
 
@@ -1394,19 +1393,19 @@ DEF_API_CALL(disassemble)(uint32_t dev, uint64_t addr, uint32_t *instSize,
 
 	DPRINTF(30, "Instruction at 0x%llx: 0x%llx\n", addr, inst);
 
-	snprintf(tmpFilename, sizeof(tmpFilename), DISASM_TMP_TEMPLATE);
+	_SNPRINTF(tmpFilename, sizeof(tmpFilename), DISASM_TMP_TEMPLATE);
 	tmpFd = mkstemp(tmpFilename);
 	VERIFY(tmpFd != -1, CUDBG_ERROR_UNKNOWN, "Call to mkstemp failed.");
 	VERIFY(write(tmpFd, (void *)&inst, sizeof(inst)) == sizeof(inst),
 	       CUDBG_ERROR_UNKNOWN, "Write to temporary file failed");
 	close(tmpFd);
 
-	snprintf(command, sizeof(command), "nvdisasm -raw -b SM%u%u %s",
+	_SNPRINTF(command, sizeof(command), "nvdisasm -raw -b SM%u%u %s",
 		 dte->smMajor, dte->smMinor, tmpFilename);
 
 	DPRINTF(30, "Running command '%s'.\n", command);
 
-	f = popen(command, "r");
+	f = _POPEN(command, "r");
 	if (!f) {
 		unlink(tmpFilename);
 		cuCoreSetErrorMsg("Could not execute dissassembly command");
@@ -1416,7 +1415,7 @@ DEF_API_CALL(disassemble)(uint32_t dev, uint64_t addr, uint32_t *instSize,
 	/* Read command output */
 	for (;;) {
 		if (!fgets(tmpbuf, sizeof(tmpbuf), f)) {
-			pclose(f);
+			_PCLOSE(f);
 			unlink(tmpFilename);
 			return CUDBG_ERROR_UNKNOWN;
 		}
@@ -1427,7 +1426,7 @@ DEF_API_CALL(disassemble)(uint32_t dev, uint64_t addr, uint32_t *instSize,
 		}
 	}
 
-	pclose(f);
+	_PCLOSE(f);
 	unlink(tmpFilename);
 
 	len = strlen(p);
@@ -1450,155 +1449,155 @@ DEF_API_CALL(disassemble)(uint32_t dev, uint64_t addr, uint32_t *instSize,
 
 static const struct CUDBGAPI_st cudbgCoreApi = {
     /* Initialization */
-    .initialize				= API_CALL(doNothing),
-    .finalize				= API_CALL(doNothing),
+    API_CALL(doNothing),
+    API_CALL(doNothing),
 
     /* Device Execution Control */
-    .suspendDevice			= API_CALL(notSupported),
-    .resumeDevice			= API_CALL(notSupported),
-    .singleStepWarp40			= API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
 
     /* Breakpoints */
-    .setBreakpoint31			= API_CALL(notSupported),
-    .unsetBreakpoint31			= API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
 
     /* Device State Inspection */
-    .readGridId50			= API_CALL(notSupported),
-    .readBlockIdx32			= API_CALL(notSupported),
-    .readThreadIdx			= API_CALL(readThreadIdx),
-    .readBrokenWarps			= API_CALL(readBrokenWarps),
-    .readValidWarps			= API_CALL(readValidWarps),
-    .readValidLanes			= API_CALL(readValidLanes),
-    .readActiveLanes			= API_CALL(readActiveLanes),
-    .readCodeMemory			= API_CALL(readCodeMemory),
-    .readConstMemory			= API_CALL(readConstMemory),
-    .readGlobalMemory31			= API_CALL(notSupported),
-    .readParamMemory			= API_CALL(readParamMemory),
-    .readSharedMemory			= API_CALL(readSharedMemory),
-    .readLocalMemory			= API_CALL(readLocalMemory),
-    .readRegister			= API_CALL(readRegister),
-    .readPC				= API_CALL(readPC),
-    .readVirtualPC			= API_CALL(readVirtualPC),
-    .readLaneStatus			= API_CALL(readLaneStatus),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(readThreadIdx),
+    API_CALL(readBrokenWarps),
+    API_CALL(readValidWarps),
+    API_CALL(readValidLanes),
+    API_CALL(readActiveLanes),
+    API_CALL(readCodeMemory),
+    API_CALL(readConstMemory),
+    API_CALL(notSupported),
+    API_CALL(readParamMemory),
+    API_CALL(readSharedMemory),
+    API_CALL(readLocalMemory),
+    API_CALL(readRegister),
+    API_CALL(readPC),
+    API_CALL(readVirtualPC),
+    API_CALL(readLaneStatus),
 
     /* Device State Alteration */
-    .writeGlobalMemory31		= API_CALL(notSupported),
-    .writeParamMemory			= API_CALL(notSupported),
-    .writeSharedMemory			= API_CALL(notSupported),
-    .writeLocalMemory			= API_CALL(notSupported),
-    .writeRegister			= API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
 
     /* Grid Properties */
-    .getGridDim32			= API_CALL(notSupported),
-    .getBlockDim			= API_CALL(getBlockDim),
-    .getTID				= API_CALL(getTID),
-    .getElfImage32			= API_CALL(getElfImage32),
+    API_CALL(notSupported),
+    API_CALL(getBlockDim),
+    API_CALL(getTID),
+    API_CALL(getElfImage32),
 
     /* Device Properties */
-    .getDeviceType			= API_CALL(getDeviceType),
-    .getSmType				= API_CALL(getSmType),
-    .getNumDevices			= API_CALL(getNumDevices),
-    .getNumSMs				= API_CALL(getNumSMs),
-    .getNumWarps			= API_CALL(getNumWarps),
-    .getNumLanes			= API_CALL(getNumLanes),
-    .getNumRegisters			= API_CALL(getNumRegisters),
+    API_CALL(getDeviceType),
+    API_CALL(getSmType),
+    API_CALL(getNumDevices),
+    API_CALL(getNumSMs),
+    API_CALL(getNumWarps),
+    API_CALL(getNumLanes),
+    API_CALL(getNumRegisters),
 
     /* DWARF-related routines */
-    .getPhysicalRegister30		= API_CALL(notSupported),
-    .disassemble			= API_CALL(disassemble),
-    .isDeviceCodeAddress55		= API_CALL(notSupported),
-    .lookupDeviceCodeSymbol		= API_CALL(lookupDeviceCodeSymbol),
+    API_CALL(notSupported),
+    API_CALL(disassemble),
+    API_CALL(notSupported),
+    API_CALL(lookupDeviceCodeSymbol),
 
     /* Events */
-    .setNotifyNewEventCallback31	= API_CALL(notSupported),
-    .getNextEvent30			= API_CALL(notSupported),
-    .acknowledgeEvent30			= API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
 
     /* 3.1 Extensions */
-    .getGridAttribute			= API_CALL(getGridAttribute),
-    .getGridAttributes			= API_CALL(getGridAttributes),
-    .getPhysicalRegister40		= API_CALL(notSupported),
-    .readLaneException			= API_CALL(readLaneException),
-    .getNextEvent32			= API_CALL(notSupported),
-    .acknowledgeEvents42		= API_CALL(notSupported),
+    API_CALL(getGridAttribute),
+    API_CALL(getGridAttributes),
+    API_CALL(notSupported),
+    API_CALL(readLaneException),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
 
     /* 3.1 - ABI */
-    .readCallDepth32			= API_CALL(notSupported),
-    .readReturnAddress32		= API_CALL(notSupported),
-    .readVirtualReturnAddress32		= API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
 
     /* 3.2 Extensions */
-    .readGlobalMemory55			= API_CALL(notSupported),
-    .writeGlobalMemory55		= API_CALL(notSupported),
-    .readPinnedMemory			= API_CALL(readGlobalMemory),
-    .writePinnedMemory			= API_CALL(notSupported),
-    .setBreakpoint			= API_CALL(notSupported),
-    .unsetBreakpoint			= API_CALL(notSupported),
-    .setNotifyNewEventCallback40	= API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(readGlobalMemory),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
 
     /* 4.0 Extensions */
-    .getNextEvent42			= API_CALL(notSupported),
-    .readTextureMemory			= API_CALL(notSupported),
-    .readBlockIdx			= API_CALL(readBlockIdx),
-    .getGridDim				= API_CALL(getGridDim),
-    .readCallDepth			= API_CALL(readCallDepth),
-    .readReturnAddress			= API_CALL(readReturnAddress),
-    .readVirtualReturnAddress		= API_CALL(readVirtualReturnAddress),
-    .getElfImage			= API_CALL(getElfImage),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(readBlockIdx),
+    API_CALL(getGridDim),
+    API_CALL(readCallDepth),
+    API_CALL(readReturnAddress),
+    API_CALL(readVirtualReturnAddress),
+    API_CALL(getElfImage),
 
     /* 4.1 Extensions */
-    .getHostAddrFromDeviceAddr		= API_CALL(notSupported),
-    .singleStepWarp			= API_CALL(notSupported),
-    .setNotifyNewEventCallback		= API_CALL(notSupported),
-    .readSyscallCallDepth		= API_CALL(readSyscallCallDepth),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(readSyscallCallDepth),
 
     /* 4.2 Extensions */
-    .readTextureMemoryBindless		= API_CALL(notSupported),
+    API_CALL(notSupported),
 
     /* 5.0 Extensions */
-    .clearAttachState			= API_CALL(notSupported),
-    .getNextSyncEvent50			= API_CALL(notSupported),
-    .memcheckReadErrorAddress		= API_CALL(notSupported),
-    .acknowledgeSyncEvents		= API_CALL(notSupported),
-    .getNextAsyncEvent50		= API_CALL(notSupported),
-    .requestCleanupOnDetach55		= API_CALL(notSupported),
-    .initializeAttachStub		= API_CALL(notSupported),
-    .getGridStatus50			= API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
 
     /* 5.5 Extensions */
-    .getNextSyncEvent55			= API_CALL(notSupported),
-    .getNextAsyncEvent55		= API_CALL(notSupported),
-    .getGridInfo			= API_CALL(getGridInfo),
-    .readGridId				= API_CALL(readGridId),
-    .getGridStatus			= API_CALL(getGridStatus),
-    .setKernelLaunchNotificationMode	= API_CALL(notSupported),
-    .getDevicePCIBusInfo		= API_CALL(getDevicePCIBusInfo),
-    .readDeviceExceptionState		= API_CALL(readDeviceExceptionState),
+    API_CALL(notSupported),
+    API_CALL(notSupported),
+    API_CALL(getGridInfo),
+    API_CALL(readGridId),
+    API_CALL(getGridStatus),
+    API_CALL(notSupported),
+    API_CALL(getDevicePCIBusInfo),
+    API_CALL(readDeviceExceptionState),
 
    /* 6.0 Extensions */
-    .getAdjustedCodeAddress		= API_CALL(getAdjustedCodeAddress),
-    .readErrorPC			= API_CALL(readErrorPC),
-    .getNextEvent			= API_CALL(getNextEvent),
-    .getElfImageByHandle		= API_CALL(getElfImageByHandle),
-    .resumeWarpsUntilPC			= API_CALL(notSupported),
-    .readWarpState			= API_CALL(readWarpState),
-    .readRegisterRange			= API_CALL(readRegisterRange),
-    .readGenericMemory			= API_CALL(readGenericMemory),
-    .writeGenericMemory			= API_CALL(notSupported),
-    .readGlobalMemory			= API_CALL(readGlobalMemory),
-    .writeGlobalMemory			= API_CALL(notSupported),
-    .getManagedMemoryRegionInfo		= API_CALL(getManagedMemoryRegionInfo),
-    .isDeviceCodeAddress		= API_CALL(isDeviceCodeAddress),
-    .requestCleanupOnDetach		= API_CALL(notSupported),
+    API_CALL(getAdjustedCodeAddress),
+    API_CALL(readErrorPC),
+    API_CALL(getNextEvent),
+    API_CALL(getElfImageByHandle),
+    API_CALL(notSupported),
+    API_CALL(readWarpState),
+    API_CALL(readRegisterRange),
+    API_CALL(readGenericMemory),
+    API_CALL(notSupported),
+    API_CALL(readGlobalMemory),
+    API_CALL(notSupported),
+    API_CALL(getManagedMemoryRegionInfo),
+    API_CALL(isDeviceCodeAddress),
+    API_CALL(notSupported),
 
    /* 6.5 Extensions */
-    .readPredicates			= API_CALL(readPredicates),
-    .writePredicates			= API_CALL(notSupported),
-    .getNumPredicates			= API_CALL(getNumPredicates),
-    .readCCRegister			= API_CALL(readCCRegister),
-    .writeCCRegister			= API_CALL(notSupported),
+    API_CALL(readPredicates),
+    API_CALL(notSupported),
+    API_CALL(getNumPredicates),
+    API_CALL(readCCRegister),
+    API_CALL(notSupported),
 
-    .getDeviceName			= API_CALL(getDeviceName),
+    API_CALL(getDeviceName),
 };
 
 CUDBGAPI cuCoreGetApi(CudaCore *cc)

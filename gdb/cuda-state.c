@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2014 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -32,7 +32,7 @@
 
 #ifdef __ANDROID__
 #undef CUDBG_MAX_DEVICES
-#define CUDBG_MAX_DEVICES 1
+#define CUDBG_MAX_DEVICES 4
 #endif /*__ANDROID__*/
 
 typedef struct {

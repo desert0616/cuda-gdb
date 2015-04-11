@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2014-2015 NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -39,6 +39,10 @@
 
 #include "cudadebugger.h"
 #include "tls.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct CudaCore_st CudaCore;
 
@@ -103,5 +107,9 @@ void cuCoreFree(CudaCore *cc);
  * and is valid until cuCoreFree() is called.
  */
 CUDBGAPI cuCoreGetApi(CudaCore *cc);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _LIBCUDACORE_H_ */

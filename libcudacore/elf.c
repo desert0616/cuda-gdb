@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2014-2015 NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -270,15 +270,15 @@ Elf_Scn *elfGetSection(Elf *e, size_t secndx)
 		VERIFY(secndx < shnum, NULL, "Invalid section index");
 	}
 
-	VERIFY(ehdr->e_shoff > 0, NULL, "Missing section header table");
+	VERIFY(readUint64(&ehdr->e_shoff) > 0, NULL, "Missing section header table");
 
-	VERIFY(ehdr->e_shentsize == sizeof(Elf64_Shdr), NULL,
+	VERIFY(readUint16(&ehdr->e_shentsize) == sizeof(Elf64_Shdr), NULL,
 	       "Section header size mismatch");
 
 	/* Relative address in ELF image */
-	scn = ehdr->e_shoff + secndx * ehdr->e_shentsize;
+	scn = readUint64(&ehdr->e_shoff) + secndx * readUint16(&ehdr->e_shentsize);
 
-	VERIFY(scn + ehdr->e_shentsize <= e->size, NULL,
+	VERIFY(scn + readUint16(&ehdr->e_shentsize) <= e->size, NULL,
 	       "Section offset out of ELF image bounds");
 
 	/* Absolute address in memory */
@@ -297,7 +297,7 @@ size_t elfGetSectionIndex(Elf *e, Elf_Scn *scn)
 	/* Get relative address in ELF image */
 	scnaddr -= (intptr_t)e->mapped_addr;
 
-	return (scnaddr - ehdr->e_shoff) / ehdr->e_shentsize;
+	return (scnaddr - readUint64(&ehdr->e_shoff)) / readUint16(&ehdr->e_shentsize);
 }
 
 Elf_Scn *elfGetNextSection(Elf *e, Elf_Scn *scn)
@@ -326,12 +326,12 @@ int elfGetSectionData(Elf *e, Elf_Scn *scn, Elf_Data *data)
 	shdr = elfGetSectionHeader(scn);
 	VERIFY(shdr != NULL, -1, "Could not get section header");
 
-	VERIFY(shdr->sh_type != SHT_NOBITS, -1, "No data for SHT_NOBITS");
+	VERIFY(readUint32(&shdr->sh_type) != SHT_NOBITS, -1, "No data for SHT_NOBITS");
 
-	data->d_buf = (void *)((char *)e->mapped_addr + shdr->sh_offset);
-	data->d_size = shdr->sh_size;
-	data->d_type = shdr->sh_type;
-	data->d_entsize = shdr->sh_entsize;
+	data->d_buf = (void *)((char *)e->mapped_addr + readUint64(&shdr->sh_offset));
+	data->d_size = readUint64(&shdr->sh_size);
+	data->d_type = readUint32(&shdr->sh_type);
+	data->d_entsize = readUint64(&shdr->sh_entsize);
 
 	return 0;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2014-2015 NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,13 +32,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <unistd.h>
 
 #include "common.h"
 
@@ -48,7 +46,7 @@
 
 static __THREAD char lastErrMsg[ERRMSG_LEN];
 static int cuCoreAddMapEntry(MapEntry **, void *, const char *, ...)
- __attribute__ ((format (printf, 3, 4)));
+ _PRINTF_ARGS(3,4);
 
 void cuCoreSetErrorMsg(const char *fmt, ...)
 {
@@ -193,8 +191,8 @@ int cuCoreReadSectionHeader(Elf_Scn *scn, Elf64_Shdr **shdr)
 int cuCoreReadSectionData(Elf *e, Elf_Scn *scn, Elf_Data *data)
 {
 	VERIFY(elfGetSectionData(e, scn, data) == 0, -1,
-	       "Could not read section '%zu' data: %s",
-	       elfGetSectionIndex(e, scn), elfErrorMsg());
+	       "Could not read section %llu data: %s",
+		   (unsigned long long)elfGetSectionIndex(e, scn), elfErrorMsg());
 
 	return 0;
 }
@@ -209,8 +207,8 @@ static int cuCoreReadMemorySection(Elf *e, Elf_Scn *scn,
 
 	memorySeg.e = e;
 	memorySeg.scn = scn;
-	memorySeg.address = memorySeg.shdr->sh_addr;
-	memorySeg.size = memorySeg.shdr->sh_size;
+	memorySeg.address = readUint64(&memorySeg.shdr->sh_addr);
+	memorySeg.size = readUint64(&memorySeg.shdr->sh_size);
 
 	utarray_push_back(memorySegs, &memorySeg);
 
@@ -237,14 +235,14 @@ static int cuCoreGenericReadTable(Elf *e, Elf_Scn *scn,
 
 	/* FIXME this should be changed to '<' relation in the future to
 	 * allow older coredumps to be supported by newer library */
-	assert(shdr->sh_entsize == entry_size);
+	assert(readUint64(&shdr->sh_entsize) == entry_size);
 
 	if (parent)
-		*parent = shdr->sh_link;
+		*parent = readUint32(&shdr->sh_link);
 	if (offset)
-		*offset = shdr->sh_info;
+		*offset = readUint32(&shdr->sh_info);
 
-	*count = data.d_size / shdr->sh_entsize;
+	*count = data.d_size / readUint64(&shdr->sh_entsize);
 	*table = data.d_buf;
 
 	return 0;
@@ -313,7 +311,7 @@ static int cuCoreReadDeviceTable(CudaCore *cc, Elf_Scn *scn)
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, dte,
-				      "devtbl_offset%zu", i))
+			"devtbl_offset%llu", (unsigned long long)i))
 			return -1;
 	}
 
@@ -336,8 +334,8 @@ static int cuCoreReadGridTable(CudaCore *cc, Elf_Scn *scn)
 		return -1;
 
 	dte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"devtbl_offset%zu",
-				offset);
+				"devtbl_offset%llu",
+				(unsigned long long)offset);
 	VERIFY(dte != NULL, -1, "Could not find Device table entry");
 
 	for (i = 0; i < gte_count; ++i) {
@@ -350,16 +348,16 @@ static int cuCoreReadGridTable(CudaCore *cc, Elf_Scn *scn)
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, gte,
-				      "grid_section%zu_offset%zu",
-				      elfGetSectionIndex(cc->e, scn),
-				      i))
+				      "grid_section%llu_offset%llu",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn),
+					  (unsigned long long)i))
 			return -1;
 
 		/* Index dte by grid section and offset */
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, dte,
-				      "grid_section%zu_offset%zu_dev",
-				      elfGetSectionIndex(cc->e, scn),
-				      i))
+				      "grid_section%llu_offset%llu_dev",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn),
+					  (unsigned long long)i))
 			return -1;
 	}
 
@@ -382,8 +380,8 @@ static int cuCoreReadSmTable(CudaCore *cc, Elf_Scn *scn)
 		return -1;
 
 	dte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"devtbl_offset%zu",
-				offset);
+				"devtbl_offset%llu",
+				(unsigned long long)offset);
 	VERIFY(dte != NULL, -1, "Could not find Device table entry");
 
 	for (i = 0; i < ste_count; ++i) {
@@ -396,14 +394,14 @@ static int cuCoreReadSmTable(CudaCore *cc, Elf_Scn *scn)
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, ste,
-				      "smtbl_section%zu_offset%zu",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "smtbl_section%llu_offset%llu",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 
 		/* Link SM table entry to device */
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, dte,
-				      "smtbl_section%zu_offset%zu_dev",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "smtbl_section%llu_offset%llu_dev",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 	}
 
@@ -427,13 +425,13 @@ static int cuCoreReadCTATable(CudaCore *cc, Elf_Scn *scn)
 		return -1;
 
 	ste = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"smtbl_section%zu_offset%zu",
-				parent, offset);
+				"smtbl_section%llu_offset%llu",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(ste != NULL, -1, "Could not find SM table entry");
 
 	dte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"smtbl_section%zu_offset%zu_dev",
-				parent, offset);
+				"smtbl_section%llu_offset%llu_dev",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(dte != NULL, -1, "Could not find Device table entry by SM");
 
 	for (i = 0; i < ctate_count; ++i) {
@@ -446,18 +444,18 @@ static int cuCoreReadCTATable(CudaCore *cc, Elf_Scn *scn)
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, ctate,
-				      "ctatbl_section%zu_offset%zu",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "ctatbl_section%llu_offset%llu",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, ste,
-				      "ctatbl_section%zu_offset%zu_sm",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "ctatbl_section%llu_offset%llu_sm",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, dte,
-				      "ctatbl_section%zu_offset%zu_dev",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "ctatbl_section%llu_offset%llu_dev",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 	}
 
@@ -482,18 +480,18 @@ static int cuCoreReadWarpTable(CudaCore *cc, Elf_Scn *scn)
 		return -1;
 
 	ctate = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				  "ctatbl_section%zu_offset%zu",
-				  parent, offset);
+				  "ctatbl_section%llu_offset%llu",
+				  (unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(ctate != NULL, -1, "Could not find CTA table entry");
 
 	ste = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"ctatbl_section%zu_offset%zu_sm",
-				parent, offset);
+				"ctatbl_section%llu_offset%llu_sm",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(ste != NULL, -1, "Could not find SM table entry by CTA");
 
 	dte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"ctatbl_section%zu_offset%zu_dev",
-				parent, offset);
+				"ctatbl_section%llu_offset%llu_dev",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(dte != NULL, -1, "Could not find Device table entry by CTA");
 
 	for (i = 0; i < wte_count; ++i) {
@@ -507,18 +505,18 @@ static int cuCoreReadWarpTable(CudaCore *cc, Elf_Scn *scn)
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, wte,
-				      "wptbl_section%zu_offset%zu",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "wptbl_section%llu_offset%llu",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, ste,
-				      "wptbl_section%zu_offset%zu_sm",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "wptbl_section%llu_offset%llu_sm",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, dte,
-				      "wptbl_section%zu_offset%zu_dev",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "wptbl_section%llu_offset%llu_dev",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 	}
 
@@ -540,18 +538,18 @@ static int cuCoreReadThreadTable(CudaCore *cc, Elf_Scn *scn)
 			       &parent, &offset);
 
 	wte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"wptbl_section%zu_offset%zu",
-				parent, offset);
+				"wptbl_section%llu_offset%llu",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(wte != NULL, -1, "Could not find Warp table entry");
 
 	ste = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"wptbl_section%zu_offset%zu_sm",
-				parent, offset);
+				"wptbl_section%llu_offset%llu_sm",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(ste != NULL, -1, "Could not find SM table entry by Warp");
 
 	dte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"wptbl_section%zu_offset%zu_dev",
-				parent, offset);
+				"wptbl_section%llu_offset%llu_dev",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(dte != NULL, -1, "Could not find Device table entry by Warp");
 
 	for (i = 0; i < tt_count; ++i) {
@@ -564,23 +562,23 @@ static int cuCoreReadThreadTable(CudaCore *cc, Elf_Scn *scn)
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, tte,
-				      "lntbl_section%zu_offset%zu",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "lntbl_section%llu_offset%llu",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, wte,
-				      "lntbl_section%zu_offset%zu_wp",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "lntbl_section%llu_offset%llu_wp",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, ste,
-				      "lntbl_section%zu_offset%zu_sm",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "lntbl_section%llu_offset%llu_sm",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, dte,
-				      "lntbl_section%zu_offset%zu_dev",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "lntbl_section%llu_offset%llu_dev",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 	}
 
@@ -603,23 +601,23 @@ static int cuCoreReadBacktraceTable(CudaCore *cc, Elf_Scn *scn)
 			       &parent, &offset);
 
 	tte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu",
-				parent, offset);
+				"lntbl_section%llu_offset%llu",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(tte != NULL, -1, "Could not find Thread table entry");
 
 	wte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu_wp",
-				parent, offset);
+				"lntbl_section%llu_offset%llu_wp",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(wte != NULL, -1, "Could not find Warp table entry by Lane");
 
 	ste = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu_sm",
-				parent, offset);
+				"lntbl_section%llu_offset%llu_sm",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(ste != NULL, -1, "Could not find SM table entry by Lane");
 
 	dte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu_dev",
-				parent, offset);
+				"lntbl_section%llu_offset%llu_dev",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(dte != NULL, -1, "Could not find Device table entry by Lane");
 
 	for (i = 0; i < bt_count; ++i) {
@@ -667,8 +665,8 @@ static int cuCoreReadContextTable(CudaCore *cc, Elf_Scn *scn)
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, cte,
-				      "ctxtbl_section%zu_offset%zu",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "ctxtbl_section%llu_offset%llu",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 
 		/* Add context created event */
@@ -703,21 +701,21 @@ static int cuCoreReadModuleTable(CudaCore *cc, Elf_Scn *scn)
 			       &parent, &offset);
 
 	cte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"ctxtbl_section%zu_offset%zu",
-				parent, offset);
+				"ctxtbl_section%llu_offset%llu",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(cte != NULL, -1, "Could not find Context table entry");
 
 	for (i = 0; i < mt_count; ++i) {
 		mte = &mt[i];
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, mte,
-				      "modtbl_section%zu_offset%zu",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "modtbl_section%llu_offset%llu",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, cte,
-				      "modtbl_section%zu_offset%zu_ctx",
-				      elfGetSectionIndex(cc->e, scn), i))
+				      "modtbl_section%llu_offset%llu_ctx",
+					  (unsigned long long)elfGetSectionIndex(cc->e, scn), (unsigned long long)i))
 			return -1;
 	}
 	return 0;
@@ -737,13 +735,13 @@ static int cuCoreReadSharedMemorySection(CudaCore *cc, Elf_Scn *scn)
 	offset = shdr->sh_info;
 
 	ste = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"ctatbl_section%zu_offset%zu_sm",
-				parent, offset);
+				"ctatbl_section%llu_offset%llu_sm",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(ste != NULL, -1, "Could not find SM table entry");
 
 	dte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"ctatbl_section%zu_offset%zu_dev",
-				parent, offset);
+				"ctatbl_section%llu_offset%llu_dev",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(dte != NULL, -1, "Could not find Device table entry");
 
 	if (cuCoreAddMapEntry(&cc->tableEntriesMap, scn,
@@ -771,23 +769,23 @@ static int cuCoreReadLocalMemorySection(CudaCore *cc, Elf_Scn *scn)
 	offset = shdr->sh_info;
 
 	tte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu",
-				parent, offset);
+				"lntbl_section%llu_offset%llu",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(tte != NULL, -1, "Could not find Thread table entry");
 
 	wte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu_wp",
-				parent, offset);
+				"lntbl_section%llu_offset%llu_wp",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(wte != NULL, -1, "Could not find Warp table entry by Lane");
 
 	ste = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu_sm",
-				parent, offset);
+				"lntbl_section%llu_offset%llu_sm",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(ste != NULL, -1, "Could not find SM table entry by Lane");
 
 	dte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu_dev",
-				parent, offset);
+				"lntbl_section%llu_offset%llu_dev",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(dte != NULL, -1, "Could not find Device table entry by Lane");
 
 	if (cuCoreAddMapEntry(&cc->tableEntriesMap, scn,
@@ -815,13 +813,13 @@ static int cuCoreReadParamMemorySection(CudaCore *cc, Elf_Scn *scn)
 	offset = shdr->sh_info;
 
 	gte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"grid_section%zu_offset%zu",
-				parent, offset);
+				"grid_section%llu_offset%llu",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(gte != NULL, -1, "Could not find Grid table entry");
 
 	dte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"grid_section%zu_offset%zu_dev",
-				parent, offset);
+				"grid_section%llu_offset%llu_dev",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(dte != NULL, -1, "Could not find Device table entry by Grid");
 
 	if (cuCoreAddMapEntry(&cc->tableEntriesMap, scn,
@@ -880,7 +878,7 @@ static int cuCoreReadELFImage(CudaCore *cc, Elf_Scn *scn, bool reloc)
 	if (cuCoreAddMapEntry(&cc->tableEntriesMap, scn,
 			      "%celf_handle%llx",
 			      reloc ? 'r' : 'u',
-			      (unsigned long long)mte->moduleHandle))
+			      (unsigned long long)readUint64(&mte->moduleHandle)))
 		return -1;
 
 	if (!reloc)
@@ -900,9 +898,9 @@ static int cuCoreReadELFImage(CudaCore *cc, Elf_Scn *scn, bool reloc)
 	event.kind = CUDBG_EVENT_ELF_IMAGE_LOADED;
 	event.cases.elfImageLoaded.dev = dte->devId;
 	event.cases.elfImageLoaded.context = cte->contextId;
-	event.cases.elfImageLoaded.module = mte->moduleHandle;
-	event.cases.elfImageLoaded.size = hdr->sh_size;
-	event.cases.elfImageLoaded.handle = mte->moduleHandle;
+	event.cases.elfImageLoaded.module = readUint64(&mte->moduleHandle);
+	event.cases.elfImageLoaded.size = readUint64(&hdr->sh_size);
+	event.cases.elfImageLoaded.handle = readUint64(&mte->moduleHandle);
 	if (cuCoreAddEvent(cc, &event) != 0)
 		return -1;
 
@@ -939,23 +937,23 @@ static int cuCoreReadThreadInfo(const char *key, CudaCore *cc, Elf_Scn *scn)
 	offset = shdr->sh_info;
 
 	tte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu",
-				parent, offset);
+				"lntbl_section%llu_offset%llu",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(tte != NULL, -1, "Could not find Thread table entry");
 
 	wte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu_wp",
-				parent, offset);
+				"lntbl_section%llu_offset%llu_wp",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(wte != NULL, -1, "Could not find Warp table entry by Lane");
 
 	ste = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu_sm",
-				parent, offset);
+				"lntbl_section%llu_offset%llu_sm",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(ste != NULL, -1, "Could not find SM table entry by Lane");
 
 	dte = cuCoreGetMapEntry(&cc->tableEntriesMap,
-				"lntbl_section%zu_offset%zu_dev",
-				parent, offset);
+				"lntbl_section%llu_offset%llu_dev",
+				(unsigned long long)parent, (unsigned long long)offset);
 	VERIFY(dte != NULL, -1, "Could not find Device table entry by Lane");
 
 	/* Hash by dev, sm, wp and ln indexes */
@@ -1004,7 +1002,7 @@ static int cuCoreProcessSection(CudaCore *cc, bool *processed, Elf_Scn *scn)
 		cuCoreProcessSection(cc, processed, parent_scn);
 	}
 
-	DPRINTF(40, "Processing section %s (#%zu)\n", name, ndxscn);
+	DPRINTF(40, "Processing section %s (#%llu)\n", name, (unsigned long long)ndxscn);
 
 	/* Mark section as processed */
 	processed[ndxscn] = true;
@@ -1078,7 +1076,7 @@ static int cuCoreReadSections(CudaCore *cc)
 	VERIFY(elfGetSectionHeaderNum(cc->e, &cc->shnum) == 0, -1,
 	       "elfGetSectionHeaderNum() failed: %s", elfErrorMsg());
 
-	DPRINTF(10, "Found %zd sections.\n", cc->shnum);
+	DPRINTF(10, "Found %llu sections.\n", (unsigned long long)cc->shnum);
 
 	processed = calloc(cc->shnum, sizeof(*processed));
 	VERIFY(processed != NULL, -1, "Could not allocate memory");
@@ -1164,6 +1162,7 @@ void cuCoreExecuteCallStack(CudaCore *cc, cs_t *callStack)
 int cuCoreIterateELFImages(CudaCore *cc, cs_t *callStack)
 {
 	CudaCoreELFImage *elfImage;
+	Elf *e;
 	int ret = 0;
 
 	bool relocated = POP(callStack, bool);
@@ -1179,7 +1178,6 @@ int cuCoreIterateELFImages(CudaCore *cc, cs_t *callStack)
 			continue;
 		}
 
-		Elf *e;
 
 		e = elfOpenInMemory(data.d_buf, data.d_size, NULL);
 		if (e == NULL) {
@@ -1273,6 +1271,7 @@ int cuCoreFilterSymbolByAddress(CudaCore *cc, Elf *e, Elf_Scn *scn,
 			        Elf64_Shdr *shdr, Elf64_Sym *sym,
 			        cs_t *callStack)
 {
+	uint64_t lbound, ubound;
 	uint64_t addr = POP(callStack, uint64_t);
 	uint32_t sz = POP(callStack, uint32_t);
 	bool *symFound = POP_PTR(callStack, bool *);
@@ -1280,13 +1279,13 @@ int cuCoreFilterSymbolByAddress(CudaCore *cc, Elf *e, Elf_Scn *scn,
 
 	DPRINTF(60, "Found symbol '%s' "
 		"type=%u value=0x%llx size=0x%llx\n",
-		elfGetString(e, shdr->sh_link, sym->st_name),
+		elfGetString(e, readUint32(&shdr->sh_link), readUint32(&sym->st_name)),
 		ELF64_ST_TYPE(sym->st_info),
-		(unsigned long long)sym->st_value,
-		(unsigned long long)sym->st_size);
+		(unsigned long long)readUint64(&sym->st_value),
+		(unsigned long long)readUint64(&sym->st_size));
 
-	uint64_t lbound = sym->st_value;
-	uint64_t ubound = sym->st_value + sym->st_size;
+	lbound = readUint64(&sym->st_value);
+	ubound = readUint64(&sym->st_value) + readUint64(&sym->st_size);
 
 	if (addr >= lbound && addr + sz <= ubound) {
 		if (symFound != NULL)
@@ -1404,7 +1403,7 @@ int cuCoreReadSymbolData(CudaCore *cc, Elf *e, Elf_Scn *scn,
 		return 1; /* Symbol was found, hence returning 1 */
 	}
 
-	memcpy(buf, data.d_buf + offset, sz);
+	memcpy(buf, (char *)data.d_buf + offset, sz);
 
 	*result = CUDBG_SUCCESS;
 

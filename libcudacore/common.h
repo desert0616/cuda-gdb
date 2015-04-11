@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2014-2015 NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,6 +34,18 @@
 #include "cudadebugger.h"
 #include "uthash.h"
 #include "utarray.h"
+
+/* Get bool type definitions */
+#ifndef _MSC_VER
+#include <stdbool.h>
+#else
+typedef unsigned char bool;
+#endif
+
+#ifndef _MSC_VER
+#include <unistd.h>
+#endif
+
 
 /* ELF header information */
 #define EM_CUDA			0xBE
@@ -88,6 +100,8 @@ struct CudaCore_st {
 					/* Single linked list of CUDA ELF images */
 };
 
+#ifndef _MSC_VER
+
 #define DPRINTF(level, fmt, args...)					\
 	dbgprintf(level, "[%s:%d][%s] " fmt,				\
 		  __FILE__, __LINE__, __FUNCTION__, ##args)
@@ -103,11 +117,13 @@ struct CudaCore_st {
 			return errcode;					\
 		}							\
 	} while (0)
+#endif /*_MSC_VER*/
 
 #define VERIFY_ARG(val)							\
 	VERIFY(val != NULL, CUDBG_ERROR_INVALID_ARGS,			\
 	       "Invalid argument '" #val "'.")
 
+#ifndef _MSC_VER
 #define GET_TABLE_ENTRY(entry, errcode, key, args...)			\
 	do {								\
 		(entry) = cuCoreGetMapEntry(&curcc->tableEntriesMap,	\
@@ -115,11 +131,27 @@ struct CudaCore_st {
 		if ((entry) == NULL)					\
 			return errcode;					\
 	} while (0)
+#endif /*_MSC_VER*/
 
-void dbgprintf(int level, const char *fmt, ...) __attribute__ ((format (printf, 2, 3)));
+/**/
+#ifndef _MSC_VER
+#define _PRINTF_ARGS(fmt,var) __attribute__ ((format (printf, fmt, var)))
+#define _INLINE inline
+#define _SNPRINTF snprintf
+#define _POPEN popen
+#define _PCLOSE pclose
+#else
+#define _PRINTF_ARGS(fmt,var)
+#define _INLINE __inline
+#define _SNPRINTF _snprintf_c
+#define _POPEN _popen
+#define _PCLOSE _pclose
+#endif
+
+void dbgprintf(int level, const char *fmt, ...) _PRINTF_ARGS(2, 3);
 int cuCoreSortMemorySegs(const void *a, const void *b);
-void cuCoreSetErrorMsg(const char *fmt, ...) __attribute__ ((format (printf, 1, 2)));
-void *cuCoreGetMapEntry(MapEntry **map, const char *fmt, ...) __attribute__ ((format (printf, 2, 3)));
+void cuCoreSetErrorMsg(const char *fmt, ...) _PRINTF_ARGS(1, 2);
+void *cuCoreGetMapEntry(MapEntry **map, const char *fmt, ...) _PRINTF_ARGS(2, 3);
 size_t cuCoreGetNumDevices(CudaCore *cc);
 const char *cuCoreGetStrTabByIndex(CudaCore *cc, size_t idx);
 const CUDBGEvent *cuCoreGetEvent(CudaCore *cc);
@@ -159,8 +191,36 @@ int cuCoreReadSymbolData(CudaCore *cc, Elf *e, Elf_Scn *scn,
 			 cs_t *callStack);
 
 /* Return 1 if bit is set, 0 otherwise */
-static inline int getBit(uint64_t val, unsigned bitNo) {
+static _INLINE int getBit(uint64_t val, unsigned bitNo) {
 	return ((val >> bitNo) & 1);
 }
+
+
+/* Microsoft Compiler specific defenitions of macros with variadic arguments */
+#ifdef _MSC_VER
+#define DPRINTF(level, fmt, ...)					\
+	dbgprintf(level, "[%s:%d][%s] " fmt,				\
+		  __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+
+#define TRACE_FUNC(fmt, ...)					\
+	DPRINTF(30, fmt "\n", __VA_ARGS__)
+
+#define VERIFY(val, errcode, fmt, ...)				\
+	do {								\
+		if (!(val)) {						\
+			DPRINTF(100, fmt "\n", __VA_ARGS__);		\
+			cuCoreSetErrorMsg(fmt, __VA_ARGS__);		\
+			return errcode;					\
+		}							\
+	} while (0)
+
+#define GET_TABLE_ENTRY(entry, errcode, key, ...)			\
+	do {								\
+		(entry) = cuCoreGetMapEntry(&curcc->tableEntriesMap,	\
+					    key, __VA_ARGS__);		\
+		if ((entry) == NULL)					\
+			return errcode;					\
+	} while (0)
+#endif /* _MSC_VER */
 
 #endif /* _COMMON_H_ */

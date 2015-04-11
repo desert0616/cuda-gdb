@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2014 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -1515,7 +1515,8 @@ cuda_read_memory_partial (CORE_ADDR address, gdb_byte *buf, int len, struct type
   flag = TYPE_CUDA_ALL(type);
   if (flag)
     {
-      cuda_coords_get_current_physical (&dev, &sm, &wp, &ln);
+      if (cuda_coords_get_current_physical (&dev, &sm, &wp, &ln))
+        return 1;
 
       if (TYPE_CUDA_CODE(type))
         cuda_api_read_code_memory (dev, address, buf, len);
@@ -1629,7 +1630,8 @@ cuda_write_memory_partial (CORE_ADDR address, const gdb_byte *buf, struct type *
   flag = TYPE_CUDA_ALL(type);
   if (flag)
     {
-      cuda_coords_get_current_physical (&dev, &sm, &wp, &ln);
+      if (cuda_coords_get_current_physical (&dev, &sm, &wp, &ln))
+        return 1;
 
       if (TYPE_CUDA_REG(type))
         {

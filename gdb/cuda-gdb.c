@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2014 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -24,5 +24,5 @@ cuda_print_message_nvidia_version (struct ui_file *stream)
   fprintf_unfiltered (stream,
                       "NVIDIA (R) CUDA Debugger\n"
                       "7.0 release\n"
-                      "Portions Copyright (C) 2007-2014 NVIDIA Corporation\n");
+                      "Portions Copyright (C) 2007-2015 NVIDIA Corporation\n");
 }

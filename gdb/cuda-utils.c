@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2014 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -158,6 +158,9 @@ cuda_gdb_tmpdir_cleanup_dir (char* dirpath)
 void
 cuda_gdb_tmpdir_cleanup_self (void *unused)
 {
+  if (!cuda_gdb_tmp_dir)
+    return;
+
   cuda_gdb_tmpdir_cleanup_dir (cuda_gdb_tmp_dir);
   xfree (cuda_gdb_tmp_dir);
   cuda_gdb_tmp_dir = NULL;
@@ -841,7 +844,8 @@ cuda_utils_initialize (void)
 
   /* Populate the temporary directory with a unique subdirectory for this
    * instance. */
-  cuda_gdb_tmpdir_setup ();
+  if (!cuda_gdb_tmp_dir)
+    cuda_gdb_tmpdir_setup ();
 
   utils_initialized = true;
 }
