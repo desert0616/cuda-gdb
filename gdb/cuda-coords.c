@@ -1022,9 +1022,9 @@ cuda_coords_flat_physical (cuda_coords_t *c)
     // Force devices to be far enough from each other
     d += c->dev * 0xffffffffULL;
   if (!CUDA_COORD_IS_SPECIAL (c->sm))
-    d += c->sm * CUDBG_MAX_WARPS * CUDBG_MAX_SMS;
+    d += c->sm * CUDBG_MAX_SMS * CUDBG_MAX_WARPS;
   if (!CUDA_COORD_IS_SPECIAL (c->wp))
-    d += c->wp * CUDBG_MAX_SMS;
+    d += c->wp * CUDBG_MAX_WARPS;
   if (!CUDA_COORD_IS_SPECIAL (c->ln))
     d += c->ln;
 

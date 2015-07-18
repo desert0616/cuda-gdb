@@ -983,7 +983,7 @@ warps_resume_until (uint32_t dev_id, uint32_t sm_id, uint64_t mask, uint64_t pc)
 
 bool
 warp_single_step (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,
-                  uint64_t *single_stepped_warp_mask)
+                  uint32_t nsteps, uint64_t *single_stepped_warp_mask)
 {
   kernel_t kernel;
   uint64_t kernel_id;
@@ -991,7 +991,7 @@ warp_single_step (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,
   uint32_t i;
   bool rc;
 
-  cuda_trace ("device %u sm %u warp %u: single-step", dev_id, sm_id, wp_id);
+  cuda_trace ("device %u sm %u warp %u nsteps %u: single-step", dev_id, sm_id, wp_id, nsteps);
 
   gdb_assert (dev_id < cuda_system_get_num_devices ());
   gdb_assert (sm_id < device_get_num_sms (dev_id));
@@ -999,7 +999,7 @@ warp_single_step (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,
 
   *single_stepped_warp_mask = 0ULL;
 
-  rc = cuda_api_single_step_warp (dev_id, sm_id, wp_id, single_stepped_warp_mask);
+  rc = cuda_api_single_step_warp (dev_id, sm_id, wp_id, nsteps, single_stepped_warp_mask);
   if (!rc)
     return rc;
 

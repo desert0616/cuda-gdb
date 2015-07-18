@@ -389,13 +389,15 @@ cuda_process_single_step_warp_packet (char *buf)
   uint32_t dev;
   uint32_t sm;
   uint32_t wp;
+  uint32_t nsteps;
   uint64_t warp_mask;
 
   extract_bin (NULL, (unsigned char *) &dev, sizeof (dev));
   extract_bin (NULL, (unsigned char *) &sm, sizeof (sm));
   extract_bin (NULL, (unsigned char *) &wp, sizeof (wp));
+  extract_bin (NULL, (unsigned char *) &nsteps, sizeof (nsteps));
   extract_bin (NULL, (unsigned char *) &warp_mask, sizeof (warp_mask));
-  res = cudbgAPI->singleStepWarp (dev, sm, wp, &warp_mask);
+  res = cudbgAPI->singleStepWarp (dev, sm, wp, nsteps, &warp_mask);
   p = append_bin ((unsigned char *) &res, buf, sizeof (res), true);
   p = append_bin ((unsigned char *) &warp_mask, p, sizeof (warp_mask), false);
 }

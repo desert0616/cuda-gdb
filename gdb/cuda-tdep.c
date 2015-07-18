@@ -1752,6 +1752,14 @@ static struct {
   uint64_t warp_mask;
 } cuda_sstep_info;
 
+static int cuda_sstep_nsteps = 1;
+
+void
+cuda_sstep_set_nsteps (int nsteps)
+{
+  cuda_sstep_nsteps = nsteps;
+}
+
 bool
 cuda_sstep_is_active (void)
 {
@@ -1811,44 +1819,87 @@ static bool
 cuda_control_flow_instruction (const char *inst, bool skip_subroutines)
 {
   if (!inst) return true;
-  if (strstr(inst, "SSY")!=0) return true;
-  if (strstr(inst, "BAR.SYNC")!=0) return true;
-  if (strstr(inst, "BAR.RED")!=0) return true;
-  if (strstr(inst, "BRA")!=0) return true;
-  if (strstr(inst, "BRK")!=0) return true;
-  if (strstr(inst, "NOP.S")!=0) return true;
-  if (strstr(inst, "SYNC")!=0) return true;
-  if (strstr(inst, "EXIT")!=0) return true;
-  if (strstr(inst, "RET")!=0) return true;
-  if (strstr(inst, "JMP")!=0) return true;
-  if (strstr(inst, "JCAL")!=0 && !skip_subroutines) return true;
-  if (strstr(inst, "CAL")!=0 && !skip_subroutines) return true;
+  if (strstr(inst, "SSY") != 0) return true;
+  if (strstr(inst, "BAR.SYNC") != 0) return true;
+  if (strstr(inst, "BAR.RED") != 0) return true;
+  if (strstr(inst, "MEMBAR") != 0) return true;
+  if (strstr(inst, "BRA") != 0) return true;
+  if (strstr(inst, "BRK") != 0) return true;
+  if (strstr(inst, "NOP.S") != 0) return true;
+  if (strstr(inst, "SYNC") != 0) return true;
+  if (strstr(inst, "EXIT") != 0) return true;
+  if (strstr(inst, "RET") != 0) return true;
+  if (strstr(inst, "JMP") != 0) return true;
+  if (strstr(inst, "JCAL") != 0 && !skip_subroutines) return true;
+  if (strstr(inst, "CAL") != 0 && !skip_subroutines) return true;
 
   return false;
 }
+
+uint64_t
+cuda_find_next_control_flow_instruction (uint64_t pc,
+                                         uint64_t range_end_pc, /* Exclusive */
+                                         bool skip_subroutines,
+                                         uint32_t *inst_size)
+{
+  uint64_t end_pc, adj_pc;
+  const char *inst = NULL;
+  kernel_t kernel = cuda_current_kernel ();
+
+  end_pc = pc;
+
+  /* Iterate over instructions until the end of the step/next line range.
+   * Break if instruction that can potentially alter program counter has been encountered. */
+  while (end_pc <= range_end_pc)
+    {
+      inst = kernel_disassemble (kernel, end_pc, inst_size);
+
+      cuda_trace_domain (CUDA_TRACE_BREAKPOINT, "%s: pc=0x%llx inst %.*s",
+                         __func__, (long long) end_pc, 20, inst);
+
+      if (cuda_control_flow_instruction (inst, skip_subroutines))
+        break;
+
+      end_pc += *inst_size;
+    }
+
+  /* The above loop might increment end_pc beyond step_range_end.
+     In that case, adjust it to the step_range_end. */
+  if (end_pc > range_end_pc)
+    end_pc = range_end_pc;
+
+  /* Adjust the end_pc to the exact instruction address */
+  adj_pc = gdbarch_adjust_breakpoint_address (cuda_get_gdbarch(), end_pc);
+  end_pc = adj_pc > range_end_pc
+         ? range_end_pc - *inst_size /* end_pc was pointing at SHINT and was
+                                        adjusted beyond range_end_pc - reset
+                                        to just before SHINT */
+         : adj_pc;
+
+  cuda_trace_domain (CUDA_TRACE_BREAKPOINT,
+                     "%s: next control point after %llx (up to %llx) is at %llx (inst %.*s)",
+                     __func__, (long long)pc, (long long)range_end_pc, (long long)end_pc,
+                     (inst == NULL || strlen(inst)> 20) ? 20 : (int)strlen(inst), inst);
+
+  return end_pc; /* end_pc is very close to range_end_pc if no control flow instruction was found */
+}
+
 static bool
 cuda_sstep_fast (ptid_t ptid)
 {
   uint32_t dev_id, sm_id, wp_id, i;
   struct thread_info *tp = inferior_thread();
-  kernel_t kernel = cuda_current_kernel ();
   struct address_space *aspace = NULL;
-  const char *inst;
-  uint32_t inst_size;
-  uint64_t active_pc, pc, end_pc, adj_pc;
+  uint64_t active_pc, pc, end_pc;
   bool skip_subroutines, rc;
+  uint32_t inst_size;
 
   if (!cuda_options_single_stepping_optimizations_enabled ())
     return false;
 
   /* No accelerated single stepping when we accuracy is expected */
   if (cuda_get_autostep_stepping ())
-    {
-      cuda_trace_domain (CUDA_TRACE_BREAKPOINT,
-                         "Single stepping optimizations were disabled"
-                         " due to autostep accuracy requirements");
-      return false;
-    }
+    return false;
 
   if (!tp)
     return false;
@@ -1858,51 +1909,24 @@ cuda_sstep_fast (ptid_t ptid)
   if (tp->control.step_range_end <= 1 && tp->control.step_range_start <= 1)
     return false;
 
-  skip_subroutines = tp->control.step_over_calls == STEP_OVER_ALL;
-
   cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
-  end_pc = pc = get_frame_pc (get_current_frame ());
+  pc = get_frame_pc (get_current_frame ());
 
-  /* Iterate over instructions until the end of the step/next line range */
-  /* Break if instruction that can potentially alter program counter has been encountered  */
-  do {
-    inst = kernel_disassemble (kernel, end_pc, &inst_size);
-    cuda_trace_domain (CUDA_TRACE_BREAKPOINT, "%s: pc=0x%llx inst %.*s",
-                       __func__, (long long) end_pc, 20, inst);
-    if (cuda_control_flow_instruction(inst, skip_subroutines)) break;
-    end_pc += inst_size;
-  } while (end_pc < tp->control.step_range_end);
-
- /* The above loop might increment end_pc beyond step_range_end.
-     In that case, adjust it to the step_range_end. */
-  if (end_pc > tp->control.step_range_end)
-    end_pc = tp->control.step_range_end;
+  skip_subroutines = tp->control.step_over_calls == STEP_OVER_ALL;
+  end_pc = cuda_find_next_control_flow_instruction (pc, tp->control.step_range_end, skip_subroutines, &inst_size);
 
   /* Do not attempt to accelerate if stepping over less than 3 instructions */
-  if (end_pc <= pc || end_pc - pc < 3*inst_size) {
-    cuda_trace_domain  (CUDA_TRACE_BREAKPOINT,
-         "%s: Advantage is not big enough: pc=0x%llx end_pc=0x%llx inst_size = %u",
-         __func__, (long long)pc, (long long)end_pc, (unsigned)inst_size);
-    return false;
-  }
-
-  /* Adjust the address of breakpoint instruction is planted at*/
-  adj_pc = gdbarch_adjust_breakpoint_address (cuda_get_gdbarch(), end_pc);
-  end_pc = adj_pc > tp->control.step_range_end ? tp->control.step_range_end - inst_size : adj_pc ;
-
-  /* Check again, if window is big enough */
-  if (end_pc <= pc || end_pc - pc < 3*inst_size) {
-    cuda_trace_domain  (CUDA_TRACE_BREAKPOINT,
-         "%s: Advantage is not big enough: pc=0x%llx end_pc=0x%llx inst_size = %u",
-         __func__, (long long)pc, (long long)end_pc, (unsigned)inst_size);
-    return false;
-  }
-
+  if (end_pc <= pc || end_pc - pc < 3 * inst_size)
+    {
+      cuda_trace_domain(CUDA_TRACE_BREAKPOINT,
+                        "%s: advantage is not big enough: pc=0x%llx end_pc=0x%llx inst_size = %u",
+                        __func__, (long long)pc, (long long)end_pc, (unsigned)inst_size);
+      return false;
+    }
 
   cuda_trace_domain (CUDA_TRACE_BREAKPOINT,
-       "%s: trying to step from %llx to %llx (inst %.*s)",
-       __func__, (long long)pc, (long long)end_pc,
-       (inst == NULL || strlen(inst)> 20) ? 20 : (int)strlen(inst), inst);
+                     "%s: trying to step from %llx to %llx",
+                     __func__, (long long)pc, (long long)end_pc);
 
   /* If breakpoint is set at the current (or current active) PC - temporarily unset it*/
   aspace = target_thread_address_space (ptid);
@@ -1927,22 +1951,42 @@ cuda_sstep_fast (ptid_t ptid)
   return rc;
 }
 
+static bool
+cuda_sstep_do_step (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,
+                    uint32_t nsteps, uint64_t *single_stepped_warp_mask)
+{
+  bool rc;
+
+  rc = warp_single_step (dev_id, sm_id, wp_id, nsteps, single_stepped_warp_mask);
+  if (rc || nsteps < 2)
+    return rc;
+
+  /* Fallback mode: if nsteps failed try single step */
+  rc = warp_single_step (dev_id, sm_id, wp_id, 1, single_stepped_warp_mask);
+  return rc;
+}
+
 /**
  * cuda_sstep_execute(ptid_t) returns true if single-stepping was successful.
  * If false is returned, it is callee responsibility to cleanup CUDA sstep state.
- * (usually done by calling cuda_sstep_reset(). )
+ * (usually done by calling cuda_sstep_reset())
  */
 bool
 cuda_sstep_execute (ptid_t ptid)
 {
-  uint32_t dev_id, sm_id, wp_id, wp;
+  uint32_t dev_id, sm_id, wp_id, wp, wp_max;
   uint64_t grid_id, warp_mask, stepped_warp_mask;
   bool     sstep_other_warps;
   bool     grid_id_changed;
   bool     rc = true;
+  int      nsteps;
 
   gdb_assert (!cuda_sstep_info.active);
   gdb_assert (cuda_focus_is_device ());
+
+  /* Save nsteps locally and reset to default 1 */
+  nsteps = cuda_sstep_nsteps;
+  cuda_sstep_set_nsteps (1);
 
   cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
   grid_id           = warp_get_grid_id (dev_id, sm_id, wp_id);
@@ -1976,6 +2020,8 @@ cuda_sstep_execute (ptid_t ptid)
               dev_id, sm_id, (unsigned long long)cuda_sstep_info.warp_mask);
   gdb_assert (cuda_sstep_info.warp_mask & (1ULL << wp_id));
 
+  wp_max = device_get_num_warps (dev_id);
+
   if (cuda_options_software_preemption ())
     {
       /* If sw preemption is enabled, then only step
@@ -1987,17 +2033,19 @@ cuda_sstep_execute (ptid_t ptid)
          all warps instead of using this mask -- see
          warp_single_step) */
       if (!cuda_sstep_fast (ptid))
-        rc = warp_single_step (dev_id, sm_id, wp_id, &warp_mask);
+        rc = cuda_sstep_do_step (dev_id, sm_id, wp_id, nsteps, &warp_mask);
     }
   else if (!cuda_sstep_fast (ptid))
     {
       /* Single-step all the warps in the warp mask. */
-      for (wp = 0; wp < CUDBG_MAX_WARPS; ++wp)
+      for (wp = 0; wp < wp_max; ++wp)
         if (cuda_sstep_info.warp_mask & (1ULL << wp) &&
             warp_is_valid (dev_id, sm_id, wp))
           {
-            rc = warp_single_step (dev_id, sm_id, wp, &warp_mask);
-            if (!rc) break;
+            rc = cuda_sstep_do_step (dev_id, sm_id, wp, nsteps, &warp_mask);
+            if (!rc)
+              break;
+
             stepped_warp_mask |= warp_mask;
           }
     }
@@ -2005,10 +2053,9 @@ cuda_sstep_execute (ptid_t ptid)
   /* Update the warp mask. It may have grown. */
   cuda_sstep_info.warp_mask = stepped_warp_mask;
 
-
   /* If any warps are marked invalid, but are in the warp_mask
      clear them. This can happen if we stepped a warp over an exit */
-  for (wp = 0; wp < CUDBG_MAX_WARPS; ++wp)
+  for (wp = 0; wp < wp_max; ++wp)
     if (cuda_sstep_info.warp_mask & (1ULL << wp) &&
         !warp_is_valid (dev_id, sm_id, wp))
       cuda_sstep_info.warp_mask &= ~(1ULL << wp);

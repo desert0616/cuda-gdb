@@ -158,6 +158,7 @@ uint32_t cuda_sstep_sm_id (void);
 uint64_t cuda_sstep_wp_mask (void);
 ptid_t   cuda_sstep_ptid (void);
 void     cuda_sstep_set_ptid (ptid_t ptid);
+void     cuda_sstep_set_nsteps (int nsteps);
 void     cuda_sstep_initialize (bool stepping);
 bool     cuda_sstep_execute (ptid_t ptid);
 void     cuda_sstep_reset (bool sstep);
@@ -203,6 +204,7 @@ int cuda_breakpoint_address_match (struct gdbarch *gdbarch,
                                    struct address_space *aspace2, CORE_ADDR addr2);
 void cuda_adjust_host_pc (ptid_t r);
 void cuda_adjust_device_code_address (CORE_ADDR original_addr, CORE_ADDR *adjusted_addr);
+uint64_t cuda_find_next_control_flow_instruction (uint64_t pc, uint64_t range_end_pc, bool skip_subroutines, uint32_t *inst_size);
 
 /* Linux vs. Mac OS X */
 bool cuda_platform_supports_tid (void);

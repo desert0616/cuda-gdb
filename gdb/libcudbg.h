@@ -97,7 +97,7 @@ typedef enum {
 
     /* 4.1 Extensions */
     CUDBGAPIREQ_getHostAddrFromDeviceAddr,
-    CUDBGAPIREQ_singleStepWarp,
+    CUDBGAPIREQ_singleStepWarp41,
     CUDBGAPIREQ_setNotifyNewEventCallback,
     CUDBGAPIREQ_readSyscallCallDepth,
 
@@ -142,6 +142,7 @@ typedef enum {
     CUDBGAPIREQ_writeCCRegister,
 
     CUDBGAPIREQ_getDeviceName,
+    CUDBGAPIREQ_singleStepWarp,
 } CUDBGAPIREQ_t;
 
 typedef enum {

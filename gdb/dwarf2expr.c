@@ -1101,6 +1101,7 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 
 	    (ctx->funcs->read_mem_space) (ctx->baton, buf, addr_ident, addr, addr_size);
 	    result = extract_unsigned_integer (buf, addr_size, byte_order);
+	    result_val = value_from_ulongest (address_type, result);
 	    break;
 	  }
 

@@ -341,6 +341,17 @@ read_frame_local (struct symbol *sym, struct frame_info *frame,
   argp->val = val;
 }
 
+#define STR_COPY_ON_STACK(tgt, src)     \
+  do {                                  \
+    if (src != NULL)                    \
+      {                                 \
+        tgt = alloca (strlen(src) + 1); \
+        strcpy (tgt, src);              \
+      }                                 \
+    else                                \
+      tgt = "*NULL*";                   \
+  } while(0)
+
 /* Read in inferior function parameter SYM at FRAME into ARGP.  Caller is
    responsible for xfree of ARGP->ERROR.  This function never throws an
    exception.  */
@@ -362,10 +373,7 @@ read_frame_arg (struct symbol *sym, struct frame_info *frame,
 	  val = read_var_value (sym, frame);
 	}
       if (!val)
-	{
-	  val_error = alloca (strlen (except.message) + 1);
-	  strcpy (val_error, except.message);
-	}
+	STR_COPY_ON_STACK(val_error, except.message);
     }
 
   if (SYMBOL_CLASS (sym) == LOC_COMPUTED
@@ -381,10 +389,7 @@ read_frame_arg (struct symbol *sym, struct frame_info *frame,
 	  entryval = ops->read_variable_at_entry (sym, frame);
 	}
       if (!entryval)
-	{
-	  entryval_error = alloca (strlen (except.message) + 1);
-	  strcpy (entryval_error, except.message);
-	}
+	STR_COPY_ON_STACK(entryval_error, except.message);
 
       if (except.error == NO_ENTRY_VALUE_ERROR
 	  || (entryval && value_optimized_out (entryval)))
@@ -448,10 +453,7 @@ read_frame_arg (struct symbol *sym, struct frame_info *frame,
 		  else if (except.error == NO_ENTRY_VALUE_ERROR)
 		    val_equal = 1;
 		  else if (except.message)
-		    {
-		      entryval_error = alloca (strlen (except.message) + 1);
-		      strcpy (entryval_error, except.message);
-		    }
+		    STR_COPY_ON_STACK(entryval_error, except.message);
 
 		  if (val_equal)
 		    entryval = NULL;
@@ -482,10 +484,7 @@ read_frame_arg (struct symbol *sym, struct frame_info *frame,
 	      val = read_var_value (sym, frame);
 	    }
 	  if (!val)
-	    {
-	      val_error = alloca (strlen (except.message) + 1);
-	      strcpy (val_error, except.message);
-	    }
+	    STR_COPY_ON_STACK(val_error, except.message);
 	}
       if (print_entry_values == print_entry_values_only
 	  || print_entry_values == print_entry_values_both

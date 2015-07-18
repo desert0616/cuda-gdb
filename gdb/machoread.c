@@ -641,6 +641,7 @@ macho_add_oso_symfile (oso_el *oso, bfd *abfd,
   do_cleanups (cleanup);
 }
 
+static const char binary_cache_prefix[] = "/BinaryCache/";
 /* Read symbols from the vector of oso files.  */
 
 static void
@@ -690,8 +691,10 @@ macho_symfile_read_all_oso (struct objfile *main_objfile, int symfile_flags)
 	  archive_bfd = gdb_bfd_open (archive_name, gnutarget, -1);
 	  if (archive_bfd == NULL)
 	    {
-	      warning (_("Could not open OSO archive file \"%s\""),
-		       archive_name);
+	      /* Hide the warnings about OSOs in /BinaryCache/ folder */
+	      if (strncmp (archive_name, binary_cache_prefix, sizeof (binary_cache_prefix) - 1) != 0)
+	        warning (_("Could not open OSO archive file \"%s\""),
+		         archive_name);
               ix = last_ix;
 	      continue;
 	    }
@@ -763,8 +766,12 @@ macho_symfile_read_all_oso (struct objfile *main_objfile, int symfile_flags)
 
 	  abfd = gdb_bfd_open (oso->name, gnutarget, -1);
 	  if (!abfd)
-            warning (_("`%s': can't open to read symbols: %s."), oso->name,
-                     bfd_errmsg (bfd_get_error ()));
+	    {
+	      /* Hide the warnings about BFDs in /BinaryCache/ folder */
+	      if ( strncmp (oso->name, binary_cache_prefix, sizeof (binary_cache_prefix) - 1) != 0)
+                warning (_("`%s': can't open to read symbols: %s."), oso->name,
+                         bfd_errmsg (bfd_get_error ()));
+	    }
           else
             macho_add_oso_symfile (oso, abfd, main_objfile, symfile_flags);
 

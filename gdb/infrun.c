@@ -2375,7 +2375,7 @@ raw_proceed (CORE_ADDR addr, enum gdb_signal siggnal, int step)
      debugger stops. */
   kernels_update_args ();
 }
-
+
 void
 proceed (CORE_ADDR addr, enum gdb_signal siggnal, int step)
 {

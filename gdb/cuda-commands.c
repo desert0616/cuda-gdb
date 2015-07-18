@@ -46,6 +46,7 @@
 
 const char *status_string[] =
   { "Invalid", "Pending", "Active", "Sleeping", "Terminated", "Undetermined" };
+const char *status_string_preempted = "Active (preempted)";
 
 /* returned string must be freed */
 static char *
@@ -853,6 +854,8 @@ cuda_info_kernels_build (char *filter_string, cuda_info_kernel_t **kernels, uint
   k = *kernels;
   for (kernel = kernels_get_first_kernel (); kernel; kernel = kernels_get_next_kernel (kernel))
     {
+      CUDBGGridStatus status;
+
       if (!kernel_is_present (kernel))
         continue;
 
@@ -871,7 +874,11 @@ cuda_info_kernels_build (char *filter_string, cuda_info_kernel_t **kernels, uint
       k->device     = kernel_get_dev_id (kernel);
       k->grid_id    = kernel_get_grid_id (kernel);
       k->sms_mask   = kernel_compute_sms_mask (kernel);
-      k->status     = status_string[kernel_get_status (kernel)];
+
+      status = kernel_get_status (kernel);
+      k->status = cuda_options_software_preemption () && status == CUDBG_GRID_STATUS_ACTIVE
+                ? status_string_preempted
+                : status_string[status];
 
       if (parent_kernel)
         snprintf (k->parent, sizeof (k->parent), "%llu",

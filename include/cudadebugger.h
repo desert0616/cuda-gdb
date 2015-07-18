@@ -99,8 +99,8 @@ typedef unsigned char bool;
 /*--------------------------------- API Version ------------------------------*/
 
 #define CUDBG_API_VERSION_MAJOR       7 /* Major release version number */
-#define CUDBG_API_VERSION_MINOR       0 /* Minor release version number */
-#define CUDBG_API_VERSION_REVISION  122 /* Revision (build) number */
+#define CUDBG_API_VERSION_MINOR       5 /* Minor release version number */
+#define CUDBG_API_VERSION_REVISION  123 /* Revision (build) number */
 
 /*---------------------------------- Constants -------------------------------*/
 
@@ -911,7 +911,7 @@ struct CUDBGAPI_st {
 
     /* 4.1 Extensions */
     CUDBGResult (*getHostAddrFromDeviceAddr)(uint32_t dev, uint64_t device_addr, uint64_t *host_addr);
-    CUDBGResult (*singleStepWarp)(uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warpMask);
+    CUDBGResult (*singleStepWarp41)(uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warpMask);
     CUDBGResult (*setNotifyNewEventCallback)(CUDBGNotifyNewEventCallback callback);
     CUDBGResult (*readSyscallCallDepth)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32_t *depth);
 
@@ -962,6 +962,7 @@ struct CUDBGAPI_st {
     CUDBGResult (*writeCCRegister)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32_t val);
 
     CUDBGResult (*getDeviceName)(uint32_t dev, char *buf, uint32_t sz);
+    CUDBGResult (*singleStepWarp)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t nsteps, uint64_t *warpMask);
 };
 
 #ifdef __cplusplus

@@ -415,7 +415,7 @@ cuda_do_resume (struct target_ops *ops, ptid_t ptid,
           if (rc)
             error (_("Failed to get current logical coordinates on GPU!"));
           /* Invalidate current coordinates as well as device cache */
-          device_invalidate ( cuda_current_device ());
+          device_invalidate (cuda_current_device ());
           cuda_coords_invalidate_current ();
 
           rc = cuda_coords_set_current_logical (kernel_id, grid_id, block_idx, thread_idx);
@@ -451,6 +451,13 @@ cuda_nat_resume (struct target_ops *ops, ptid_t ptid, int sstep, enum gdb_signal
 
   cuda_trace ("cuda_resume: sstep=%d", sstep);
   cuda_host_want_singlestep = 0;
+
+  if (!cuda_options_device_resume_on_cpu_dynamic_function_call () &&
+      inferior_thread ()->control.in_infcall)
+    {
+      host_target_ops.to_resume (ops, ptid, 0, ts);
+      return;
+    }
 
   /* In cuda-gdb we have two types of device exceptions :
      Recoverable : CUDA_EXCEPTION_WARP_ASSERT
@@ -557,6 +564,10 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
   cuda_coords_t c;
 
   cuda_trace ("cuda_wait");
+
+  if (!cuda_options_device_resume_on_cpu_dynamic_function_call () &&
+      inferior_thread ()->control.in_infcall)
+    return host_target_ops.to_wait (ops, ptid, ws, target_options);
 
   if (cuda_exception_is_valid (cuda_exception))
     {
@@ -1218,8 +1229,6 @@ _initialize_cuda_nat (void)
   cuda_debugging_enabled = true;
 }
 
-
-
 void
 cuda_nat_attach (void)
 {
@@ -1338,14 +1347,10 @@ cuda_nat_attach (void)
   cuda_initialize ();
   for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
     device_suspend (dev);
-
-
 }
-
 
 void cuda_do_detach(bool remote)
 {
-
   struct cmd_list_element *alias = NULL;
   struct cmd_list_element *prefix_cmd = NULL;
   struct cmd_list_element *cmd = NULL;
@@ -1572,4 +1577,3 @@ cuda_create_builtins_objfile (void)
 
   return objfile;
 }
-

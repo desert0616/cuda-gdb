@@ -75,8 +75,13 @@ cuda_event_create_context (uint32_t dev_id, uint64_t context_id, uint32_t tid)
                        (unsigned long long)context_id, dev_id);
 
 #ifdef __APPLE__
+  /* Warn user that CUDA debugging on OS X is deprecated */
+  if ( !cuda_remote &&
+       target_can_run(&current_target))
+  warning (_("Local CUDA debugging for Mac OS X is deprecated!"));
+
   if ( cuda_remote ||
-       current_target.to_resume == NULL ||
+       !target_can_run(&current_target) ||
        !cuda_options_gpu_busy_check () ||
        !cuda_darwin_cuda_device_used_for_graphics (dev_id))
     return;

@@ -1378,6 +1378,37 @@ cuda_options_initialize_stop_signal (void)
                           &setcudalist, &showcudalist);
 }
 
+/*
+ * set cuda device_resume_on_cpu_dynamic_function_call
+ */
+static int cuda_device_resume_on_cpu_dynamic_function_call;
+
+static void
+cuda_show_no_device_resume_on_cpu_dynamic_function_call (struct ui_file *file, int from_tty,
+                                                         struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("CUDA device resume during dynamic function call on host is %s.\n"), value);
+}
+
+static void
+cuda_options_initialize_device_resume_on_cpu_dynamic_function_call (void)
+{
+  cuda_device_resume_on_cpu_dynamic_function_call = true;
+
+  add_setshow_boolean_cmd ("device_resume_on_cpu_dynamic_function_call", class_maintenance, &cuda_device_resume_on_cpu_dynamic_function_call,
+                           _("Turn on/off resuming device during dynamic function call on host"),
+                           _("Show if resuming device during dynamic function call on host is enabled"),
+                           _("When non-zero, CUDA device is resumed during dynamic function call on host."),
+                           NULL, cuda_show_no_device_resume_on_cpu_dynamic_function_call,
+                           &setcudalist, &showcudalist);
+}
+
+bool
+cuda_options_device_resume_on_cpu_dynamic_function_call (void)
+{
+  return cuda_device_resume_on_cpu_dynamic_function_call;
+}
+
 /*Initialization */
 void
 cuda_options_initialize ()
@@ -1408,4 +1439,5 @@ cuda_options_initialize ()
   cuda_options_initialize_value_extrapolation ();
   cuda_options_initialize_single_stepping_optimization ();
   cuda_options_initialize_stop_signal ();
+  cuda_options_initialize_device_resume_on_cpu_dynamic_function_call ();
 }

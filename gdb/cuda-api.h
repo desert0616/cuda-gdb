@@ -55,7 +55,7 @@ void cuda_api_request_cleanup_on_detach (uint32_t resumeAppFlag);
 void cuda_api_suspend_device (uint32_t dev);
 void cuda_api_resume_device (uint32_t dev);
 bool cuda_api_resume_warps_until_pc (uint32_t dev, uint32_t sm, uint64_t warp_mask, uint64_t virt_pc);
-bool cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warp_mask);
+bool cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t nsteps, uint64_t *warp_mask);
 
 /* Breakpoints */
 bool cuda_api_set_breakpoint (uint32_t dev, uint64_t addr);

@@ -59,6 +59,7 @@ bool cuda_options_trace_domain_enabled (cuda_trace_domain_t);
 bool cuda_options_single_stepping_optimizations_enabled (void);
 /* Return GDB_SIGNAL_TRAP or GDB_SIGNAL_URG */
 unsigned cuda_options_stop_signal (void);
+bool cuda_options_device_resume_on_cpu_dynamic_function_call (void);
 
 /* Return true of BOL/KE breakpoints needs to be inserted */
 bool cuda_options_auto_breakpoints_needed (void);

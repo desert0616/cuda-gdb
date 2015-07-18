@@ -3525,9 +3525,16 @@ copy_type_recursive (struct objfile *objfile,
 	    TYPE_FIELD_ARTIFICIAL (type, i);
 	  TYPE_FIELD_BITSIZE (new_type, i) = TYPE_FIELD_BITSIZE (type, i);
 	  if (TYPE_FIELD_TYPE (type, i))
-	    TYPE_FIELD_TYPE (new_type, i)
-	      = copy_type_recursive (objfile, TYPE_FIELD_TYPE (type, i),
-				     copied_types);
+ 	    {
+	      /* For arrays copying references to nfield 1 type should suffice,
+ 	         since it actually holds the baton rather than array type */
+	      if (TYPE_CODE(type) == TYPE_CODE_ARRAY && i > 0)
+	        TYPE_FIELD_TYPE(new_type, i) = TYPE_FIELD_TYPE(type, i);
+	      else
+	        TYPE_FIELD_TYPE (new_type, i)
+	          = copy_type_recursive (objfile, TYPE_FIELD_TYPE (type, i),
+				         copied_types);
+	    }
 	  if (TYPE_FIELD_NAME (type, i))
 	    TYPE_FIELD_NAME (new_type, i) = 
 	      xstrdup (TYPE_FIELD_NAME (type, i));

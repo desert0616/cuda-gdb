@@ -11872,10 +11872,15 @@ make_segmented_type_aux (struct type **sym_type, int flags, htab_t marked_types)
   if (TYPE_CODE (*sym_type) == TYPE_CODE_ENUM)
     return;
 
-  /* We need to follow this type's fields, if there are any */
-  for (i = 0; i < TYPE_NFIELDS (*sym_type); i++)
-    make_segmented_type_aux (&TYPE_FIELDS (*sym_type)[i].type,
+  /* For arrays, segment only the index type */
+  if (TYPE_CODE(*sym_type) == TYPE_CODE_ARRAY)
+    make_segmented_type_aux (&TYPE_INDEX_TYPE (*sym_type),
                              flags, marked_types);
+  else
+    /* We need to follow this type's fields, if there are any */
+    for (i = 0; i < TYPE_NFIELDS (*sym_type); i++)
+      make_segmented_type_aux (&TYPE_FIELD_TYPE (*sym_type, i),
+                               flags, marked_types);
 
   /* We need to follow target types */
   if (TYPE_TARGET_TYPE (*sym_type))
@@ -12042,7 +12047,7 @@ read_array_type (struct die_info *die, struct dwarf2_cu *cu)
         TYPE_NFIELDS (type) = 2;
         TYPE_FIELDS (type) =
 	    (struct field *) TYPE_ALLOC (type, 2 * sizeof (struct field));
-        memset (TYPE_FIELDS (type), 0, sizeof (struct field));
+        memset (TYPE_FIELDS (type), 0, 2*sizeof (struct field));
 
 
         TYPE_FIELD_TYPE (type, 0) = range_type;

@@ -189,6 +189,7 @@ static PyObject * (*gdb_PyObject_Call)(PyObject *callable_object, PyObject *args
 static PyObject* (*gdb_PyUnicode_Decode)(const char *s, Py_ssize_t size, const char *encoding, const char *errors) = NULL;
 static PyObject* (*gdb_PyUnicode_AsEncodedString)(register PyObject *unicode, const char *encoding, const char *errors) = NULL;
 static PyObject* (*gdb_PyUnicode_FromEncodedObject)(register PyObject *obj, const char *encoding, const char *errors) = NULL;
+static int *gdb_Py_DontWriteBytecodeFlag = NULL;
 
 
 
@@ -377,6 +378,7 @@ is_python_available (void) {
   gdb_PyUnicode_AsEncodedString = dlsym (libpython_handle, "PyUnicodeUCS4_AsEncodedString");
   gdb_PyUnicode_FromEncodedObject = dlsym (libpython_handle, "PyUnicodeUCS4_FromEncodedObject");
 #endif
+  gdb_Py_DontWriteBytecodeFlag = dlsym(libpython_handle, "Py_DontWriteBytecodeFlag");
   return true;
 err_out:
   dlclose (libpython_handle);
@@ -567,7 +569,6 @@ PYWRAPPER_ARG2(int, PyType_IsSubtype, PyTypeObject *, PyTypeObject *)
 PYWRAPPER_ARG1(int, PyType_Ready, PyTypeObject *)
 PYWRAPPERVOID(Py_Finalize)
 PYWRAPPER(int, Py_FlushLine)
-PYWRAPPERVOID(Py_Initialize)
 PYWRAPPERVOID_ARG1(Py_SetProgramName, char *)
 PYWRAPPER_ARG1(PyObject *, _PyObject_New, PyTypeObject *)
 PYWRAPPER_ARG2(PyObject *, PyObject_CallObject, PyObject *, PyObject *)
@@ -582,6 +583,20 @@ PYWRAPPER_ARG4 (PyObject *, PyUnicode_Decode, const char *, Py_ssize_t, const ch
 PYWRAPPER_ARG3 (PyObject *, PyUnicode_FromEncodedObject, register PyObject *, const char *, const char *)
 PYWRAPPER_ARG3 (PyObject *,PyUnicode_AsEncodedString, register PyObject *, const char *, const char *)
 PYWRAPPER_ARG4(PyFrameObject *, PyFrame_New, PyThreadState *,PyCodeObject *, PyObject *, PyObject *)
+
+void
+Py_Initialize(void)
+{
+  if (!is_python_available () || gdb_Py_Initialize == NULL)
+    {
+        warning ("%s: called while Python is not available!", __FUNCTION__);
+      return;
+    }
+  if (gdb_Py_DontWriteBytecodeFlag != NULL)
+    *gdb_Py_DontWriteBytecodeFlag = 1;
+  gdb_Py_Initialize();
+}
+
 
 PyCodeObject *
 PyCode_New(int a, int b, int c, int d,

@@ -318,7 +318,7 @@ cuda_api_resume_warps_until_pc (uint32_t dev, uint32_t sm, uint64_t warp_mask, u
 }
 
 bool
-cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warp_mask)
+cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t nsteps, uint64_t *warp_mask)
 {
   CUDBGResult res;
 
@@ -327,14 +327,15 @@ cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *war
   if (!api_initialized)
     return false;
 
-  res = cudbgAPI->singleStepWarp (dev, sm, wp, warp_mask);
+  res = cudbgAPI->singleStepWarp (dev, sm, wp, nsteps, warp_mask);
   cuda_api_print_api_call_result (res);
 
   if (res == CUDBG_ERROR_WARP_RESUME_NOT_POSSIBLE)
     return false;
 
   if (res != CUDBG_SUCCESS)
-    cuda_devsmwp_api_error ("single-step the warp", res, dev, sm, wp);
+    cuda_devsmwp_api_error ("single-step the warp", dev, sm, wp, res);
+
   return true;
 }
 

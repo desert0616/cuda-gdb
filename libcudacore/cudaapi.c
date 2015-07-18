@@ -51,6 +51,37 @@ static int mkstemp(char *name)
 
 static __THREAD CudaCore *curcc;
 
+static CUDBGResult determineCTAId(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *cta)
+{
+	CudbgCTATableEntry *ctate, *ctate1;
+	uint32_t ctateIdx = 0;
+
+	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
+			"wp%u_sm%u_dev%u_cta", wp, sm, dev);
+
+	do {
+		ctate1 = cuCoreGetMapEntry(&curcc->tableEntriesMap, "cta%u_sm%u_dev%u", ctateIdx++, sm, dev);
+	} while (ctate1 != NULL && ctate1 != ctate);
+
+	*cta = ctateIdx-1;
+	return ctate1 == ctate ? CUDBG_SUCCESS: CUDBG_ERROR_INTERNAL;
+}
+
+static CUDBGResult getGridId(uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *gridId)
+{
+	CudbgCTATableEntry *ctate;
+	CudbgWarpTableEntry *wte;
+
+	GET_TABLE_ENTRY(wte, CUDBG_ERROR_INVALID_WARP,
+			"wp%u_sm%u_dev%u", wp, sm, dev);
+
+	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
+			"wp%u_sm%u_dev%u_cta", wp, sm, dev);
+
+	*gridId = ctate->gridId64;
+	return CUDBG_SUCCESS;
+}
+
 DEF_API_CALL(doNothing)()
 {
 	return CUDBG_SUCCESS;
@@ -70,8 +101,9 @@ DEF_API_CALL(getElfImage32)(uint32_t dev, uint32_t sm, uint32_t wp,
 DEF_API_CALL(getElfImage)(uint32_t dev, uint32_t sm, uint32_t wp,
 			  bool relocated, void **elfImage, uint64_t *size)
 {
+	CUDBGResult rc;
+	uint64_t gridId;
 	CudbgGridTableEntry *gte;
-	CudbgCTATableEntry *ctate;
 	Elf_Scn *scn;
 	Elf_Data data;
 
@@ -81,11 +113,11 @@ DEF_API_CALL(getElfImage)(uint32_t dev, uint32_t sm, uint32_t wp,
 	VERIFY_ARG(elfImage);
 	VERIFY_ARG(size);
 
-	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u", sm, dev);
+	if ((rc = getGridId(dev, sm, wp, &gridId)) != CUDBG_SUCCESS)
+		return rc;
 
 	GET_TABLE_ENTRY(gte, CUDBG_ERROR_INVALID_GRID,
-			"grid%llu_dev%u", ctate->gridId64, dev);
+			"grid%llu_dev%u", gridId, dev);
 
 	GET_TABLE_ENTRY(scn, CUDBG_ERROR_INVALID_MODULE,
 			"%celf_handle%llx",
@@ -260,16 +292,22 @@ DEF_API_CALL(readGlobalMemory)(uint64_t addr, void *buf, uint32_t sz)
 DEF_API_CALL(readSharedMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 			       uint64_t addr, void *buf, uint32_t sz)
 {
+	uint32_t ctaId;
 	Elf_Scn *scn;
 	Elf_Data data;
+	CUDBGResult rc;
 
 	TRACE_FUNC("dev=%u sm=%u wp=%u addr=0x%llx buf=%p sz=%u",
 		   dev, sm, wp, addr, buf, sz);
 
 	VERIFY_ARG(buf);
 
+	rc = determineCTAId (dev, sm, wp, &ctaId);
+	if (rc != CUDBG_SUCCESS)
+		return rc;
+
 	GET_TABLE_ENTRY(scn, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u_shared", sm, dev);
+			"cta%u_sm%u_dev%u_shared", ctaId, sm, dev);
 
 	if (cuCoreReadSectionData(curcc->e, scn, &data) != 0)
 		return CUDBG_ERROR_UNKNOWN;
@@ -322,7 +360,8 @@ DEF_API_CALL(readGenericMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 				uint32_t ln, uint64_t addr, void *buf,
 				uint32_t sz)
 {
-	CudbgCTATableEntry *ctate;
+	CUDBGResult rc;
+	uint64_t gridId;
 	CudbgGridTableEntry *gte;
 	CudbgContextTableEntry *cte;
 
@@ -331,11 +370,11 @@ DEF_API_CALL(readGenericMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 
 	VERIFY_ARG(buf);
 
-	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u", sm, dev);
+	if ((rc = getGridId(dev, sm, wp, &gridId)) != CUDBG_SUCCESS)
+		return rc;
 
 	GET_TABLE_ENTRY(gte, CUDBG_ERROR_INVALID_GRID,
-			"grid%llu_dev%u", ctate->gridId64, dev);
+			"grid%llu_dev%u", gridId, dev);
 
 	GET_TABLE_ENTRY(cte, CUDBG_ERROR_INVALID_CONTEXT,
 			"ctx%llu_dev%u", gte->contextId, dev);
@@ -356,8 +395,9 @@ DEF_API_CALL(readGenericMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 DEF_API_CALL(readParamMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 			      uint64_t addr, void *buf, uint32_t sz)
 {
+	CUDBGResult rc;
+	uint64_t gridId;
 	CudbgGridTableEntry *gte;
-	CudbgCTATableEntry *ctate;
 	Elf_Scn *scn;
 	Elf_Data data;
 	uint64_t offset;
@@ -367,14 +407,14 @@ DEF_API_CALL(readParamMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 
 	VERIFY_ARG(buf);
 
-	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u", sm, dev);
+	if ((rc = getGridId(dev, sm, wp, &gridId)) != CUDBG_SUCCESS)
+		return rc;
 
 	GET_TABLE_ENTRY(gte, CUDBG_ERROR_INVALID_GRID,
-			"grid%llu_dev%u", ctate->gridId64, dev);
+			"grid%llu_dev%u", gridId, dev);
 
 	GET_TABLE_ENTRY(scn, CUDBG_ERROR_UNKNOWN,
-			"grid%llu_dev%u_param", ctate->gridId64, dev);
+			"grid%llu_dev%u_param", gridId, dev);
 
 	if (cuCoreReadSectionData(curcc->e, scn, &data) != 0)
 		return CUDBG_ERROR_UNKNOWN;
@@ -419,7 +459,7 @@ DEF_API_CALL(readWarpState)(uint32_t devId, uint32_t sm, uint32_t wp,
 			"wp%u_sm%u_dev%u", wp, sm, devId);
 
 	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u", sm, devId);
+			"wp%u_sm%u_dev%u_cta", wp, sm, devId);
 
 	GET_TABLE_ENTRY(gte, CUDBG_ERROR_INVALID_GRID,
 			"grid%llu_dev%u", ctate->gridId64, devId);
@@ -497,8 +537,8 @@ DEF_API_CALL(readVirtualPC)(uint32_t dev, uint32_t sm, uint32_t wp,
 
 DEF_API_CALL(getTID)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *tid)
 {
-	CudbgWarpTableEntry *wte;
-	CudbgCTATableEntry *ctate;
+	CUDBGResult rc;
+	uint64_t gridId;
 	CudbgGridTableEntry *gte;
 	CudbgContextTableEntry *cte;
 
@@ -506,14 +546,11 @@ DEF_API_CALL(getTID)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *tid)
 
 	VERIFY_ARG(tid);
 
-	GET_TABLE_ENTRY(wte, CUDBG_ERROR_INVALID_WARP,
-			"wp%u_sm%u_dev%u", wp, sm, dev);
-
-	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u", sm, dev);
+	if ((rc = getGridId(dev, sm, wp, &gridId)) != CUDBG_SUCCESS)
+		return rc;
 
 	GET_TABLE_ENTRY(gte, CUDBG_ERROR_INVALID_GRID,
-			"grid%llu_dev%u", ctate->gridId64, dev);
+			"grid%llu_dev%u", gridId, dev);
 
 	GET_TABLE_ENTRY(cte, CUDBG_ERROR_INVALID_CONTEXT,
 			"ctx%llu_dev%u", gte->contextId, dev);
@@ -537,7 +574,7 @@ DEF_API_CALL(readBlockIdx)(uint32_t dev, uint32_t sm, uint32_t wp,
 			"wp%u_sm%u_dev%u", wp, sm, dev);
 
 	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u", sm, dev);
+			"wp%u_sm%u_dev%u_cta", wp, sm, dev);
 
 	blockIdx->x = ctate->blockIdxX;
 	blockIdx->y = ctate->blockIdxY;
@@ -549,22 +586,19 @@ DEF_API_CALL(readBlockIdx)(uint32_t dev, uint32_t sm, uint32_t wp,
 DEF_API_CALL(getBlockDim)(uint32_t dev, uint32_t sm, uint32_t wp,
 			  CuDim3 *blockDim)
 {
-	CudbgWarpTableEntry *wte;
-	CudbgCTATableEntry *ctate;
+	CUDBGResult rc;
+	uint64_t gridId;
 	CudbgGridTableEntry *gte;
 
 	TRACE_FUNC("dev=%u sm=%u wp=%u blockDim=%p", dev, sm, wp, blockDim);
 
 	VERIFY_ARG(blockDim);
 
-	GET_TABLE_ENTRY(wte, CUDBG_ERROR_INVALID_WARP,
-			"wp%u_sm%u_dev%u", wp, sm, dev);
-
-	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u", sm, dev);
+	if ((rc = getGridId(dev, sm, wp, &gridId)) != CUDBG_SUCCESS)
+		return rc;
 
 	GET_TABLE_ENTRY(gte, CUDBG_ERROR_INVALID_GRID,
-			"grid%llu_dev%u", ctate->gridId64, dev);
+			"grid%llu_dev%u", gridId, dev);
 
 	blockDim->x = gte->blockDimX;
 	blockDim->y = gte->blockDimY;
@@ -576,22 +610,19 @@ DEF_API_CALL(getBlockDim)(uint32_t dev, uint32_t sm, uint32_t wp,
 DEF_API_CALL(getGridDim)(uint32_t dev, uint32_t sm, uint32_t wp,
 			 CuDim3 *gridDim)
 {
-	CudbgWarpTableEntry *wte;
-	CudbgCTATableEntry *ctate;
+	CUDBGResult rc;
+	uint64_t gridId;
 	CudbgGridTableEntry *gte;
 
 	TRACE_FUNC("dev=%u sm=%u wp=%u gridDim=%p", dev, sm, wp, gridDim);
 
 	VERIFY_ARG(gridDim);
 
-	GET_TABLE_ENTRY(wte, CUDBG_ERROR_INVALID_WARP,
-			"wp%u_sm%u_dev%u", wp, sm, dev);
-
-	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u", sm, dev);
+	if ((rc = getGridId(dev, sm, wp, &gridId)) != CUDBG_SUCCESS)
+		return rc;
 
 	GET_TABLE_ENTRY(gte, CUDBG_ERROR_INVALID_GRID,
-			"grid%llu_dev%u", ctate->gridId64, dev);
+			"grid%llu_dev%u", gridId, dev);
 
 	gridDim->x = gte->gridDimX;
 	gridDim->y = gte->gridDimY;
@@ -603,22 +634,19 @@ DEF_API_CALL(getGridDim)(uint32_t dev, uint32_t sm, uint32_t wp,
 DEF_API_CALL(readGridId)(uint32_t dev, uint32_t sm, uint32_t wp,
 			 uint64_t *gridId64)
 {
-	CudbgWarpTableEntry *wte;
-	CudbgCTATableEntry *ctate;
+	CUDBGResult rc;
+	uint64_t gridId;
 	CudbgGridTableEntry *gte;
 
 	TRACE_FUNC("dev=%u sm=%u wp=%u gridId64=%p", dev, sm, wp, gridId64);
 
 	VERIFY_ARG(gridId64);
 
-	GET_TABLE_ENTRY(wte, CUDBG_ERROR_INVALID_WARP,
-			"wp%u_sm%u_dev%u", wp, sm, dev);
-
-	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u", sm, dev);
+	if ((rc = getGridId(dev, sm, wp, &gridId)) != CUDBG_SUCCESS)
+		return rc;
 
 	GET_TABLE_ENTRY(gte, CUDBG_ERROR_INVALID_GRID,
-			"grid%llu_dev%u", ctate->gridId64, dev);
+			"grid%llu_dev%u", gridId, dev);
 
 	*gridId64 = gte->gridId64;
 
@@ -1272,8 +1300,8 @@ DEF_API_CALL(getGridAttributes)(uint32_t dev, uint32_t sm, uint32_t wp,
 				CUDBGAttributeValuePair *pairs,
 				uint32_t numPairs)
 {
-	CudbgWarpTableEntry *wte;
-	CudbgCTATableEntry *ctate;
+	CUDBGResult rc;
+	uint64_t gridId;
 	CudbgGridTableEntry *gte;
 	CUDBGAttributeValuePair *pair;
 	uint32_t pairId;
@@ -1283,14 +1311,11 @@ DEF_API_CALL(getGridAttributes)(uint32_t dev, uint32_t sm, uint32_t wp,
 
 	VERIFY_ARG(pairs);
 
-	GET_TABLE_ENTRY(wte, CUDBG_ERROR_INVALID_WARP,
-			"wp%u_sm%u_dev%u", wp, sm, dev);
-
-	GET_TABLE_ENTRY(ctate, CUDBG_ERROR_UNKNOWN,
-			"cta_sm%u_dev%u", sm, dev);
+	if ((rc = getGridId(dev, sm, wp, &gridId)) != CUDBG_SUCCESS)
+		return rc;
 
 	GET_TABLE_ENTRY(gte, CUDBG_ERROR_INVALID_GRID,
-			"grid%llu_dev%u", ctate->gridId64, dev);
+			"grid%llu_dev%u", gridId, dev);
 
 	for (pairId = 0; pairId < numPairs; ++pairId) {
 		pair = &pairs[pairId];

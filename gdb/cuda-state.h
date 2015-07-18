@@ -91,7 +91,7 @@ cuda_clock_t warp_get_timestamp        (uint32_t dev_id, uint32_t sm_id, uint32_
 void     warp_set_grid_id              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint64_t grid_id);
 void     warp_set_block_idx            (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, CuDim3 *block_idx);
 
-bool     warp_single_step              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,   uint64_t *single_stepped_warp_mask);
+bool     warp_single_step              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t nsteps, uint64_t *single_stepped_warp_mask);
 bool     warps_resume_until            (uint32_t dev_id, uint32_t sm_id, uint64_t wp_mask, uint64_t pc);
 
 /* Lane State */

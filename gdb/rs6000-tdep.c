@@ -2866,7 +2866,7 @@ rs6000_stab_reg_to_regnum (struct gdbarch *gdbarch, reg_t num)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
 
-  if (0 <= num && num <= 31)
+  if (num <= 31)
     return tdep->ppc_gp0_regnum + num;
   else if (32 <= num && num <= 63)
     /* FIXME: jimb/2004-05-05: What should we do when the debug info
@@ -2908,7 +2908,7 @@ rs6000_dwarf2_reg_to_regnum (struct gdbarch *gdbarch, reg_t num)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
 
-  if (0 <= num && num <= 31)
+  if (num <= 31)
     return tdep->ppc_gp0_regnum + num;
   else if (32 <= num && num <= 63)
     /* FIXME: jimb/2004-05-05: What should we do when the debug info

@@ -27,6 +27,8 @@
 #include "cuda-state.h"
 #include "cuda-iterator.h"
 #include "cuda-frame.h"
+#include "cuda-tdep.h"
+#include "cuda-options.h"
 
 /* When inside an autostep range, we go into single-step mode */
 static bool autostep_stepping = false;
@@ -93,61 +95,58 @@ autostep_report_exception_host (uint64_t before_pc)
 }
 
 static void
-autostep_report_exception_device (int before_ln, uint64_t before_pc,
-  uint64_t after_pc)
+autostep_report_exception_device (int nsteps, int before_ln, uint64_t before_pc, uint64_t after_pc)
 {
-  cuda_coords_t c;
-  struct gdbarch *gdbarch = get_current_arch ();
+  struct gdbarch *gdbarch    = get_current_arch ();
   struct type *type_uint32   = builtin_type (gdbarch)->builtin_uint32;
   struct type *type_data_ptr = builtin_type (gdbarch)->builtin_data_ptr;
+  uint64_t exception_pc;
+  struct symtab_and_line exception_sal;
+  cuda_coords_t c;
+  bool divergent;
+  char exception_pc_line_info[200];
+
+  gdb_assert (nsteps >= 1);
 
   cuda_print_message_focus (false);
 
-  /* If the thread before stepping is also active, the exception didn't occur
-     in a divergent thread */
   cuda_coords_get_current (&c);
-  if (lane_is_active (c.dev, c.sm, c.wp, before_ln))
-    {
-      /* Exception in active lane. We know the exception must have been at the
-         previous pc */
+  divergent = !lane_is_active (c.dev, c.sm, c.wp, before_ln);
 
-      struct symtab_and_line before_sal = find_pc_line (before_pc, 0);
-
-      if (before_sal.symtab && before_sal.line)
-        printf_filtered (_("Autostep precisely caught exception at %s:%d (0x%llx)\n"),
-        before_sal.symtab->filename, before_sal.line, (unsigned long long)before_pc);
-      else
-        printf_filtered (_("Autostep precisely caught exception. (0x%llx)\n"),
-        (unsigned long long)before_pc);
-
-      set_internalvar (lookup_internalvar ("autostep_exception_pc"),
-        value_from_longest (type_data_ptr, (LONGEST) before_pc));
-      set_internalvar (lookup_internalvar ("autostep_exception_line"),
-        value_from_longest (type_uint32, (LONGEST) before_sal.line));
-    }
+  /* Calculate exception PC - if more than 1 one instruction was executed
+   * it means there was no control flow instructions so after_pc should
+   * be used as a reference (before_pc is far behind after_pc).
+   * If just one instruction was executed use before_pc as a reference,
+   * because the executed instruction could be a control flow instruction. */
+  if (nsteps > 1 || divergent)
+    cuda_api_get_adjusted_code_address (c.dev, after_pc, &exception_pc, CUDBG_ADJ_PREVIOUS_ADDRESS);
   else
-    {
-      /* Exception in divergent lane. We can't use the before_pc so we'll guess
-         that the exception was at after_pc-8. This is true in all but some
-         obscure cases. */
+    exception_pc = before_pc;
 
-      uint64_t guess_pc;
-      struct symtab_and_line guess_sal;
+  exception_sal = find_pc_line (exception_pc, 0);
 
-      cuda_api_get_adjusted_code_address (c.dev, after_pc, &guess_pc, CUDBG_ADJ_PREVIOUS_ADDRESS);
+  if (exception_sal.symtab && exception_sal.line)
+    snprintf (exception_pc_line_info, sizeof (exception_pc_line_info),
+              "%s:%d (0x%llx)",
+              exception_sal.symtab->filename, exception_sal.line,
+              (unsigned long long)exception_pc);
+  else
+    snprintf (exception_pc_line_info, sizeof (exception_pc_line_info),
+              "0x%llx",
+              (unsigned long long)exception_pc);
 
-      guess_sal = find_pc_line (guess_pc, 0);
+  if (divergent)
+    printf_filtered (_("Autostep caught exception at instruction before 0x%llx\n"
+                       "This is probably %s\n"),
+                     (unsigned long long)after_pc, exception_pc_line_info);
+  else
+    printf_filtered (_("Autostep precisely caught exception at %s\n"),
+                     exception_pc_line_info);
 
-      printf_filtered (_("Autostep caught exception at instruction before 0x%llx\n"),
-        (unsigned long long)after_pc);
-      printf_filtered (_("This is probably %s:%d (0x%llx)\n"),
-        guess_sal.symtab->filename, guess_sal.line, (unsigned long long)guess_pc);
-
-      set_internalvar (lookup_internalvar ("autostep_exception_pc"),
-        value_from_longest (type_data_ptr, (LONGEST) guess_pc));
-      set_internalvar (lookup_internalvar ("autostep_exception_line"),
-        value_from_longest (type_uint32, (LONGEST) guess_sal.line));
-    }
+  set_internalvar (lookup_internalvar ("autostep_exception_pc"),
+                   value_from_longest (type_data_ptr, (LONGEST) exception_pc));
+  set_internalvar (lookup_internalvar ("autostep_exception_line"),
+                   value_from_longest (type_uint32, (LONGEST) exception_sal.line));
 }
 
 /* Single steps all the host code if it is at an autostep */
@@ -227,7 +226,7 @@ handle_autostep_host (void)
 }
 
 static uint64_t
-find_end_pc(uint64_t pc)
+find_end_pc (uint64_t pc)
 {
   struct block *bl;
   struct minimal_symbol *msymbol;
@@ -243,19 +242,65 @@ find_end_pc(uint64_t pc)
   return (uint64_t)-1LL;
 }
 
+static int
+count_instructions (uint64_t pc, uint64_t end_pc)
+{
+  const char *inst;
+  uint32_t inst_size;
+  kernel_t kernel = cuda_current_kernel ();
+  int count = 0;
+
+  for (; pc < end_pc; pc += inst_size)
+    {
+      inst = kernel_disassemble (kernel, pc, &inst_size);
+      if (!inst)
+        break; /* Abort the loop if pc is outside of the routine boundary */
+      if (inst[0] == 0)
+        continue; /* Ignore empty instructions */
+      ++count;
+    }
+
+  return count;
+}
+
+static int
+count_lines (uint64_t pc, uint64_t end_pc, uint32_t inst_size)
+{
+  struct symtab_and_line cur_sal, next_sal;
+  int nlines = 0;
+
+  for (cur_sal = find_pc_line(pc, 0);
+       pc <= end_pc;
+       pc += inst_size, cur_sal = next_sal)
+    {
+      next_sal = find_pc_line(pc, 0);
+      /* Check if line numbers differ.
+       * If no line information exists treat each instruction as one line. */
+      if (!(cur_sal.symtab && cur_sal.line) ||
+          !(next_sal.symtab && next_sal.line) ||
+          cur_sal.line != next_sal.line)
+        ++nlines;
+    }
+
+  return nlines;
+}
+
 /* Single steps all the warps that are at an autostep */
 static void
-handle_autostep_device ()
+handle_autostep_device (void)
 {
   cuda_iterator iter;
   cuda_coords_t after_coords;
   struct breakpoint *astep, *overlap;
   uint64_t before_pc, after_pc, end_pc;
-  int remaining;
+  struct symtab_and_line before_sal, after_sal;
+  int nsteps, lines, remaining;
   struct cleanup *old_cleanups;
   bool single_inst;
   cuda_coords_t filter;
   const char *sm_type;
+  uint32_t inst_size;
+  uint64_t warps_mask;
 
   /* This suppresses printing of the line after each step */
   cuda_set_autostep_stepping (true);
@@ -320,21 +365,73 @@ handle_autostep_device ()
 
       while (remaining > 0)
         {
-          before_pc = warp_get_active_virtual_pc (c.dev, c.sm, c.wp);
-
-          /* If pc is in the top frame - do not allow autostepping outside of kernel boundaries */
-          if ( cuda_frame_outermost_p (get_next_frame (get_current_frame ())))
-            {
-              end_pc = find_end_pc (before_pc);
-              if (before_pc >= end_pc)
-                break;
-            }
-
           /* Clear pending flag to test if we encounter another autostep */
           cuda_set_autostep_pending (false);
 
-          /* Basically does a next/nexti */
-          step_1 (false, single_inst, NULL);
+          before_pc = warp_get_active_virtual_pc (c.dev, c.sm, c.wp);
+          before_sal = find_pc_line(before_pc, 0);
+
+          end_pc = -1; /* Not limited at the beginning */
+
+          /* Limit end_pc; at first assume there are no control flow instructions */
+          if (!cuda_options_single_stepping_optimizations_enabled ())
+            {
+              end_pc = before_pc;
+            }
+          else if (!(before_sal.symtab && before_sal.line) || single_inst)
+            {
+              /* Get instruction size */
+              kernel_disassemble (cuda_current_kernel (), before_pc, &inst_size);
+
+              end_pc = before_pc + remaining * inst_size;
+            }
+          else
+            {
+              VEC (CORE_ADDR) *line_pcs;
+              CORE_ADDR line_pc;
+              int i;
+              struct linetable_entry *best_item = NULL; /* ignored */
+
+              /* Search for all PCs which correspond to (current + remaining) line.
+               * Try to pick up lowest possible address after current pc
+               * corresponding to limiting line. */
+
+              line_pcs = find_pcs_for_symtab_line (before_sal.symtab,
+                                                   before_sal.line + remaining,
+                                                   &best_item);
+
+              for (i = 0; VEC_iterate (CORE_ADDR, line_pcs, i, line_pc); ++i)
+                {
+                  if (before_pc < line_pc && line_pc < end_pc)
+                    end_pc = line_pc;
+                }
+
+              VEC_free (CORE_ADDR, line_pcs);
+            }
+
+          /* If pc is in the top frame - do not allow autostepping outside of kernel boundaries */
+          if (cuda_frame_outermost_p (get_next_frame (get_current_frame ())))
+            {
+              uint64_t kernel_end_pc;
+              kernel_end_pc = find_end_pc (before_pc);
+              if (before_pc >= kernel_end_pc)
+                break;
+              if (kernel_end_pc < end_pc)
+                end_pc = kernel_end_pc;
+            }
+
+          /* Calculate how many steps should be taken */
+          if (cuda_options_single_stepping_optimizations_enabled ())
+            end_pc = cuda_find_next_control_flow_instruction (before_pc, end_pc, false, &inst_size);
+          if (end_pc == before_pc)
+            nsteps = 1; /* Currently at control flow instruction */
+          else
+            nsteps = count_instructions (before_pc, end_pc);
+
+          /* Does stepi, but cuda_sstep_execute takes cuda_sstep_nsteps into
+           * account to execute 'single step nsteps times' */
+          cuda_sstep_set_nsteps(nsteps);
+          step_1 (false, true, NULL);
 
           /* Check if logical coordinates are still valid and update physical
              coordinates. If logical coordinates are not valid, warp ran to
@@ -347,6 +444,11 @@ handle_autostep_device ()
             break;
 
           after_pc = warp_get_active_virtual_pc (c.dev, c.sm, c.wp);
+          after_sal = find_pc_line(after_pc, 0);
+
+          cuda_trace_domain (CUDA_TRACE_BREAKPOINT,
+                             "Autostep: issued single step %d steps (from %llx to %llx).",
+                             nsteps, before_pc, end_pc);
 
           if (cuda_autostep_stop ())
             {
@@ -358,7 +460,7 @@ handle_autostep_device ()
               if (tp && signal_pass_state (tp->suspend.stop_signal))
                 {
                   /* This is an exception */
-                  autostep_report_exception_device (before_ln, before_pc, after_pc);
+                  autostep_report_exception_device (nsteps, before_ln, before_pc, after_pc);
                   cuda_set_autostep_pending (false);
                 }
               else
@@ -376,7 +478,29 @@ handle_autostep_device ()
               return;
             }
 
-          remaining--;
+          /* Find out how many lines/nsteps were actually stepped */
+          if (nsteps > 1)
+            {
+              nsteps = count_instructions (before_pc, after_pc);
+              lines = count_lines (before_pc, after_pc, inst_size);
+            }
+          else /* Control flow instruction */
+            {
+              gdb_assert(nsteps == 1);
+
+              /* Calculate lines - if no line information exists treat it as one instruction */
+              lines = !(before_sal.symtab && before_sal.line) ||
+                      !(after_sal.symtab && after_sal.line) ||
+                      before_sal.line != after_sal.line;
+            }
+
+          remaining -= single_inst ? nsteps : lines;
+
+          cuda_trace_domain (CUDA_TRACE_BREAKPOINT,
+                             "Autostep: in fact single stepped %d steps / %d lines (%d %s left). "
+                             "PC after is %llx (%d).",
+                             nsteps, lines, remaining, single_inst ? "instructions" : "lines",
+                             (unsigned long long)after_pc, after_sal.line);
 
           /* Handle overlapping autosteps */
           if (cuda_get_autostep_pending ())
@@ -396,13 +520,20 @@ handle_autostep_device ()
         }
 
 next_warp:
+      cuda_trace_domain (CUDA_TRACE_BREAKPOINT,
+                         "Autostep: handling next warp! Previous was: tId=(%d,%d,%d) bId=(%d,%d,%d)",
+                         curc.threadIdx.x, curc.threadIdx.y, curc.threadIdx.y,
+                         curc.blockIdx.x, curc.blockIdx.y, curc.blockIdx.z);
+
       /* Skip to next warp (by using possibly outdated physical coordinates,
          but sorted correctly by logical coordinates) */
-      do {
+      do
+        {
         cuda_iterator_next (iter);
         nextc = cuda_iterator_get_current (iter);
-      } while (cuda_focus_is_device () && !cuda_iterator_end (iter) &&
-               curc.dev == nextc.dev && curc.sm == nextc.sm && curc.wp == nextc.wp);
+        }
+      while (cuda_focus_is_device () && !cuda_iterator_end (iter) &&
+             curc.dev == nextc.dev && curc.sm == nextc.sm && curc.wp == nextc.wp);
     }
 
   /* Mark that autostepping has been handled */
@@ -413,7 +544,7 @@ next_warp:
 }
 
 void
-cuda_handle_autostep ()
+cuda_handle_autostep (void)
 {
   if (!cuda_get_autostep_pending ())
     return;
