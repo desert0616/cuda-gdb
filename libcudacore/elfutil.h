@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2014-2015 NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -66,5 +66,42 @@ int elfGetSectionData(Elf *e, Elf_Scn *scn, Elf_Data *data);
 const char *elfGetString(Elf *e, size_t secndx, size_t idx);
 
 void elfFree(Elf *e);
+
+
+#ifndef __arm__
+#define readUint64(x) (*(x))
+#define readUint32(x) (*(x))
+#define readUint16(x) (*(x))
+#else
+static inline uint64_t readUint64(uint64_t *ptr)
+{
+	if (((long)ptr&7)!=0) {
+		uint64_t local;
+		memcpy ((void *)&local, (void *)ptr, sizeof(uint64_t));
+		return local;
+	}
+	return *ptr;
+}
+
+static inline uint32_t readUint32(uint32_t *ptr)
+{
+	if (((long)ptr&3)!=0) {
+		uint32_t local;
+		memcpy ((void *)&local, (void *)ptr, sizeof(uint32_t));
+		return local;
+	}
+	return *ptr;
+}
+
+static inline uint16_t readUint16(uint16_t *ptr)
+{
+	if (((long)ptr&1)!=0) {
+		uint16_t local;
+		memcpy ((void *)&local, (void *)ptr, sizeof(uint16_t));
+		return local;
+	}
+	return *ptr;
+}
+#endif
 
 #endif /* _ELFUTIL_H_ */
