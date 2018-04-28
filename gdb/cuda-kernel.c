@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -19,7 +19,7 @@
 
 #include "defs.h"
 #include "frame.h"
-#include "gdb_assert.h"
+#include "common-defs.h"
 #include "ui-out.h"
 
 #include "cuda-api.h"
@@ -145,13 +145,13 @@ kernel_new (uint32_t dev_id, uint64_t grid_id, uint64_t virt_code_base,
   if (name)
     {
       name_len  = strlen (name);
-      name_copy = xmalloc (name_len + 1);
+      name_copy = (char *) xmalloc (name_len + 1);
       memcpy (name_copy, name, name_len + 1);
     }
   else
     name_copy = NULL;
 
-  kernel = xmalloc (sizeof *kernel);
+  kernel = (kernel_t) xmalloc (sizeof *kernel);
 
   kernel->grid_status_p            = false;
 
@@ -231,6 +231,7 @@ kernel_get_name (kernel_t kernel)
 static void
 kernel_populate_args (kernel_t kernel)
 {
+  struct cleanup *old_chain;
   struct ui_file *stream = mem_fileopen ();
   cuda_coords_t *coords, requested, candidates[CK_MAX];
   struct frame_info *prev_frame, *frame;
@@ -238,15 +239,17 @@ kernel_populate_args (kernel_t kernel)
 
   cuda_focus_init (&focus);
 
-  make_cleanup_ui_file_delete (stream);
+  old_chain = make_cleanup_ui_file_delete (stream);
 
   /* Find an active lane for the kernel */
   requested = CUDA_WILDCARD_COORDS;
   requested.kernelId = kernel_get_id (kernel);
   cuda_coords_find_valid (requested, candidates, CUDA_SELECT_VALID);
   coords = &candidates[CK_EXACT_LOGICAL];
-  if (!coords->valid || !cuda_coords_equal (&requested, coords))
+  if (!coords->valid || !cuda_coords_equal (&requested, coords)) {
+    do_cleanups (old_chain);
     return;
+  }
 
   /* Save environment */
   cuda_focus_save (&focus);
@@ -267,6 +270,8 @@ kernel_populate_args (kernel_t kernel)
   /* Restore environment */
   ui_out_redirect (current_uiout, NULL);
   cuda_focus_restore (&focus);
+
+  do_cleanups (old_chain);
 }
 
 const char *

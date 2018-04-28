@@ -1,6 +1,6 @@
 /* Output generating routines for GDB.
 
-   Copyright (C) 1999-2013 Free Software Foundation, Inc.
+   Copyright (C) 1999-2016 Free Software Foundation, Inc.
 
    Contributed by Cygnus Solutions.
    Written by Fernando Nasser for Cygnus.
@@ -32,7 +32,8 @@ struct ui_file;
 
 /* FIXME: This should not be a global but something passed down from main.c
    or top.c.  */
-extern struct ui_out *current_uiout;
+extern struct ui_out **current_ui_current_uiout_ptr (void);
+#define current_uiout (*current_ui_current_uiout_ptr ())
 
 /* alignment enum */
 enum ui_align
@@ -236,7 +237,7 @@ extern void uo_field_string (struct ui_out *uiout, int fldno, int width,
 
 /* Create a ui_out object */
 
-extern struct ui_out *ui_out_new (struct ui_out_impl *impl,
+extern struct ui_out *ui_out_new (const struct ui_out_impl *impl,
 				  void *data,
 				  int flags);
 
@@ -247,5 +248,9 @@ extern void ui_out_destroy (struct ui_out *uiout);
 /* Redirect the ouptut of a ui_out object temporarily.  */
 
 extern int ui_out_redirect (struct ui_out *uiout, struct ui_file *outstream);
+
+/* Make a cleanup that restores the previous current uiout.  */
+
+extern struct cleanup *make_cleanup_restore_current_uiout (void);
 
 #endif /* UI_OUT_H */

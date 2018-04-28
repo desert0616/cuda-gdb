@@ -1,8 +1,6 @@
 /* Low-level I/O routines for BFDs.
 
-   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998,
-   1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2011
-   Free Software Foundation, Inc.
+   Copyright (C) 1990-2016 Free Software Foundation, Inc.
 
    Written by Cygnus Support.
 
@@ -89,7 +87,7 @@ real_fopen (const char *filename, const char *modes)
 #ifdef VMS
   char *vms_attr;
 
-  /* On VMS, fopen allows file attributes as optionnal arguments.
+  /* On VMS, fopen allows file attributes as optional arguments.
      We need to use them but we'd better to use the common prototype.
      In fopen-vms.h, they are separated from the mode with a comma.
      Split here.  */
@@ -118,7 +116,7 @@ real_fopen (const char *filename, const char *modes)
       return close_on_exec (fopen (filename, at[0], at[1], at[2]));
     }
 #else /* !VMS */
-#if defined (HAVE_FOPEN64)
+#if defined (HAVE_FOPEN64) && !defined(__ANDROID__)
   return close_on_exec (fopen64 (filename, modes));
 #else
   return close_on_exec (fopen (filename, modes));
@@ -236,7 +234,8 @@ bfd_tell (bfd *abfd)
       bfd *parent_bfd = abfd;
       ptr = abfd->iovec->btell (abfd);
 
-      while (parent_bfd->my_archive != NULL)
+      while (parent_bfd->my_archive != NULL
+	     && !bfd_is_thin_archive (parent_bfd->my_archive))
 	{
 	  ptr -= parent_bfd->origin;
 	  parent_bfd = parent_bfd->my_archive;
@@ -291,7 +290,7 @@ bfd_seek (bfd *abfd, file_ptr position, int direction)
   if (direction == SEEK_CUR && position == 0)
     return 0;
 
-  if (abfd->format != bfd_archive && abfd->my_archive == 0)
+  if (abfd->my_archive == NULL || bfd_is_thin_archive (abfd->my_archive))
     {
       if (direction == SEEK_SET && (bfd_vma) position == abfd->where)
 	return 0;
@@ -316,7 +315,8 @@ bfd_seek (bfd *abfd, file_ptr position, int direction)
     {
       bfd *parent_bfd = abfd;
 
-      while (parent_bfd->my_archive != NULL)
+      while (parent_bfd->my_archive != NULL
+	     && !bfd_is_thin_archive (parent_bfd->my_archive))
         {
           file_position += parent_bfd->origin;
           parent_bfd = parent_bfd->my_archive;

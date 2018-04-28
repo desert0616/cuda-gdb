@@ -1,5 +1,5 @@
 /* Vector API for GDB.
-   Copyright (C) 2004-2013 Free Software Foundation, Inc.
+   Copyright (C) 2004-2016 Free Software Foundation, Inc.
    Contributed by Nathan Sidwell <nathan@codesourcery.com>
 
    This file is part of GDB.
@@ -19,11 +19,6 @@
 
 #if !defined (GDB_VEC_H)
 #define GDB_VEC_H
-
-#include <stddef.h>
-
-#include "gdb_string.h"
-#include "gdb_assert.h"
 
 /* The macros here implement a set of templated vector types and
    associated interfaces.  These templates are implemented with
@@ -398,7 +393,7 @@ extern void *vec_o_reserve (void *, int, size_t, size_t);
 #define VEC_ASSERT_PASS ,file_,line_
 #define vec_assert(expr, op) \
   ((void)((expr) ? 0 : (gdb_assert_fail (op, file_, line_, \
-					 ASSERT_FUNCTION), 0)))
+					 FUNCTION_NAME), 0)))
 
 #define VEC(T) VEC_##T
 #define VEC_OP(T,OP) VEC_##T##_##OP
@@ -448,13 +443,23 @@ DEF_VEC_FUNC_O(T)							  \
 DEF_VEC_ALLOC_FUNC_O(T)							  \
 struct vec_swallow_trailing_semi
 
+/* Avoid offsetof (or its usual C implementation) as it triggers
+   -Winvalid-offsetof warnings with enum_flags types with G++ <= 4.4,
+   even though those types are memcpyable.  This requires allocating a
+   dummy local VEC in all routines that use this, but that has the
+   advantage that it only works if T is default constructible, which
+   is exactly a check we want, to keep C compatibility.  */
+#define vec_offset(T, VPTR) ((size_t) ((char *) &(VPTR)->vec - (char *) VPTR))
+
 #define DEF_VEC_ALLOC_FUNC_I(T)						  \
 DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,alloc)				  \
      (int alloc_)							  \
 {									  \
+  VEC(T) dummy;							  	  \
+									  \
   /* We must request exact size allocation, hence the negation.  */	  \
   return (VEC(T) *) vec_o_reserve (NULL, -alloc_,			  \
-                                   offsetof (VEC(T),vec), sizeof (T));	  \
+                                   vec_offset (T, &dummy), sizeof (T));	  \
 }									  \
 									  \
 DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,copy) (VEC(T) *vec_)			  \
@@ -464,9 +469,11 @@ DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,copy) (VEC(T) *vec_)			  \
 									  \
   if (len_)								  \
     {									  \
+      VEC(T) dummy;							  \
+									  \
       /* We must request exact size allocation, hence the negation.  */	  \
       new_vec_ = (VEC (T) *)						  \
-	vec_o_reserve (NULL, -len_, offsetof (VEC(T),vec), sizeof (T));	  \
+	vec_o_reserve (NULL, -len_, vec_offset (T, &dummy), sizeof (T));  \
 									  \
       new_vec_->num = len_;						  \
       memcpy (new_vec_->vec, vec_->vec, sizeof (T) * len_);		  \
@@ -478,12 +485,13 @@ DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,merge) (VEC(T) *vec1_, VEC(T) *vec2_)	  \
 {									  \
   if (vec1_ && vec2_)							  \
     {									  \
+      VEC(T) dummy;							  \
       size_t len_ = vec1_->num + vec2_->num;				  \
       VEC (T) *new_vec_ = NULL;						  \
 									  \
       /* We must request exact size allocation, hence the negation.  */	  \
       new_vec_ = (VEC (T) *)						  \
-	vec_o_reserve (NULL, -len_, offsetof (VEC(T),vec), sizeof (T));	  \
+	vec_o_reserve (NULL, -len_, vec_offset (T, &dummy), sizeof (T));  \
 									  \
       new_vec_->num = len_;						  \
       memcpy (new_vec_->vec, vec1_->vec, sizeof (T) * vec1_->num);	  \
@@ -507,7 +515,7 @@ DEF_VEC_OP_DECL void VEC_OP (T,free)					  \
 DEF_VEC_OP_DECL void VEC_OP (T,cleanup)					  \
      (void *arg_)							  \
 {									  \
-  VEC(T) **vec_ = arg_;							  \
+  VEC(T) **vec_ = (VEC(T) **) arg_;					  \
   if (*vec_)								  \
     vec_free_ (*vec_);							  \
   *vec_ = NULL;								  \
@@ -516,12 +524,13 @@ DEF_VEC_OP_DECL void VEC_OP (T,cleanup)					  \
 DEF_VEC_OP_DECL int VEC_OP (T,reserve)					  \
      (VEC(T) **vec_, int alloc_ VEC_ASSERT_DECL)			  \
 {									  \
+  VEC(T) dummy;								  \
   int extend = !VEC_OP (T,space)					  \
 	(*vec_, alloc_ < 0 ? -alloc_ : alloc_ VEC_ASSERT_PASS);		  \
 									  \
   if (extend)								  \
     *vec_ = (VEC(T) *) vec_o_reserve (*vec_, alloc_,			  \
-				      offsetof (VEC(T),vec), sizeof (T)); \
+				      vec_offset (T, &dummy), sizeof (T)); \
 									  \
   return extend;							  \
 }									  \
@@ -558,7 +567,7 @@ DEF_VEC_OP_DECL unsigned VEC_OP (T,length) (const VEC(T) *vec_)		  \
   return vec_ ? vec_->num : 0;						  \
 }									  \
 									  \
-DEF_VEC_OP_DECL T VEC_OP (T,last)						  \
+DEF_VEC_OP_DECL T VEC_OP (T,last)					  \
 	(const VEC(T) *vec_ VEC_ASSERT_DECL)				  \
 {									  \
   vec_assert (vec_ && vec_->num, "last");				  \
@@ -584,7 +593,7 @@ DEF_VEC_OP_DECL int VEC_OP (T,iterate)					  \
     }									  \
   else									  \
     {									  \
-      *ptr = 0;								  \
+      *ptr = (T) 0;							  \
       return 0;								  \
     }									  \
 }									  \
@@ -592,7 +601,9 @@ DEF_VEC_OP_DECL int VEC_OP (T,iterate)					  \
 DEF_VEC_OP_DECL size_t VEC_OP (T,embedded_size)				  \
      (int alloc_)							  \
 {									  \
-  return offsetof (VEC(T),vec) + alloc_ * sizeof(T);			  \
+  VEC(T) dummy;								  \
+									  \
+  return vec_offset (T, &dummy) + alloc_ * sizeof(T);			  \
 }									  \
 									  \
 DEF_VEC_OP_DECL void VEC_OP (T,embedded_init)				  \
@@ -609,7 +620,7 @@ DEF_VEC_OP_DECL int VEC_OP (T,space)					  \
   return vec_ ? vec_->alloc - vec_->num >= (unsigned)alloc_ : !alloc_;	  \
 }									  \
 									  \
-DEF_VEC_OP_DECL T *VEC_OP (T,quick_push)					  \
+DEF_VEC_OP_DECL T *VEC_OP (T,quick_push)				  \
      (VEC(T) *vec_, T obj_ VEC_ASSERT_DECL)				  \
 {									  \
   T *slot_;								  \
@@ -631,7 +642,7 @@ DEF_VEC_OP_DECL T VEC_OP (T,pop) (VEC(T) *vec_ VEC_ASSERT_DECL)		  \
   return obj_;								  \
 }									  \
 									  \
-DEF_VEC_OP_DECL void VEC_OP (T,truncate)					  \
+DEF_VEC_OP_DECL void VEC_OP (T,truncate)				  \
      (VEC(T) *vec_, unsigned size_ VEC_ASSERT_DECL)			  \
 {									  \
   vec_assert (vec_ ? vec_->num >= size_ : !size_, "truncate");		  \
@@ -736,7 +747,7 @@ DEF_VEC_OP_DECL unsigned VEC_OP (T,lower_bound)				  \
 }
 
 #define DEF_VEC_ALLOC_FUNC_P(T)						  \
-DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,alloc)					  \
+DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,alloc)				  \
      (int alloc_)							  \
 {									  \
   /* We must request exact size allocation, hence the negation.  */	  \
@@ -754,7 +765,7 @@ DEF_VEC_OP_DECL void VEC_OP (T,free)					  \
 DEF_VEC_OP_DECL void VEC_OP (T,cleanup)					  \
      (void *arg_)							  \
 {									  \
-  VEC(T) **vec_ = arg_;							  \
+  VEC(T) **vec_ = (VEC(T) **) arg_;					  \
   if (*vec_)								  \
     vec_free_ (*vec_);							  \
   *vec_ = NULL;								  \
@@ -809,7 +820,7 @@ DEF_VEC_OP_DECL int VEC_OP (T,reserve)					  \
   return extend;							  \
 }									  \
 									  \
-DEF_VEC_OP_DECL void VEC_OP (T,safe_grow)					  \
+DEF_VEC_OP_DECL void VEC_OP (T,safe_grow)				  \
      (VEC(T) **vec_, int size_ VEC_ASSERT_DECL)				  \
 {									  \
   vec_assert (size_ >= 0 && VEC_OP(T,length) (*vec_) <= (unsigned)size_,  \
@@ -827,7 +838,7 @@ DEF_VEC_OP_DECL T *VEC_OP (T,safe_push)					  \
   return VEC_OP (T,quick_push) (*vec_, obj_ VEC_ASSERT_PASS);		  \
 }									  \
 									  \
-DEF_VEC_OP_DECL T *VEC_OP (T,safe_insert)					  \
+DEF_VEC_OP_DECL T *VEC_OP (T,safe_insert)				  \
      (VEC(T) **vec_, unsigned ix_, T obj_ VEC_ASSERT_DECL)		  \
 {									  \
   VEC_OP (T,reserve) (vec_, 1 VEC_ASSERT_PASS);				  \
@@ -841,7 +852,7 @@ DEF_VEC_OP_DECL unsigned VEC_OP (T,length) (const VEC(T) *vec_)		  \
   return vec_ ? vec_->num : 0;						  \
 }									  \
 									  \
-DEF_VEC_OP_DECL T *VEC_OP (T,last) (VEC(T) *vec_ VEC_ASSERT_DECL)		  \
+DEF_VEC_OP_DECL T *VEC_OP (T,last) (VEC(T) *vec_ VEC_ASSERT_DECL)	  \
 {									  \
   vec_assert (vec_ && vec_->num, "last");				  \
 									  \
@@ -874,7 +885,9 @@ DEF_VEC_OP_DECL int VEC_OP (T,iterate)					  \
 DEF_VEC_OP_DECL size_t VEC_OP (T,embedded_size)				  \
      (int alloc_)							  \
 {									  \
-  return offsetof (VEC(T),vec) + alloc_ * sizeof(T);			  \
+  VEC(T) dummy;								  \
+									  \
+  return vec_offset (T, &dummy) + alloc_ * sizeof(T);			  \
 }									  \
 									  \
 DEF_VEC_OP_DECL void VEC_OP (T,embedded_init)				  \
@@ -891,7 +904,7 @@ DEF_VEC_OP_DECL int VEC_OP (T,space)					  \
   return vec_ ? vec_->alloc - vec_->num >= (unsigned)alloc_ : !alloc_;	  \
 }									  \
 									  \
-DEF_VEC_OP_DECL T *VEC_OP (T,quick_push)					  \
+DEF_VEC_OP_DECL T *VEC_OP (T,quick_push)				  \
      (VEC(T) *vec_, const T *obj_ VEC_ASSERT_DECL)			  \
 {									  \
   T *slot_;								  \
@@ -910,7 +923,7 @@ DEF_VEC_OP_DECL void VEC_OP (T,pop) (VEC(T) *vec_ VEC_ASSERT_DECL)	  \
   --vec_->num;								  \
 }									  \
 									  \
-DEF_VEC_OP_DECL void VEC_OP (T,truncate)					  \
+DEF_VEC_OP_DECL void VEC_OP (T,truncate)				  \
      (VEC(T) *vec_, unsigned size_ VEC_ASSERT_DECL)			  \
 {									  \
   vec_assert (vec_ ? vec_->num >= size_ : !size_, "truncate");		  \
@@ -955,7 +968,7 @@ DEF_VEC_OP_DECL void VEC_OP (T,ordered_remove)				  \
   memmove (slot_, slot_ + 1, (--vec_->num - ix_) * sizeof (T));		  \
 }									  \
 									  \
-DEF_VEC_OP_DECL void VEC_OP (T,unordered_remove)				  \
+DEF_VEC_OP_DECL void VEC_OP (T,unordered_remove)			  \
      (VEC(T) *vec_, unsigned ix_ VEC_ASSERT_DECL)			  \
 {									  \
   vec_assert (ix_ < vec_->num, "unordered_remove");			  \
@@ -1006,12 +1019,14 @@ DEF_VEC_OP_DECL unsigned VEC_OP (T,lower_bound)				  \
 }
 
 #define DEF_VEC_ALLOC_FUNC_O(T)						  \
-DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,alloc)					  \
+DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,alloc)				  \
      (int alloc_)							  \
 {									  \
+  VEC(T) dummy;								  \
+									  \
   /* We must request exact size allocation, hence the negation.  */	  \
   return (VEC(T) *) vec_o_reserve (NULL, -alloc_,			  \
-                                   offsetof (VEC(T),vec), sizeof (T));	  \
+                                   vec_offset (T, &dummy), sizeof (T));	  \
 }									  \
 									  \
 DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,copy) (VEC(T) *vec_)			  \
@@ -1021,9 +1036,11 @@ DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,copy) (VEC(T) *vec_)			  \
 									  \
   if (len_)								  \
     {									  \
+      VEC(T) dummy;							  \
+									  \
       /* We must request exact size allocation, hence the negation.  */	  \
       new_vec_ = (VEC (T) *)						  \
-	vec_o_reserve  (NULL, -len_, offsetof (VEC(T),vec), sizeof (T));  \
+	vec_o_reserve  (NULL, -len_, vec_offset (T, &dummy), sizeof (T)); \
 									  \
       new_vec_->num = len_;						  \
       memcpy (new_vec_->vec, vec_->vec, sizeof (T) * len_);		  \
@@ -1035,12 +1052,13 @@ DEF_VEC_OP_DECL VEC(T) *VEC_OP (T,merge) (VEC(T) *vec1_, VEC(T) *vec2_)	  \
 {									  \
   if (vec1_ && vec2_)							  \
     {									  \
+      VEC(T) dummy;							  \
       size_t len_ = vec1_->num + vec2_->num;				  \
       VEC (T) *new_vec_ = NULL;						  \
 									  \
       /* We must request exact size allocation, hence the negation.  */	  \
       new_vec_ = (VEC (T) *)						  \
-	vec_o_reserve (NULL, -len_, offsetof (VEC(T),vec), sizeof (T));	  \
+	vec_o_reserve (NULL, -len_, vec_offset (T, &dummy), sizeof (T));  \
 									  \
       new_vec_->num = len_;						  \
       memcpy (new_vec_->vec, vec1_->vec, sizeof (T) * vec1_->num);	  \
@@ -1064,7 +1082,7 @@ DEF_VEC_OP_DECL void VEC_OP (T,free)					  \
 DEF_VEC_OP_DECL void VEC_OP (T,cleanup)					  \
      (void *arg_)							  \
 {									  \
-  VEC(T) **vec_ = arg_;							  \
+  VEC(T) **vec_ = (VEC(T) **) arg_;					  \
   if (*vec_)								  \
     vec_free_ (*vec_);							  \
   *vec_ = NULL;								  \
@@ -1073,12 +1091,13 @@ DEF_VEC_OP_DECL void VEC_OP (T,cleanup)					  \
 DEF_VEC_OP_DECL int VEC_OP (T,reserve)					  \
      (VEC(T) **vec_, int alloc_ VEC_ASSERT_DECL)			  \
 {									  \
+  VEC(T) dummy;								  \
   int extend = !VEC_OP (T,space) (*vec_, alloc_ < 0 ? -alloc_ : alloc_	  \
 				  VEC_ASSERT_PASS);			  \
 									  \
   if (extend)								  \
     *vec_ = (VEC(T) *)							  \
-	vec_o_reserve (*vec_, alloc_, offsetof (VEC(T),vec), sizeof (T)); \
+      vec_o_reserve (*vec_, alloc_, vec_offset (T, &dummy), sizeof (T));  \
 									  \
   return extend;							  \
 }									  \

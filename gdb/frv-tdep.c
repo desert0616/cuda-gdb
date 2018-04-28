@@ -1,6 +1,6 @@
 /* Target-dependent code for the Fujitsu FR-V, for GDB, the GNU Debugger.
 
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -18,7 +18,6 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "defs.h"
-#include "gdb_string.h"
 #include "inferior.h"
 #include "gdbcore.h"
 #include "arch-utils.h"
@@ -28,7 +27,6 @@
 #include "frame-base.h"
 #include "trad-frame.h"
 #include "dis-asm.h"
-#include "gdb_assert.h"
 #include "sim-regno.h"
 #include "gdb/sim-frv.h"
 #include "opcodes/frv-desc.h"	/* for the H_SPR_... enums */
@@ -39,6 +37,7 @@
 #include "infcall.h"
 #include "solib.h"
 #include "frv-tdep.h"
+#include "objfiles.h"
 
 extern void _initialize_frv_tdep (void);
 
@@ -137,9 +136,8 @@ new_variant (void)
   struct gdbarch_tdep *var;
   int r;
 
-  var = xmalloc (sizeof (*var));
-  memset (var, 0, sizeof (*var));
-  
+  var = XCNEW (struct gdbarch_tdep);
+
   var->frv_abi = FRV_ABI_EABI;
   var->num_gprs = 64;
   var->num_fprs = 64;
@@ -456,7 +454,7 @@ frv_adjust_breakpoint_address (struct gdbarch *gdbarch, CORE_ADDR bpaddr)
      an instruction word whose packing bit is set to one.  */
   while (count-- > 0 && addr >= func_start)
     {
-      char instr[frv_instr_size];
+      gdb_byte instr[frv_instr_size];
       int status;
 
       status = target_read_memory (addr, instr, sizeof instr);
@@ -1072,7 +1070,7 @@ frv_skip_main_prologue (struct gdbarch *gdbarch, CORE_ADDR pc)
     {
       LONGEST displ;
       CORE_ADDR call_dest;
-      struct minimal_symbol *s;
+      struct bound_minimal_symbol s;
 
       displ = ((op & 0xfe000000) >> 7) | (op & 0x0003ffff);
       if ((displ & 0x00800000) != 0)
@@ -1081,9 +1079,9 @@ frv_skip_main_prologue (struct gdbarch *gdbarch, CORE_ADDR pc)
       call_dest = pc + 4 * displ;
       s = lookup_minimal_symbol_by_pc (call_dest);
 
-      if (s != NULL
-          && SYMBOL_LINKAGE_NAME (s) != NULL
-	  && strcmp (SYMBOL_LINKAGE_NAME (s), "__main") == 0)
+      if (s.minsym != NULL
+          && MSYMBOL_LINKAGE_NAME (s.minsym) != NULL
+	  && strcmp (MSYMBOL_LINKAGE_NAME (s.minsym), "__main") == 0)
 	{
 	  pc += 4;
 	  return pc;
@@ -1101,7 +1099,7 @@ frv_frame_unwind_cache (struct frame_info *this_frame,
   struct frv_unwind_cache *info;
 
   if ((*this_prologue_cache))
-    return (*this_prologue_cache);
+    return (struct frv_unwind_cache *) (*this_prologue_cache);
 
   info = FRAME_OBSTACK_ZALLOC (struct frv_unwind_cache);
   (*this_prologue_cache) = info;
@@ -1154,7 +1152,7 @@ find_func_descr (struct gdbarch *gdbarch, CORE_ADDR entry_point)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   CORE_ADDR descr;
-  char valbuf[4];
+  gdb_byte valbuf[4];
   CORE_ADDR start_addr;
 
   /* If we can't find the function in the symbol table, then we assume
@@ -1206,8 +1204,8 @@ frv_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   int argreg;
   int argnum;
-  char *val;
-  char valbuf[4];
+  const gdb_byte *val;
+  gdb_byte valbuf[4];
   struct value *arg;
   struct type *arg_type;
   int len;
@@ -1274,7 +1272,7 @@ frv_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
 	}
       else
 	{
-	  val = (char *) value_contents (arg);
+	  val = value_contents (arg);
 	}
 
       while (len > 0)
@@ -1391,7 +1389,7 @@ frv_frame_this_id (struct frame_info *this_frame,
     = frv_frame_unwind_cache (this_frame, this_prologue_cache);
   CORE_ADDR base;
   CORE_ADDR func;
-  struct minimal_symbol *msym_stack;
+  struct bound_minimal_symbol msym_stack;
   struct frame_id id;
 
   /* The FUNC is easy.  */
@@ -1399,7 +1397,7 @@ frv_frame_this_id (struct frame_info *this_frame,
 
   /* Check if the stack is empty.  */
   msym_stack = lookup_minimal_symbol ("_stack", NULL, NULL);
-  if (msym_stack && info->base == SYMBOL_VALUE_ADDRESS (msym_stack))
+  if (msym_stack.minsym && info->base == BMSYMBOL_VALUE_ADDRESS (msym_stack))
     return;
 
   /* Hopefully the prologue analysis either correctly determined the
@@ -1483,6 +1481,7 @@ frv_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
     {
     case bfd_mach_frv:
     case bfd_mach_frvsimple:
+    case bfd_mach_fr300:
     case bfd_mach_fr500:
     case bfd_mach_frvtomcat:
     case bfd_mach_fr550:
@@ -1564,6 +1563,7 @@ frv_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
     {
     case bfd_mach_frv:
     case bfd_mach_frvsimple:
+    case bfd_mach_fr300:
     case bfd_mach_fr500:
     case bfd_mach_frvtomcat:
       /* fr500-style hardware debugging support.  */

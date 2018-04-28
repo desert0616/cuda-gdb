@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2015-2016 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -18,8 +18,9 @@
 #include <string.h>
 
 #include "defs.h"
-#include "gdb_assert.h"
+#include "common-defs.h"
 #include "ui-out.h"
+#include "gdb_signals.h"
 
 #include "cuda-coords.h"
 #include "cuda-exceptions.h"
@@ -111,7 +112,7 @@ print_exception_origin (cuda_exception_t exception)
       if (filename)
         ++filename;
       else
-        filename = sal.symtab->filename;
+        filename = (char *) sal.symtab->filename;
     }
 
   ui_out_text (uiout, "PC ");
@@ -197,14 +198,12 @@ print_assert_message (cuda_exception_t exception)
 static void
 print_exception_name (cuda_exception_t exception)
 {
-  cuda_coords_t c;
-  uint32_t value;
+  enum gdb_signal value;
   const char *name;
 
   gdb_assert (cuda_exception_is_valid (exception));
 
-  c = cuda_exception_get_coords (exception);
-  value = cuda_exception_get_value (exception);
+  value = (enum gdb_signal) cuda_exception_get_value (exception);
   name = gdb_signal_to_string (value);
 
   ui_out_text (current_uiout, "\nCUDA Exception: ");
@@ -222,6 +221,7 @@ cuda_exception_print_message (cuda_exception_t exception)
       print_exception_origin (exception);
       break;
     case GDB_SIGNAL_CUDA_LANE_ILLEGAL_ADDRESS:
+    case GDB_SIGNAL_CUDA_LANE_NONMIGRATABLE_ATOMSYS:
       print_lane_illegal_address_message (exception);
       print_exception_origin (exception);
       break;
@@ -257,6 +257,7 @@ cuda_exception_hit_p (cuda_exception_t exception)
 {
   CUDBGException_t exception_type = CUDBG_EXCEPTION_NONE;
   cuda_coords_t c = CUDA_INVALID_COORDS, filter = CUDA_WILDCARD_COORDS;
+  cuda_api_warpmask tmp;
   cuda_iterator itr;
   uint64_t error_pc;
   bool error_pc_available;
@@ -273,7 +274,9 @@ cuda_exception_hit_p (cuda_exception_t exception)
         {
           filter.sm = cuda_sstep_sm_id();
           /* If only one bit is set in warp mask limit iteration to it */
-          if (((1LL)<<cuda_sstep_wp_id()) == cuda_sstep_wp_mask())
+          cuda_api_clear_mask(&tmp);
+          cuda_api_set_bit(&tmp, cuda_sstep_wp_id(), 1);
+          if(cuda_api_eq_mask(cuda_sstep_wp_mask(), &tmp))
             filter.wp = cuda_sstep_wp_id();
         }
     }
@@ -281,7 +284,7 @@ cuda_exception_hit_p (cuda_exception_t exception)
   if (filter.dev == CUDA_WILDCARD || device_has_exception (filter.dev))
     {
       itr = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter,
-                                  CUDA_SELECT_VALID | CUDA_SELECT_EXCPT | CUDA_SELECT_SNGL);
+                                  (cuda_select_t)(CUDA_SELECT_VALID | CUDA_SELECT_EXCPT | CUDA_SELECT_SNGL));
       cuda_iterator_start (itr);
       if (!cuda_iterator_end (itr))
         {
@@ -360,6 +363,11 @@ cuda_exception_hit_p (cuda_exception_t exception)
       exception->valid = true;
       exception->recoverable = false;
       break;
+    case CUDBG_EXCEPTION_LANE_NONMIGRATABLE_ATOMSYS:
+      exception->value = GDB_SIGNAL_CUDA_LANE_NONMIGRATABLE_ATOMSYS;
+      exception->valid = true;
+      exception->recoverable = false;
+      break;
     case CUDBG_EXCEPTION_NONE:
       break;
     case CUDBG_EXCEPTION_UNKNOWN:
@@ -409,6 +417,8 @@ cuda_exception_type_to_name (CUDBGException_t exception_type)
       return gdb_signal_to_string (GDB_SIGNAL_CUDA_LANE_SYSCALL_ERROR);
     case CUDBG_EXCEPTION_WARP_ILLEGAL_ADDRESS:
       return gdb_signal_to_string (GDB_SIGNAL_CUDA_WARP_ILLEGAL_ADDRESS);
+    case CUDBG_EXCEPTION_LANE_NONMIGRATABLE_ATOMSYS:
+      return gdb_signal_to_string (GDB_SIGNAL_CUDA_LANE_NONMIGRATABLE_ATOMSYS);
     default:
       return gdb_signal_to_string (GDB_SIGNAL_CUDA_UNKNOWN_EXCEPTION);
     }

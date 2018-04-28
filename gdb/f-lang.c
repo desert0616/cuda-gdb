@@ -1,6 +1,6 @@
 /* Fortran language support routines for GDB, the GNU debugger.
 
-   Copyright (C) 1993-2013 Free Software Foundation, Inc.
+   Copyright (C) 1993-2016 Free Software Foundation, Inc.
 
    Contributed by Motorola.  Adapted from the C parser by Farooq Butt
    (fmbutt@engage.sps.mot.com).
@@ -21,12 +21,12 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "defs.h"
-#include "gdb_string.h"
 #include "symtab.h"
 #include "gdbtypes.h"
 #include "expression.h"
 #include "parser-defs.h"
 #include "language.h"
+#include "varobj.h"
 #include "f-lang.h"
 #include "f-module.h"
 #include "valprint.h"
@@ -34,7 +34,7 @@
 #include "cp-support.h"
 #include "charset.h"
 #include "c-lang.h"
-#include "dwarf2loc.h"          /* dl added this for the baton stuff */
+#include "dwarf2loc.h" /* dl added this for the baton stuff */
 
 
 /* Local functions */
@@ -123,17 +123,36 @@ f_printstr (struct ui_file *stream, struct type *type, const gdb_byte *string,
 static void
 reset_lengths(struct type* type) 
 {
+  struct type* ntype;
   struct type* range_type;
   int high_bound; 
   int low_bound; 
-  if (TYPE_CODE(TYPE_TARGET_TYPE(type)) == TYPE_CODE_ARRAY || 
-     TYPE_CODE(TYPE_TARGET_TYPE(type)) == TYPE_CODE_STRING) 
-    reset_lengths(TYPE_TARGET_TYPE(type));
-  range_type = TYPE_FIELD_TYPE(type, 0);
-  high_bound = TYPE_HIGH_BOUND (range_type);
-  low_bound = TYPE_LOW_BOUND (range_type);
-  TYPE_LENGTH(type) = 
-    TYPE_LENGTH (TYPE_TARGET_TYPE(type)) * (high_bound - low_bound + 1);
+
+  if (TYPE_CODE (type) == TYPE_CODE_ARRAY || 
+     TYPE_CODE (type) == TYPE_CODE_STRING) 
+      {
+	  if (TYPE_CODE(TYPE_TARGET_TYPE(type)) == TYPE_CODE_ARRAY || 
+	      TYPE_CODE(TYPE_TARGET_TYPE(type)) == TYPE_CODE_STRING) 
+	      reset_lengths(TYPE_TARGET_TYPE(type));
+
+	  range_type = TYPE_FIELD_TYPE (type, 0);
+	  if (TYPE_LOW_BOUND_KIND (range_type) == PROP_CONST &&
+	      TYPE_HIGH_BOUND_KIND (range_type) == PROP_CONST)
+	      {
+		  high_bound = TYPE_HIGH_BOUND (range_type);
+		  low_bound = TYPE_LOW_BOUND (range_type);
+
+		  /* Set the length of all types in the chain. */
+		  ntype = type;
+		  do
+		      {
+			  TYPE_LENGTH (ntype) = 
+			      TYPE_LENGTH (TYPE_TARGET_TYPE (ntype)) * (high_bound - low_bound + 1);
+			  ntype = TYPE_CHAIN (ntype);
+		      }
+		  while (ntype != type);
+	      }
+      }
 }
 
 static void 
@@ -177,7 +196,7 @@ setup_array_bounds (struct value *v, struct value *objptr, struct frame_info *fr
 		    
  		    if (r > 1000L * 1000L* 1000L || r < -100000L) r = 1; /* FIXME */ 
 		    TYPE_LOW_BOUND(range_type) = (int) r;
-		    TYPE_LOW_BOUND_UNDEFINED (range_type) = 0;
+		    TYPE_LOW_BOUND_KIND (range_type) = PROP_CONST;
 		  }
 		if (TYPE_HIGH_BOUND_BATON(range_type)) 
 		  {
@@ -193,7 +212,7 @@ setup_array_bounds (struct value *v, struct value *objptr, struct frame_info *fr
 		    r = (int) f(baton, objptr, frame);
  		    if (r > 1000L * 1000L* 1000L || r < -100000L) r = 1; /* FIXME */ 
 		    TYPE_HIGH_BOUND(range_type) = (int) r;
-		    TYPE_HIGH_BOUND_UNDEFINED (range_type) = 0;
+		    TYPE_HIGH_BOUND_KIND (range_type) = PROP_CONST;
 		  }
 		if (TYPE_COUNT_BOUND_BATON(range_type)) 
 		  { 
@@ -218,8 +237,8 @@ setup_array_bounds (struct value *v, struct value *objptr, struct frame_info *fr
 		  {
 		    TYPE_LOW_BOUND(range_type) = 
 		      TYPE_HIGH_BOUND(range_type) + 1;
-		    TYPE_HIGH_BOUND_UNDEFINED (range_type) = 0;
-		    TYPE_LOW_BOUND_UNDEFINED (range_type) = 0;
+		    TYPE_HIGH_BOUND_KIND (range_type) = PROP_CONST;
+		    TYPE_LOW_BOUND_KIND (range_type) = PROP_CONST;
 		  }
 	      }
 	    }
@@ -333,7 +352,7 @@ get_new_address (struct value *v, struct value *objptr, struct frame_info *frame
 
 			  void *baton;
 			  CORE_ADDR (*f) (void *, struct value *, void *);
-			  f = TYPE_BOUND_BATON_FUNCTION (range_type);
+			  f = (CORE_ADDR (*) (void *, struct value *, void *)) TYPE_BOUND_BATON_FUNCTION (range_type);
  
 
 			  low = TYPE_LOW_BOUND (range_type);
@@ -467,7 +486,7 @@ static const struct op_print f_op_print_tab[] =
   {"CEILING", UNOP_CEIL, PREC_BUILTIN_FUNCTION, 0},
   {"FLOOR", UNOP_FLOOR, PREC_BUILTIN_FUNCTION, 0},
   {"MOD", BINOP_FMOD, PREC_BUILTIN_FUNCTION, 0},
-  {NULL, 0, 0, 0}
+  {NULL, OP_NULL, PREC_REPEAT, 0}
 };
 
 enum f_primitive_types {
@@ -556,22 +575,33 @@ f_word_break_characters (void)
    class.  */
 
 static VEC (char_ptr) *
-f_make_symbol_completion_list (char *text, char *word, enum type_code code)
+f_make_symbol_completion_list (const char *text, const char *word,
+			       enum type_code code)
 {
   return default_make_symbol_completion_list_break_on (text, word, ":", code);
 }
 
+static const char *f_extensions[] =
+{
+  ".f", ".F", ".for", ".FOR", ".ftn", ".FTN", ".fpp", ".FPP",
+  ".f77", ".F77",
+  ".f90", ".F90", ".f95", ".F95", ".f03", ".F03", ".f08", ".F08",
+  NULL
+};
+
 const struct language_defn f_language_defn =
 {
   "fortran",
+  "Fortran",
   language_fortran,
   range_check_on,
   case_sensitive_off,
   array_column_major,
   macro_expansion_no,
+  f_extensions,
   &exp_descriptor_standard,
   f_parse,			/* parser */
-  f_error,			/* parser error function */
+  f_yyerror,			/* parser error function */
   null_post_parser,
   f_printchar,			/* Print character constant */
   f_printstr,			/* function to print string constant */
@@ -585,7 +615,14 @@ const struct language_defn f_language_defn =
   NULL,                    	/* name_of_this */
   cp_lookup_symbol_nonlocal,	/* lookup_symbol_nonlocal */
   basic_lookup_transparent_type,/* lookup_transparent_type */
+
+  /* We could support demangling here to provide module namespaces
+     also for inferiors with only minimal symbol table (ELF symbols).
+     Just the mangling standard is not standardized across compilers
+     and there is no DW_AT_producer available for inferiors with only
+     the ELF symbols to check the mangling kind.  */
   NULL,				/* Language specific symbol demangler */
+  NULL,
   NULL,				/* Language specific
 				   class_name_from_physname */
   f_op_print_tab,		/* expression operators for printing */
@@ -599,6 +636,9 @@ const struct language_defn f_language_defn =
   default_get_string,
   NULL,				/* la_get_symbol_name_cmp */
   iterate_over_symbols,
+  &default_varobj_ops,
+  NULL,
+  NULL,
   LANG_MAGIC
 };
 
@@ -668,7 +708,7 @@ static struct gdbarch_data *f_type_data;
 const struct builtin_f_type *
 builtin_f_type (struct gdbarch *gdbarch)
 {
-  return gdbarch_data (gdbarch, f_type_data);
+  return (const struct builtin_f_type *) gdbarch_data (gdbarch, f_type_data);
 }
 
 void

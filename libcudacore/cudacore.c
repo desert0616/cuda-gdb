@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2015 NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2014-2017 NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -438,7 +438,8 @@ static int cuCoreReadCTATable(CudaCore *cc, Elf_Scn *scn)
 		ctate = &ctat[i];
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, ctate,
-				      "cta_sm%u_dev%u",
+				      "cta%u_sm%u_dev%u",
+				      (uint32_t) i,
 				      ste->smId,
 				      dte->devId))
 			return -1;
@@ -499,6 +500,13 @@ static int cuCoreReadWarpTable(CudaCore *cc, Elf_Scn *scn)
 
 		if (cuCoreAddMapEntry(&cc->tableEntriesMap, wte,
 				      "wp%u_sm%u_dev%u",
+				      wte->warpId,
+				      ste->smId,
+				      dte->devId))
+			return -1;
+
+		if (cuCoreAddMapEntry(&cc->tableEntriesMap, ctate,
+				      "wp%u_sm%u_dev%u_cta",
 				      wte->warpId,
 				      ste->smId,
 				      dte->devId))
@@ -745,7 +753,8 @@ static int cuCoreReadSharedMemorySection(CudaCore *cc, Elf_Scn *scn)
 	VERIFY(dte != NULL, -1, "Could not find Device table entry");
 
 	if (cuCoreAddMapEntry(&cc->tableEntriesMap, scn,
-			      "cta_sm%u_dev%u_shared",
+			      "cta%llu_sm%u_dev%u_shared",
+			      (unsigned long long)offset,
 			      ste->smId,
 			      dte->devId))
 		return -1;

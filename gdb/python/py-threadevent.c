@@ -1,4 +1,4 @@
-/* Copyright (C) 2009-2013 Free Software Foundation, Inc.
+/* Copyright (C) 2009-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -17,12 +17,16 @@
 
 #include "defs.h"
 #include "py-event.h"
+#include "infrun.h"
 
 /* thread events can either be thread specific or process wide.  If gdb is
    running in non-stop mode then the event is thread specific, otherwise
    it is process wide.
    This function returns the currently stopped thread in non-stop mode and
-   Py_None otherwise.  In each case it returns a borrowed reference.  */
+   gdbpy_None otherwise.  In each case it returns a borrowed reference.  */
+
+static PyObject *get_event_thread (void)
+  CPYCHECKER_RETURNS_BORROWED_REF;
 
 static PyObject *
 get_event_thread (void)
@@ -73,5 +77,4 @@ GDBPY_NEW_EVENT_TYPE (thread,
                       "gdb.ThreadEvent",
                       "ThreadEvent",
                       "GDB thread event object",
-                      event_object_type,
-                      /*no qual*/);
+                      event_object_type);

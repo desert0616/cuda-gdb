@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -54,4 +54,5 @@ void             cuda_elf_image_unload           (elf_image_t elf_image);
 bool             cuda_elf_image_contains_address (elf_image_t elf_image, CORE_ADDR addr);
 void             cuda_elf_image_resolve_breakpoints (elf_image_t elf_image);
 
+elf_image_t      cuda_get_elf_image_by_objfile (struct objfile *objfile);
 #endif

@@ -1,6 +1,6 @@
 /* Python interface to lazy strings.
 
-   Copyright (C) 2010-2013 Free Software Foundation, Inc.
+   Copyright (C) 2010-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -21,10 +21,8 @@
 #include "python-internal.h"
 #include "charset.h"
 #include "value.h"
-#include "exceptions.h"
 #include "valprint.h"
 #include "language.h"
-#include "gdb_assert.h"
 
 typedef struct {
   PyObject_HEAD
@@ -47,7 +45,8 @@ typedef struct {
   struct type *type;
 } lazy_string_object;
 
-static PyTypeObject lazy_string_object_type;
+extern PyTypeObject lazy_string_object_type
+    CPYCHECKER_TYPE_OBJECT_FOR_TYPEDEF ("lazy_string_object");
 
 static PyObject *
 stpy_get_address (PyObject *self, void *closure)
@@ -64,7 +63,7 @@ stpy_get_encoding (PyObject *self, void *closure)
   PyObject *result;
 
   /* An encoding can be set to NULL by the user, so check before
-     attempting a Python FromString call.  If NULL return Py_None.  */
+     attempting a Python FromString call.  If NULL return gdbpy_None.  */
   if (self_string->encoding)
     result = PyString_FromString (self_string->encoding);
   else
@@ -97,20 +96,23 @@ stpy_convert_to_value  (PyObject *self, PyObject *args)
 {
   lazy_string_object *self_string = (lazy_string_object *) self;
   struct value *val = NULL;
-  volatile struct gdb_exception except;
 
   if (self_string->address == 0)
     {
-      PyErr_SetString (gdbpyExc_MemoryError,
+      PyErr_SetString (gdbpy_gdb_memory_error,
 		       _("Cannot create a value from NULL."));
       return NULL;
     }
 
-  TRY_CATCH (except, RETURN_MASK_ALL)
+  TRY
     {
       val = value_at_lazy (self_string->type, self_string->address);
     }
-  GDB_PY_HANDLE_EXCEPTION (except);
+  CATCH (except, RETURN_MASK_ALL)
+    {
+      GDB_PY_HANDLE_EXCEPTION (except);
+    }
+  END_CATCH
 
   return value_to_value_object (val);
 }
@@ -131,7 +133,7 @@ gdbpy_create_lazy_string_object (CORE_ADDR address, long length,
 
   if (address == 0 && length != 0)
     {
-      PyErr_SetString (gdbpyExc_MemoryError,
+      PyErr_SetString (gdbpy_gdb_memory_error,
 		       _("Cannot create a lazy string with address 0x0, " \
 			 "and a non-zero length."));
       return NULL;
@@ -159,13 +161,14 @@ gdbpy_create_lazy_string_object (CORE_ADDR address, long length,
   return (PyObject *) str_obj;
 }
 
-void
+int
 gdbpy_initialize_lazy_string (void)
 {
   if (PyType_Ready (&lazy_string_object_type) < 0)
-    return;
+    return -1;
 
   Py_INCREF (&lazy_string_object_type);
+  return 0;
 }
 
 /* Determine whether the printer object pointed to by OBJ is a
@@ -215,7 +218,7 @@ static PyGetSetDef lazy_string_object_getset[] = {
   { NULL }  /* Sentinel */
 };
 
-static PyTypeObject lazy_string_object_type = {
+PyTypeObject lazy_string_object_type = {
   PyVarObject_HEAD_INIT (NULL, 0)
   "gdb.LazyString",	          /*tp_name*/
   sizeof (lazy_string_object),	  /*tp_basicsize*/

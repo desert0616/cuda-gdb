@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -17,7 +17,7 @@
 
 #include <string.h>
 #include "defs.h"
-#include "gdb_assert.h"
+#include "common-defs.h"
 #include "cuda-tdep.h"
 #include "cuda-options.h"
 #include "cuda-parser.h"
@@ -46,6 +46,7 @@
 
 const char *status_string[] =
   { "Invalid", "Pending", "Active", "Sleeping", "Terminated", "Undetermined" };
+const char *status_string_preempted = "Active (preempted)";
 
 /* returned string must be freed */
 static char *
@@ -84,10 +85,10 @@ typedef struct {
 } cuda_filters_t;
 
 #define CUDA_INVALID_FILTERS ((cuda_filters_t)              \
-            { CUDA_INVALID_COORDS, 0, false})
+    { CUDA_INVALID_COORDS_INIT, 0, false})
 
 #define CUDA_WILDCARD_FILTERS ((cuda_filters_t)             \
-            { CUDA_WILDCARD_COORDS, 0, false })
+    { CUDA_WILDCARD_COORDS_INIT, 0, false })
 
 static void
 cuda_parser_request_to_coords (request_t *request, cuda_coords_t *coords)
@@ -188,7 +189,7 @@ typedef struct {
   uint32_t    num_warps;
   uint32_t    num_lanes;
   uint32_t    num_regs;
-  uint32_t    active_sms_mask;
+  uint32_t    active_sms_mask[(CUDBG_MAX_SMS + 31) / 32];
   uint32_t    pci_bus_id;
   uint32_t    pci_dev_id;
 } cuda_info_device_t;
@@ -213,7 +214,7 @@ cuda_info_devices (char *filter_string, cuda_info_device_t **devices, uint32_t *
   /* get the list of devices */
   iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_DEVICES, &filter.coords, CUDA_SELECT_ALL);
   num_elements = cuda_iterator_get_size (iter);
-  *devices = xmalloc (num_elements * sizeof (**devices));
+  *devices = (cuda_info_device_t *) xcalloc (num_elements, sizeof (**devices));
   *num_devices = 0;
 
   /* compile the needed info for each device */
@@ -222,6 +223,8 @@ cuda_info_devices (char *filter_string, cuda_info_device_t **devices, uint32_t *
        cuda_iterator_next (iter), ++d)
     {
       c  = cuda_iterator_get_current (iter);
+
+      device_get_active_sms_mask (c.dev, d->active_sms_mask);
 
       d->current         = cuda_coords_is_current (&c);
       d->device          = c.dev;
@@ -232,7 +235,6 @@ cuda_info_devices (char *filter_string, cuda_info_device_t **devices, uint32_t *
       d->num_warps       = device_get_num_warps (c.dev);
       d->num_lanes       = device_get_num_lanes (c.dev);
       d->num_regs        = device_get_num_registers (c.dev);
-      d->active_sms_mask = device_get_active_sms_mask (c.dev);
       d->pci_bus_id      = device_get_pci_bus_id (c.dev);
       d->pci_dev_id      = device_get_pci_dev_id (c.dev);
 
@@ -251,7 +253,7 @@ info_cuda_devices_command (char *arg)
 {
   struct ui_out *uiout = current_uiout;
   cuda_info_device_t *devices, *d;
-  uint32_t i, num_devices;
+  uint32_t i, j, num_devices;
   struct cleanup *table_chain, *row_chain;
   struct { uint32_t current, device, pci_bus, name, description, sm_type,
              num_sms, num_warps, num_lanes, num_regs, active_sms_mask; } width;
@@ -297,7 +299,7 @@ info_cuda_devices_command (char *arg)
       width.name            = max (width.name, strlen (d->name));
       width.description     = max (width.description, strlen (d->description));
       width.sm_type         = max (width.sm_type,     strlen (d->sm_type));
-      width.active_sms_mask = max (width.active_sms_mask, 10);
+      width.active_sms_mask = max (width.active_sms_mask, 2 + 2 * sizeof(d->active_sms_mask));
     }
 
   /* print table header */
@@ -319,7 +321,13 @@ info_cuda_devices_command (char *arg)
   for (d = devices, i = 0; i < num_devices; ++i, ++d)
     {
       char pci_bus[32];
+      char active_sms_mask[3 + 2 * sizeof(d->active_sms_mask)] = { "0x" };
+
+      for (j = 0; j < ARRAY_SIZE(d->active_sms_mask); ++j)
+        snprintf (active_sms_mask + 2 + j * 2 * sizeof(*d->active_sms_mask), 1 + 2 * sizeof(*d->active_sms_mask),
+                  "%08x", d->active_sms_mask[ARRAY_SIZE(d->active_sms_mask) - j - 1]);
       snprintf (pci_bus, sizeof(pci_bus), "%02x:%02x.0", d->pci_bus_id, d->pci_dev_id);
+
       row_chain = make_cleanup_ui_out_tuple_begin_end (uiout, "InfoCudaDevicesRow");
       ui_out_field_string (uiout, "current"        , d->current ? "*" : " ");
       ui_out_field_int    (uiout, "device"         , d->device);
@@ -331,7 +339,7 @@ info_cuda_devices_command (char *arg)
       ui_out_field_int    (uiout, "num_warps"      , d->num_warps);
       ui_out_field_int    (uiout, "num_lanes"      , d->num_lanes);
       ui_out_field_int    (uiout, "num_regs"       , d->num_regs);
-      ui_out_field_fmt    (uiout, "active_sms_mask", "0x%08x", d->active_sms_mask);
+      ui_out_field_string (uiout, "active_sms_mask", active_sms_mask);
       ui_out_text         (uiout, "\n");
       do_cleanups (row_chain);
     }
@@ -347,7 +355,7 @@ typedef struct {
   bool     current;
   uint32_t device;
   uint32_t sm;
-  uint64_t active_warps_mask;
+  cuda_api_warpmask active_warps_mask;
 } cuda_info_sm_t;
 
 static void
@@ -371,7 +379,7 @@ cuda_info_sms (char *filter_string, cuda_info_sm_t **sms, uint32_t *num_sms)
   /* get the list of sms */
   iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_SMS, &filter.coords, CUDA_SELECT_ALL);
   num_elements = cuda_iterator_get_size (iter);
-  *sms = xmalloc (num_elements * sizeof (**sms));
+  *sms = (cuda_info_sm_t *) xmalloc (num_elements * sizeof (**sms));
   *num_sms = 0;
 
   /* compile the needed info for each device */
@@ -384,7 +392,7 @@ cuda_info_sms (char *filter_string, cuda_info_sm_t **sms, uint32_t *num_sms)
       s->current           = cuda_coords_is_current (&c);
       s->device            = c.dev;
       s->sm                = c.sm;
-      s->active_warps_mask = sm_get_valid_warps_mask (c.dev, c.sm);
+      cuda_api_cp_mask(&s->active_warps_mask, sm_get_valid_warps_mask(c.dev, c.sm));
 
       ++*num_sms;
     }
@@ -448,7 +456,7 @@ info_cuda_sms_command (char *arg)
       row_chain = make_cleanup_ui_out_tuple_begin_end (uiout, "InfoCudaSmsRow");
       ui_out_field_string (uiout, "current"          , s->current ? "*" : " ");
       ui_out_field_int    (uiout, "sm"               , s->sm);
-      ui_out_field_fmt    (uiout, "active_warps_mask", "0x%016llx", (unsigned long long)s->active_warps_mask);
+      ui_out_field_fmt    (uiout, "active_warps_mask", "%"WARP_MASK_FORMAT, cuda_api_mask_string(&s->active_warps_mask));
       ui_out_text         (uiout, "\n");
       do_cleanups (row_chain);
     }
@@ -500,7 +508,7 @@ cuda_info_warps (char *filter_string, cuda_info_warp_t **warps, uint32_t *num_wa
   /* get the list of sms */
   iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_WARPS, &filter.coords, CUDA_SELECT_ALL);
   num_elements = cuda_iterator_get_size (iter);
-  *warps = xmalloc (num_elements * sizeof (**warps));
+  *warps = (cuda_info_warp_t *) xmalloc (num_elements * sizeof (**warps));
   *num_warps = 0;
 
   /* compile the needed info for each device */
@@ -685,7 +693,7 @@ cuda_info_lanes (char *filter_string, cuda_info_lane_t **lanes, uint32_t *num_la
   /* get the list of lanes */
   iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_LANES, &filter.coords, CUDA_SELECT_ALL);
   num_elements = cuda_iterator_get_size (iter);
-  *lanes = xmalloc (num_elements * sizeof (**lanes));
+  *lanes = (cuda_info_lane_t *) xmalloc (num_elements * sizeof (**lanes));
   *num_lanes = 0;
 
   /* compile the needed info for each device */
@@ -847,12 +855,14 @@ cuda_info_kernels_build (char *filter_string, cuda_info_kernel_t **kernels, uint
 
   /* build the list of kernels */
   *num_kernels = cuda_system_get_num_present_kernels ();
-  *kernels = xmalloc (*num_kernels * sizeof (**kernels));
+  *kernels = (cuda_info_kernel_t *) xmalloc (*num_kernels * sizeof (**kernels));
 
   /* compile the needed info for each kernel */
   k = *kernels;
   for (kernel = kernels_get_first_kernel (); kernel; kernel = kernels_get_next_kernel (kernel))
     {
+      CUDBGGridStatus status;
+
       if (!kernel_is_present (kernel))
         continue;
 
@@ -871,7 +881,11 @@ cuda_info_kernels_build (char *filter_string, cuda_info_kernel_t **kernels, uint
       k->device     = kernel_get_dev_id (kernel);
       k->grid_id    = kernel_get_grid_id (kernel);
       k->sms_mask   = kernel_compute_sms_mask (kernel);
-      k->status     = status_string[kernel_get_status (kernel)];
+
+      status = kernel_get_status (kernel);
+      k->status = cuda_options_software_preemption () && status == CUDBG_GRID_STATUS_ACTIVE
+                ? status_string_preempted
+                : status_string[status];
 
       if (parent_kernel)
         snprintf (k->parent, sizeof (k->parent), "%llu",
@@ -884,7 +898,7 @@ cuda_info_kernels_build (char *filter_string, cuda_info_kernel_t **kernels, uint
                block_dim.x, block_dim.y, block_dim.z);
 
       len = strlen (name) + 2 + strlen (args) + 1;
-      k->invocation = xmalloc (len);
+      k->invocation = (char *) xmalloc (len);
       snprintf (k->invocation, len, "%s(%s)", name, args);
 
       ++k;
@@ -1031,7 +1045,7 @@ cuda_info_blocks_build (char *filter_string, cuda_info_block_t **blocks, uint32_
   /* get the list of blocks */
   iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_BLOCKS, &filter.coords, CUDA_SELECT_VALID);
   num_elements = cuda_iterator_get_size (iter);
-  *blocks = xmalloc (num_elements * sizeof (**blocks));
+  *blocks = (cuda_info_block_t *) xmalloc (num_elements * sizeof (**blocks));
   *num_blocks = 0;
 
   /* compile the needed info for each block */
@@ -1310,7 +1324,7 @@ cuda_info_threads_build (char *filter_string, cuda_info_thread_t **threads, uint
   cuda_coords_t  c, expected;
   CuDim3 prev_block_idx = { CUDA_INVALID, CUDA_INVALID, CUDA_INVALID };
   CuDim3 prev_thread_idx = { CUDA_INVALID, CUDA_INVALID, CUDA_INVALID };
-  kernel_t kernel, prev_kernel = 0;
+  kernel_t kernel;
   cuda_info_thread_t *t;
   struct symtab_and_line sal, prev_sal;
   bool first_entry, break_of_contiguity;
@@ -1337,7 +1351,7 @@ cuda_info_threads_build (char *filter_string, cuda_info_thread_t **threads, uint
   /* get the list of threads */
   iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter.coords, CUDA_SELECT_VALID);
   num_elements = cuda_iterator_get_size (iter);
-  *threads = xmalloc (num_elements * sizeof (**threads));
+  *threads = (cuda_info_thread_t *) xmalloc (num_elements * sizeof (**threads));
 
   /* compile the needed info for each block */
   for (cuda_iterator_start (iter), first_entry = true, i = 0, t = *threads, num_elements = 0;
@@ -1403,7 +1417,6 @@ cuda_info_threads_build (char *filter_string, cuda_info_thread_t **threads, uint
       first_entry = false;
 
       /* data for the next iteration */
-      prev_kernel = kernel;
       prev_pc  = pc;
       prev_sal = sal;
       prev_block_idx  = c.blockIdx;
@@ -1712,7 +1725,7 @@ cuda_info_launch_trace_build (char *filter_string,
 
   /* allocate the trace of kernels */
   *num_kernels = kernel_get_depth (kernel) + 1;
-  *kernels = xmalloc (*num_kernels * sizeof (**kernels));
+  *kernels = (cuda_info_launch_trace_t *) xmalloc (*num_kernels * sizeof (**kernels));
 
   /* populate the launch trace */
   for (i = 0; i < *num_kernels; ++i, kernel = kernel_get_parent (kernel))
@@ -1740,7 +1753,7 @@ cuda_info_launch_trace_build (char *filter_string,
                 "(%u,%u,%u)", block_dim.x, block_dim.y, block_dim.z);
 
       len = strlen (name) + 2 + strlen (args) + 1;
-      k->invocation = xmalloc (len);
+      k->invocation = (char *) xmalloc (len);
       snprintf (k->invocation, len, "%s(%s)", name, args);
     }
 }
@@ -1887,7 +1900,7 @@ cuda_info_launch_children_build (char *filter_string,
 
   /* build the list of children */
   *num_kernels = kernel_get_num_children (kernel);
-  *kernels = xmalloc (*num_kernels * sizeof (**kernels));
+  *kernels = (cuda_info_launch_children_t *) xmalloc (*num_kernels * sizeof (**kernels));
 
   for (i = 0, kernel = kernel_get_children (kernel); kernel; ++i, kernel = kernel_get_sibling (kernel))
     {
@@ -1912,7 +1925,7 @@ cuda_info_launch_children_build (char *filter_string,
                 "(%u,%u,%u)", block_dim.x, block_dim.y, block_dim.z);
 
       len = strlen (name) + 2 + strlen (args) + 1;
-      k->invocation = xmalloc (len);
+      k->invocation = (char *) xmalloc (len);
       snprintf (k->invocation, len, "%s(%s)", name, args);
     }
 }
@@ -2040,7 +2053,7 @@ cuda_info_contexts_build (char *filter_string, cuda_info_context_t **contexts, u
    if (filter.coords.dev == CUDA_WILDCARD || filter.coords.dev == i)
      num_elements += contexts_get_list_size (device_get_contexts (i));
 
-  *contexts = xmalloc (num_elements * sizeof (**contexts));
+  *contexts = (cuda_info_context_t *) xmalloc (num_elements * sizeof (**contexts));
   c = *contexts;
 
   /* compile the needed info for each context */
@@ -2134,23 +2147,24 @@ info_cuda_contexts_command (char *arg)
 }
 
 static struct symbol *
-msymbol_to_symbol (struct minimal_symbol *msym)
+msymbol_to_symbol (struct bound_minimal_symbol bmsym)
 {
-  struct obj_section *objsection  = SYMBOL_OBJ_SECTION (msym);
+  struct obj_section *objsection  = MSYMBOL_OBJ_SECTION (bmsym.objfile, bmsym.minsym);
   struct objfile     *objfile = objsection ? objsection->objfile : NULL;
   struct symtab      *symtab;
-  struct blockvector *bv;
+  const struct blockvector *bv;
   struct block       *block;
   struct symbol      *sym;
+  struct compunit_symtab *cu;
 
   if (!objfile)
     return NULL;
 
-  ALL_OBJFILE_SYMTABS (objfile, symtab)
+  ALL_OBJFILE_FILETABS (objfile, cu, symtab)
     {
-      bv = BLOCKVECTOR (symtab);
+      bv = SYMTAB_BLOCKVECTOR (symtab);
       block = BLOCKVECTOR_BLOCK (bv, STATIC_BLOCK);
-      sym = lookup_block_symbol (block, SYMBOL_PRINT_NAME(msym), VAR_DOMAIN);
+      sym = block_lookup_symbol (block, MSYMBOL_PRINT_NAME(bmsym.minsym), VAR_DOMAIN);
       if (sym)
          return fixup_symbol_section (sym, objfile);
      }
@@ -2159,34 +2173,36 @@ msymbol_to_symbol (struct minimal_symbol *msym)
 }
 
 static void
-print_managed_msymbol (struct ui_file *stb, struct minimal_symbol *msym)
+print_managed_msymbol (struct ui_file *stb, struct bound_minimal_symbol bmsym)
 {
   struct value_print_options opts;
   volatile struct gdb_exception e;
-  struct symbol *sym = msymbol_to_symbol (msym);
-  struct value  *val = sym ? read_var_value (sym, NULL) : NULL;
+  struct symbol *sym = msymbol_to_symbol (bmsym);
+  struct value  *val = sym ? read_var_value (sym, NULL, NULL) : NULL;
 
   if (!val)
     {
-      fprintf_filtered (stb, "%s\n", SYMBOL_PRINT_NAME (msym));
+      fprintf_filtered (stb, "%s\n", MSYMBOL_PRINT_NAME (bmsym.minsym));
       return;
     }
    if (!cuda_focus_is_device())
       val = value_ind (val);
 
-   fprintf_filtered (stb, "%s = ", SYMBOL_PRINT_NAME (msym));
+   fprintf_filtered (stb, "%s = ", MSYMBOL_PRINT_NAME (bmsym.minsym));
 
-   TRY_CATCH (e, RETURN_MASK_ALL)
-   {
+  TRY
+    {
       get_user_print_options (&opts);
       common_val_print (val, stb, 0, &opts, current_language);
-   }
-   if (e.reason == 0)
-   {
-     fprintf_filtered (stb, "\n");
-     return;
-   }
-   fprintf_filtered (stb, "<value optimized out>\n");
+    }
+  CATCH (e, RETURN_MASK_ALL)
+    {
+      fprintf_filtered (stb, "<value optimized out>\n");
+      return;
+    }
+  END_CATCH
+
+  fprintf_filtered (stb, "\n");
 }
 
 static void
@@ -2213,9 +2229,14 @@ info_cuda_managed_command (char *arg)
 
       ALL_OBJFILE_MSYMBOLS (obj, msym)
         {
-          if (!cuda_managed_msymbol_p (msym))
+	  const char *name = MSYMBOL_LINKAGE_NAME (msym);
+	  struct bound_minimal_symbol minsym;
+
+	  minsym = lookup_minimal_symbol (name, NULL, obj);
+
+          if (!cuda_managed_msymbol_p (minsym))
             continue;
-          print_managed_msymbol (stb, msym);
+          print_managed_msymbol (stb, minsym);
         }
     }
   printf ("%s",ui_file_xstrdup (stb, NULL));
@@ -2372,7 +2393,7 @@ cuda_command_switch (char *switch_string)
       cuda_update_cudart_symbols ();
       switch_to_cuda_thread (NULL);
       cuda_print_message_focus (true);
-      print_stack_frame (get_selected_frame (NULL), 0, SRC_LINE);
+      print_stack_frame (get_selected_frame (NULL), 0, SRC_LINE, 1);
       do_displays ();
     }
 }
@@ -2415,14 +2436,14 @@ cuda_command_all (char *first_word, char *args)
   /* Reassemble the whole command */
   len1 = first_word ? strlen (first_word) : 0;
   len2 = args ? strlen (args) : 0;
-  input = xmalloc (len1 + 1 + len2 + 1);
+  input = (char *) xmalloc (len1 + 1 + len2 + 1);
   strncpy (input, first_word, len1);
   strncpy (input + len1, " ", 1);
   strncpy (input + len1 + 1, args, len2);
   input[len1 + 1 + len2] = 0;
 
  /* Dispatch to the right handler based on the command type */
-  cuda_parser (input, CMD_QUERY | CMD_SWITCH, &result, CUDA_WILDCARD);
+  cuda_parser (input, (command_t)(CMD_QUERY | CMD_SWITCH), &result, CUDA_WILDCARD);
   switch (result->command)
     {
     case CMD_QUERY  : cuda_command_query (input); break;
@@ -2515,8 +2536,8 @@ cuda_build_info_cuda_help_message (void)
 }
 
 static VEC (char_ptr) *
-cuda_info_command_completer (struct cmd_list_element *self,
-                             char *text, char *word)
+cuda_info_command_completer (struct cmd_list_element *ignore,
+                             const char *text, const char *word)
 {
   VEC (char_ptr) *return_val = NULL;
   char *name;

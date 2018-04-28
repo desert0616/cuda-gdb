@@ -1,50 +1,29 @@
 /*
- * Copyright 2007-2015 NVIDIA Corporation.  All rights reserved.
+ * Copyright 2007-2017 NVIDIA Corporation.  All rights reserved.
  *
- * NOTICE TO LICENSEE:
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *  * Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *  * Neither the name of NVIDIA CORPORATION nor the names of its
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
  *
- * This source code and/or documentation ("Licensed Deliverables") are
- * subject to NVIDIA intellectual property rights under U.S. and
- * international Copyright laws.
- *
- * These Licensed Deliverables contained herein is PROPRIETARY and
- * CONFIDENTIAL to NVIDIA and is being provided under the terms and
- * conditions of a form of NVIDIA software license agreement by and
- * between NVIDIA and Licensee ("License Agreement") or electronically
- * accepted by Licensee.  Notwithstanding any terms or conditions to
- * the contrary in the License Agreement, reproduction or disclosure
- * of the Licensed Deliverables to any third party without the express
- * written consent of NVIDIA is prohibited.
- *
- * NOTWITHSTANDING ANY TERMS OR CONDITIONS TO THE CONTRARY IN THE
- * LICENSE AGREEMENT, NVIDIA MAKES NO REPRESENTATION ABOUT THE
- * SUITABILITY OF THESE LICENSED DELIVERABLES FOR ANY PURPOSE.  IT IS
- * PROVIDED "AS IS" WITHOUT EXPRESS OR IMPLIED WARRANTY OF ANY KIND.
- * NVIDIA DISCLAIMS ALL WARRANTIES WITH REGARD TO THESE LICENSED
- * DELIVERABLES, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY,
- * NONINFRINGEMENT, AND FITNESS FOR A PARTICULAR PURPOSE.
- * NOTWITHSTANDING ANY TERMS OR CONDITIONS TO THE CONTRARY IN THE
- * LICENSE AGREEMENT, IN NO EVENT SHALL NVIDIA BE LIABLE FOR ANY
- * SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, OR ANY
- * DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
- * WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
- * ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
- * OF THESE LICENSED DELIVERABLES.
- *
- * U.S. Government End Users.  These Licensed Deliverables are a
- * "commercial item" as that term is defined at 48 C.F.R. 2.101 (OCT
- * 1995), consisting of "commercial computer software" and "commercial
- * computer software documentation" as such terms are used in 48
- * C.F.R. 12.212 (SEPT 1995) and is provided to the U.S. Government
- * only as a commercial end item.  Consistent with 48 C.F.R.12.212 and
- * 48 C.F.R. 227.7202-1 through 227.7202-4 (JUNE 1995), all
- * U.S. Government End Users acquire the Licensed Deliverables with
- * only those rights set forth herein.
- *
- * Any use of the Licensed Deliverables in individual and commercial
- * software must include, in the user documentation and internal
- * comments to the code, the above Disclaimer and U.S. Government End
- * Users Notice.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 
@@ -98,14 +77,14 @@ typedef unsigned char bool;
 
 /*--------------------------------- API Version ------------------------------*/
 
-#define CUDBG_API_VERSION_MAJOR       7 /* Major release version number */
+#define CUDBG_API_VERSION_MAJOR       8 /* Major release version number */
 #define CUDBG_API_VERSION_MINOR       0 /* Minor release version number */
-#define CUDBG_API_VERSION_REVISION  122 /* Revision (build) number */
+#define CUDBG_API_VERSION_REVISION  128 /* Revision (build) number */
 
 /*---------------------------------- Constants -------------------------------*/
 
 #define CUDBG_MAX_DEVICES 32  /* Maximum number of supported devices */
-#define CUDBG_MAX_SMS     64  /* Maximum number of SMs per device */
+#define CUDBG_MAX_SMS    128  /* Maximum number of SMs per device */
 #define CUDBG_MAX_WARPS   64  /* Maximum number of warps per SM */
 #define CUDBG_MAX_LANES   32  /* Maximum number of lanes per warp */
 
@@ -748,7 +727,49 @@ typedef enum {
     CUDBG_EXCEPTION_WARP_ASSERT = 12,
     CUDBG_EXCEPTION_LANE_SYSCALL_ERROR = 13,
     CUDBG_EXCEPTION_WARP_ILLEGAL_ADDRESS = 14,
+    CUDBG_EXCEPTION_LANE_NONMIGRATABLE_ATOMSYS = 15,
+    CUDBG_EXCEPTION_LANE_INVALID_ATOMSYS = 16,
 } CUDBGException_t;
+
+typedef enum {
+    CUDBG_UVM_MEMORY_ACCESS_TYPE_UNKNOWN  = 0xFFFFFFFFU,
+    CUDBG_UVM_MEMORY_ACCESS_TYPE_INVALID  = 0,
+    CUDBG_UVM_MEMORY_ACCESS_TYPE_READ     = 1,
+    CUDBG_UVM_MEMORY_ACCESS_TYPE_WRITE    = 2,
+    CUDBG_UVM_MEMORY_ACCESS_TYPE_ATOMIC   = 3,
+    CUDBG_UVM_MEMORY_ACCESS_TYPE_PREFETCH = 4,
+} CUDBGUvmMemoryAccessType_t;
+
+typedef enum {
+    CUDBG_UVM_FAULT_TYPE_UNKNOWN               =  0xFFFFFFFFU,
+    CUDBG_UVM_FAULT_TYPE_INVALID               =  0,
+    CUDBG_UVM_FAULT_TYPE_INVALID_PDE           =  1,
+    CUDBG_UVM_FAULT_TYPE_INVALID_PTE           =  2,
+    CUDBG_UVM_FAULT_TYPE_WRITE                 =  3,
+    CUDBG_UVM_FAULT_TYPE_ATOMIC                =  4,
+    CUDBG_UVM_FAULT_TYPE_INVALID_PDE_SIZE      =  5,
+    CUDBG_UVM_FAULT_TYPE_LIMIT_VIOLATION       =  6,
+    CUDBG_UVM_FAULT_TYPE_UNBOUND_INST_BLOCK    =  7,
+    CUDBG_UVM_FAULT_TYPE_PRIV_VIOLATION        =  8,
+    CUDBG_UVM_FAULT_TYPE_PITCH_MASK_VIOLATION  =  9,
+    CUDBG_UVM_FAULT_TYPE_WORK_CREATION         = 10,
+    CUDBG_UVM_FAULT_TYPE_UNSUPPORTED_APERTURE  = 11,
+    CUDBG_UVM_FAULT_TYPE_COMPRESSION_FAILURE   = 12,
+    CUDBG_UVM_FAULT_TYPE_UNSUPPORTED_KIND      = 13,
+    CUDBG_UVM_FAULT_TYPE_REGION_VIOLATION      = 14,
+    CUDBG_UVM_FAULT_TYPE_POISON                = 15,
+} CUDBGUvmFaultType_t;
+
+typedef enum {
+    CUDBG_UVM_FATAL_REASON_UNKNOWN             = 0xFFFFFFFFU,
+    CUDBG_UVM_FATAL_REASON_INVALID             = 0,
+    CUDBG_UVM_FATAL_REASON_INVALID_ADDRESS     = 1,
+    CUDBG_UVM_FATAL_REASON_INVALID_PERMISSIONS = 2,
+    CUDBG_UVM_FATAL_REASON_INVALID_FAULT_TYPE  = 3,
+    CUDBG_UVM_FATAL_REASON_OUT_OF_MEMORY       = 4,
+    CUDBG_UVM_FATAL_REASON_INTERNAL_ERROR      = 5,
+    CUDBG_UVM_FATAL_REASON_INVALID_OPERATION   = 6,
+} CUDBGUvmFatalReason_t;
 
 /*------------------------------ Warp State --------------------------------*/
 #pragma pack(push,1)
@@ -911,7 +932,7 @@ struct CUDBGAPI_st {
 
     /* 4.1 Extensions */
     CUDBGResult (*getHostAddrFromDeviceAddr)(uint32_t dev, uint64_t device_addr, uint64_t *host_addr);
-    CUDBGResult (*singleStepWarp)(uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warpMask);
+    CUDBGResult (*singleStepWarp41)(uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warpMask);
     CUDBGResult (*setNotifyNewEventCallback)(CUDBGNotifyNewEventCallback callback);
     CUDBGResult (*readSyscallCallDepth)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32_t *depth);
 
@@ -936,7 +957,7 @@ struct CUDBGAPI_st {
     CUDBGResult (*getGridStatus)(uint32_t dev, uint64_t gridId64, CUDBGGridStatus *status);
     CUDBGResult (*setKernelLaunchNotificationMode) (CUDBGKernelLaunchNotifyMode mode);
     CUDBGResult (*getDevicePCIBusInfo) (uint32_t devId, uint32_t *pciBusId, uint32_t *pciDevId);
-    CUDBGResult (*readDeviceExceptionState) (uint32_t devId, uint64_t *exceptionSMMask);
+    CUDBGResult (*readDeviceExceptionState80) (uint32_t devId, uint64_t *exceptionSMMask);
 
    /* 6.0 Extensions */
     CUDBGResult (*getAdjustedCodeAddress)(uint32_t devId, uint64_t address, uint64_t *adjustedAddress, CUDBGAdjAddrAction adjAction);
@@ -962,6 +983,10 @@ struct CUDBGAPI_st {
     CUDBGResult (*writeCCRegister)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32_t val);
 
     CUDBGResult (*getDeviceName)(uint32_t dev, char *buf, uint32_t sz);
+    CUDBGResult (*singleStepWarp)(uint32_t dev, uint32_t sm, uint32_t wp, uint32_t nsteps, uint64_t *warpMask);
+
+    /* 9.0 Extensions */
+    CUDBGResult (*readDeviceExceptionState) (uint32_t devId, uint64_t *mask, uint32_t numWords);
 };
 
 #ifdef __cplusplus

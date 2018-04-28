@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -58,27 +58,26 @@
  * it before the inferior is resumed. No new stop signal is sent for an aliased_event.
  */
 
-#include <ctype.h>
-#include <string.h>
-#include <pthread.h>
-#include <signal.h>
-#include <sys/syscall.h>
-#include <unistd.h>
-
 #ifdef GDBSERVER
-#include "cuda-tdep-server.h"
 #include "server.h"
+#include "cuda-tdep-server.h"
 #else
 #include "defs.h"
 #include "cuda-options.h"
 #include "cuda-tdep.h"
-#include "gdb_assert.h"
+#include "common-defs.h"
 #include "gdbthread.h"
 #include "inferior.h"
 #include "cuda-packet-manager.h"
 #endif
 
 #include "cuda-notifications.h"
+#include <unistd.h>
+#include <ctype.h>
+#include <string.h>
+#include <pthread.h>
+#include <signal.h>
+#include <sys/syscall.h>
 
 static struct {
   bool initialized;       /* True if the mutex is initialized */
@@ -215,7 +214,7 @@ find_and_notify_first_valid_thread (struct thread_info *tp, void *data)
 }
 
 static uint32_t
-cuda_notification_notify_first_valid_thread ()
+cuda_notification_notify_first_valid_thread (void)
 {
   uint32_t tid;
 
@@ -274,7 +273,7 @@ build_threads (struct thread_info *tp, void *data)
 }
 
 static uint32_t
-cuda_notification_notify_youngest_thread ()
+cuda_notification_notify_youngest_thread (void)
 {
   int err = 1, i = 0, tid = 0;
   youngest_threads_t youngest_threads;
@@ -465,7 +464,7 @@ cuda_notification_analyze (ptid_t ptid, struct target_waitstatus *ws, int trap_e
 #ifndef GDBSERVER
   if (cuda_remote)
     {
-      cuda_remote_notification_analyze ();
+      cuda_remote_notification_analyze (ptid);
       return;
     }
 #endif

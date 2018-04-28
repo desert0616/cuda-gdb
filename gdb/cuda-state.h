@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -43,6 +43,7 @@ context_t cuda_system_find_context_by_addr     (CORE_ADDR addr);
 const char* device_get_device_name         (uint32_t dev_id);
 const char* device_get_device_type         (uint32_t dev_id);
 const char* device_get_sm_type             (uint32_t dev_id);
+uint32_t    device_get_inst_size           (uint32_t dev_id);
 uint32_t    device_get_num_sms             (uint32_t dev_id);
 uint32_t    device_get_num_warps           (uint32_t dev_id);
 uint32_t    device_get_num_lanes           (uint32_t dev_id);
@@ -51,12 +52,13 @@ uint32_t    device_get_num_predicates      (uint32_t dev_id);
 uint32_t    device_get_num_kernels         (uint32_t dev_id);
 uint32_t    device_get_pci_bus_id          (uint32_t dev_id);
 uint32_t    device_get_pci_dev_id          (uint32_t dev_id);
+void        device_set_inst_size           (uint32_t dev_id, uint32_t inst_size);
 
 bool        device_is_valid                (uint32_t dev_id);
 bool        device_is_any_context_present  (uint32_t dev_id);
 bool        device_is_active_context       (uint32_t dev_id, context_t context);
 bool        device_has_exception           (uint32_t dev_id);
-uint64_t    device_get_active_sms_mask     (uint32_t dev_id);
+void        device_get_active_sms_mask     (uint32_t dev_id, uint32_t *mask);
 contexts_t  device_get_contexts            (uint32_t dev_id);
 
 context_t   device_find_context_by_id      (uint32_t dev_id, uint64_t context_id);
@@ -70,8 +72,8 @@ void        device_invalidate (uint32_t dev_id);
 /* SM State */
 bool        sm_is_valid                    (uint32_t dev_id, uint32_t sm_id);
 bool        sm_has_exception               (uint32_t dev_id, uint32_t sm_id);
-uint64_t    sm_get_valid_warps_mask        (uint32_t dev_id, uint32_t sm_id);
-uint64_t    sm_get_broken_warps_mask       (uint32_t dev_id, uint32_t sm_id);
+cuda_api_warpmask*    sm_get_valid_warps_mask        (uint32_t dev_id, uint32_t sm_id);
+cuda_api_warpmask*    sm_get_broken_warps_mask       (uint32_t dev_id, uint32_t sm_id);
 
 /* Warp State */
 bool     warp_is_valid                 (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id);
@@ -91,8 +93,8 @@ cuda_clock_t warp_get_timestamp        (uint32_t dev_id, uint32_t sm_id, uint32_
 void     warp_set_grid_id              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint64_t grid_id);
 void     warp_set_block_idx            (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, CuDim3 *block_idx);
 
-bool     warp_single_step              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,   uint64_t *single_stepped_warp_mask);
-bool     warps_resume_until            (uint32_t dev_id, uint32_t sm_id, uint64_t wp_mask, uint64_t pc);
+bool     warp_single_step              (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t nsteps, cuda_api_warpmask *single_stepped_warp_mask);
+bool     warps_resume_until            (uint32_t dev_id, uint32_t sm_id, cuda_api_warpmask* wp_mask, uint64_t pc);
 
 /* Lane State */
 bool             lane_is_valid       (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id, uint32_t ln_id);

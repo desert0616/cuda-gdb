@@ -16,8 +16,8 @@
  */
 
 #include <sys/stat.h>
-#include <unistd.h>
 #include "server.h"
+#include <unistd.h>
 #include "cudadebugger.h"
 #include "cuda-tdep-server.h"
 #include "../cuda-notifications.h"
@@ -25,6 +25,7 @@
 #include "../cuda-utils.h"
 #include "../cuda-events.h"
 #include "../libcudbgipc.h"
+#include "rsp-low.h"
 
 #define TEXTURE_DIM_MAX 4
 
@@ -61,7 +62,7 @@ append_bin (const unsigned char *src, char *dest, int size, bool sep)
   if (dest + size * 2 - buf_head >= PBUFSIZ)
     error ("Exceed the size of cuda packet.\n");
 
-  convert_int_to_ascii (src, dest, size);
+  bin2hex (src, dest, size);
   p = strchr (dest, '\0');
   if (sep)
     {
@@ -85,7 +86,7 @@ extract_bin (char *src, unsigned char *dest, int size)
   p = extract_string (src);
   if (!p)
     error ("The data in the cuda packet is not complete.\n");
-  convert_ascii_to_int (p, dest, size);
+  hex2bin (p, dest, size);
   return p;
 }
 
@@ -142,7 +143,7 @@ cuda_process_disassemble_packet (char *buf)
   extract_bin (NULL, (unsigned char *) &addr, sizeof (addr));
   extract_bin (NULL, (unsigned char *) &inst_buf_size, sizeof (inst_buf_size));
 
-  inst_buf = xmalloc (inst_buf_size);
+  inst_buf = (char *) xmalloc (inst_buf_size);
   res = cudbgAPI->disassemble (dev, addr, &inst_size, inst_buf, inst_buf_size);
   p = append_bin ((unsigned char *) &res, buf, sizeof (res), true);
   p = append_bin ((unsigned char *) &inst_size, buf, sizeof (inst_size), true);
@@ -389,13 +390,15 @@ cuda_process_single_step_warp_packet (char *buf)
   uint32_t dev;
   uint32_t sm;
   uint32_t wp;
+  uint32_t nsteps;
   uint64_t warp_mask;
 
   extract_bin (NULL, (unsigned char *) &dev, sizeof (dev));
   extract_bin (NULL, (unsigned char *) &sm, sizeof (sm));
   extract_bin (NULL, (unsigned char *) &wp, sizeof (wp));
+  extract_bin (NULL, (unsigned char *) &nsteps, sizeof (nsteps));
   extract_bin (NULL, (unsigned char *) &warp_mask, sizeof (warp_mask));
-  res = cudbgAPI->singleStepWarp (dev, sm, wp, &warp_mask);
+  res = cudbgAPI->singleStepWarp (dev, sm, wp, nsteps, &warp_mask);
   p = append_bin ((unsigned char *) &res, buf, sizeof (res), true);
   p = append_bin ((unsigned char *) &warp_mask, p, sizeof (warp_mask), false);
 }
@@ -1242,7 +1245,7 @@ cuda_process_set_async_launch_notifications (char *buf)
   uint32_t mode;
   extract_bin (NULL, (unsigned char *) &mode, sizeof (mode));
 
-  res = cudbgAPI->setKernelLaunchNotificationMode (mode);
+  res = (CUDBGResult) cudbgAPI->setKernelLaunchNotificationMode ((CUDBGKernelLaunchNotifyMode) mode);
   append_bin ((unsigned char *) &res, buf, sizeof (res), false);
 }
 
@@ -1250,16 +1253,18 @@ void
 cuda_process_api_read_device_exception_state (char *buf)
 {
   CUDBGResult res;
-  uint32_t dev;
-  uint64_t smMask = 0;
+  uint32_t dev, sz;
   char *p;
+  uint64_t *value;
 
   extract_bin (NULL, (unsigned char*) &dev, sizeof (dev));
+  extract_bin (NULL, (unsigned char*) &sz, sizeof (sz));
 
-  res = cudbgAPI->readDeviceExceptionState (dev, &smMask);
-
+  value = (uint64_t *) xmalloc (sz * sizeof (*value));
+  res = cudbgAPI->readDeviceExceptionState (dev, value, sz);
   p = append_bin ((unsigned char*) &res, buf, sizeof (res), true);
-  append_bin ((unsigned char*) &smMask, p, sizeof (smMask), false);
+  p = append_bin ((unsigned char*) value, p, sz * sizeof (*value), false);
+  xfree (value);
 }
 
 void
@@ -1515,7 +1520,7 @@ int handle_vCuda (char *buf, int packet_len, int *new_packet_len)
     lbuf = (gdb_byte *)buf + strlen("OK;");
     *new_packet_len  = strlen ("OK;");
     *new_packet_len += remote_escape_output ((const gdb_byte *)data+offset,
-                                             size-offset, lbuf,
+                                             size-offset, 1, lbuf,
                                              &out_len, PBUFSIZ-strlen ("OK;"));
     if (out_len != size - offset)
       memcpy (buf, "MP", 2);
@@ -1536,7 +1541,7 @@ int handle_vCuda (char *buf, int packet_len, int *new_packet_len)
   data = xmalloc (packet_len);
   gdb_assert (data);
 
-  packet_len = remote_unescape_input (lbuf, packet_len, data, packet_len);
+  packet_len = remote_unescape_input (lbuf, packet_len, (gdb_byte *) data, packet_len);
   res = cudbgipcAppend (data, packet_len);
   if (res != CUDBG_SUCCESS) {
       sprintf (buf, "E%02d", res);
@@ -1555,7 +1560,7 @@ int handle_vCuda (char *buf, int packet_len, int *new_packet_len)
   memcpy (buf, "OK;", strlen("OK;"));
   lbuf = (gdb_byte *)buf + strlen("OK;");
   *new_packet_len  = strlen ("OK;");
-  *new_packet_len += remote_escape_output (data, size, lbuf,
+  *new_packet_len += remote_escape_output ((const gdb_byte *) data, size, 1, lbuf,
                                           &out_len, PBUFSIZ-strlen ("OK;"));
   if (out_len != size)
     memcpy (buf, "MP", 2);

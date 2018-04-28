@@ -1,6 +1,6 @@
 /* Reading symbol files from memory.
 
-   Copyright (C) 1986-2013 Free Software Foundation, Inc.
+   Copyright (C) 1986-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -45,7 +45,6 @@
 #include "symtab.h"
 #include "gdbcore.h"
 #include "objfiles.h"
-#include "exceptions.h"
 #include "gdbcmd.h"
 #include "target.h"
 #include "value.h"
@@ -102,14 +101,11 @@ symbol_file_add_from_memory (struct bfd *templ, CORE_ADDR addr,
     error (_("Failed to read a valid object file image from memory."));
 
   gdb_bfd_ref (nbfd);
+  xfree (bfd_get_filename (nbfd));
   if (name == NULL)
-    nbfd->filename = "shared object read from target memory";
+    nbfd->filename = xstrdup ("shared object read from target memory");
   else
-    {
-      nbfd->filename = name;
-      gdb_bfd_stash_filename (nbfd);
-      xfree (name);
-    }
+    nbfd->filename = name;
 
   cleanup = make_cleanup_bfd_unref (nbfd);
 
@@ -128,9 +124,13 @@ symbol_file_add_from_memory (struct bfd *templ, CORE_ADDR addr,
 	sai->other[i].sectindex = sec->index;
 	++i;
       }
+  sai->num_sections = i;
 
-  objf = symbol_file_add_from_bfd (nbfd, from_tty ? SYMFILE_VERBOSE : 0,
+  objf = symbol_file_add_from_bfd (nbfd, bfd_get_filename (nbfd),
+				   from_tty ? SYMFILE_VERBOSE : 0,
                                    sai, OBJF_SHARED, NULL);
+
+  add_target_sections_of_objfile (objf);
 
   /* This might change our ideas about frames already looked at.  */
   reinit_frame_cache ();
@@ -180,27 +180,11 @@ struct symbol_file_add_from_memory_args
 static int
 symbol_file_add_from_memory_wrapper (struct ui_out *uiout, void *data)
 {
-  struct symbol_file_add_from_memory_args *args = data;
+  struct symbol_file_add_from_memory_args *args
+    = (struct symbol_file_add_from_memory_args *) data;
 
   symbol_file_add_from_memory (args->bfd, args->sysinfo_ehdr, args->size,
 			       args->name, args->from_tty);
-  return 0;
-}
-
-/* Rummage through mappings to find the vsyscall page size.  */
-
-static int
-find_vdso_size (CORE_ADDR vaddr, unsigned long size,
-		int read, int write, int exec, int modified,
-		void *data)
-{
-  struct symbol_file_add_from_memory_args *args = data;
-
-  if (vaddr == args->sysinfo_ehdr)
-    {
-      args->size = size;
-      return 1;
-    }
   return 0;
 }
 
@@ -210,10 +194,9 @@ find_vdso_size (CORE_ADDR vaddr, unsigned long size,
 static void
 add_vsyscall_page (struct target_ops *target, int from_tty)
 {
-  CORE_ADDR sysinfo_ehdr;
+  struct mem_range vsyscall_range;
 
-  if (target_auxv_search (target, AT_SYSINFO_EHDR, &sysinfo_ehdr) > 0
-      && sysinfo_ehdr != (CORE_ADDR) 0)
+  if (gdbarch_vsyscall_range (target_gdbarch (), &vsyscall_range))
     {
       struct bfd *bfd;
       struct symbol_file_add_from_memory_args args;
@@ -231,19 +214,15 @@ add_vsyscall_page (struct target_ops *target, int from_tty)
 	  format should fix this.  */
 	{
 	  warning (_("Could not load vsyscall page "
-		     "because no executable was specified\n"
-		     "try using the \"file\" command first."));
+		     "because no executable was specified"));
 	  return;
 	}
       args.bfd = bfd;
-      args.sysinfo_ehdr = sysinfo_ehdr;
-      args.size = 0;
-      if (gdbarch_find_memory_regions_p (target_gdbarch ()))
-	(void) gdbarch_find_memory_regions (target_gdbarch (),
-					    find_vdso_size, &args);
+      args.sysinfo_ehdr = vsyscall_range.start;
+      args.size = vsyscall_range.length;
 
       args.name = xstrprintf ("system-supplied DSO at %s",
-			      paddress (target_gdbarch (), sysinfo_ehdr));
+			      paddress (target_gdbarch (), vsyscall_range.start));
       /* Pass zero for FROM_TTY, because the action of loading the
 	 vsyscall DSO was not triggered by the user, even if the user
 	 typed "run" at the TTY.  */

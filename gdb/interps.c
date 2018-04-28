@@ -1,6 +1,6 @@
 /* Manages interpreters for GDB, the GNU debugger.
 
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2016 Free Software Foundation, Inc.
 
    Written by Jim Ingham <jingham@apple.com> of Apple Computer, Inc.
 
@@ -36,17 +36,41 @@
 #include "event-top.h"
 #include "interps.h"
 #include "completer.h"
-#include "gdb_string.h"
-#include "gdb_assert.h"
 #include "top.h"		/* For command_loop.  */
-#include "exceptions.h"
 #include "continuations.h"
 
-/* True if the current interpreter in is async mode.  See interps.h
-   for more details.  This starts out disabled, until all the explicit
-   command line arguments (e.g., `gdb -ex "start" -ex "next"') are
-   processed.  */
-int interpreter_async = 0;
+/* Each UI has its own independent set of interpreters.  */
+
+struct ui_interp_info
+{
+  /* Each top level has its own independent set of interpreters.  */
+  struct interp *interp_list;
+  struct interp *current_interpreter;
+  struct interp *top_level_interpreter;
+
+  /* The interpreter that is active while `interp_exec' is active, NULL
+     at all other times.  */
+  struct interp *command_interpreter;
+};
+
+/* Get UI's ui_interp_info object.  Never returns NULL.  */
+
+static struct ui_interp_info *
+get_interp_info (struct ui *ui)
+{
+  if (ui->interp_info == NULL)
+    ui->interp_info = XCNEW (struct ui_interp_info);
+  return ui->interp_info;
+}
+
+/* Get the current UI's ui_interp_info object.  Never returns
+   NULL.  */
+
+static struct ui_interp_info *
+get_current_interp_info (void)
+{
+  return get_interp_info (current_ui);
+}
 
 struct interp
 {
@@ -70,33 +94,25 @@ struct interp
   int quiet_p;
 };
 
-/* Functions local to this file.  */
-static void initialize_interps (void);
-
 /* The magic initialization routine for this module.  */
 
 void _initialize_interpreter (void);
 
-/* Variables local to this file: */
-
-static struct interp *interp_list = NULL;
-static struct interp *current_interpreter = NULL;
-static struct interp *top_level_interpreter_ptr = NULL;
-
-static int interpreter_initialized = 0;
+static struct interp *interp_lookup_existing (struct ui *ui,
+					      const char *name);
 
 /* interp_new - This allocates space for a new interpreter,
    fills the fields from the inputs, and returns a pointer to the
    interpreter.  */
 struct interp *
-interp_new (const char *name, const struct interp_procs *procs)
+interp_new (const char *name, const struct interp_procs *procs, void *data)
 {
   struct interp *new_interp;
 
-  new_interp = XMALLOC (struct interp);
+  new_interp = XNEW (struct interp);
 
   new_interp->name = xstrdup (name);
-  new_interp->data = NULL;
+  new_interp->data = data;
   new_interp->quiet_p = 0;
   new_interp->procs = procs;
   new_interp->inited = 0;
@@ -104,18 +120,60 @@ interp_new (const char *name, const struct interp_procs *procs)
   return new_interp;
 }
 
+/* An interpreter factory.  Maps an interpreter name to the factory
+   function that instantiates an interpreter by that name.  */
+
+struct interp_factory
+{
+  /* This is the name in "-i=INTERP" and "interpreter-exec INTERP".  */
+  const char *name;
+
+  /* The function that creates the interpreter.  */
+  interp_factory_func func;
+};
+
+typedef struct interp_factory *interp_factory_p;
+DEF_VEC_P(interp_factory_p);
+
+/* The registered interpreter factories.  */
+static VEC(interp_factory_p) *interpreter_factories = NULL;
+
+/* See interps.h.  */
+
+void
+interp_factory_register (const char *name, interp_factory_func func)
+{
+  struct interp_factory *f;
+  int ix;
+
+  /* Assert that no factory for NAME is already registered.  */
+  for (ix = 0;
+       VEC_iterate (interp_factory_p, interpreter_factories, ix, f);
+       ++ix)
+    if (strcmp (f->name, name) == 0)
+      {
+	internal_error (__FILE__, __LINE__,
+			_("interpreter factory already registered: \"%s\"\n"),
+			name);
+      }
+
+  f = XNEW (struct interp_factory);
+  f->name = name;
+  f->func = func;
+  VEC_safe_push (interp_factory_p, interpreter_factories, f);
+}
+
 /* Add interpreter INTERP to the gdb interpreter list.  The
    interpreter must not have previously been added.  */
 void
-interp_add (struct interp *interp)
+interp_add (struct ui *ui, struct interp *interp)
 {
-  if (!interpreter_initialized)
-    initialize_interps ();
+  struct ui_interp_info *ui_interp = get_interp_info (ui);
 
-  gdb_assert (interp_lookup (interp->name) == NULL);
+  gdb_assert (interp_lookup_existing (ui, interp->name) == NULL);
 
-  interp->next = interp_list;
-  interp_list = interp;
+  interp->next = ui_interp->interp_list;
+  ui_interp->interp_list = interp;
 }
 
 /* This sets the current interpreter to be INTERP.  If INTERP has not
@@ -135,24 +193,24 @@ interp_add (struct interp *interp)
 int
 interp_set (struct interp *interp, int top_level)
 {
-  struct interp *old_interp = current_interpreter;
+  struct ui_interp_info *ui_interp = get_current_interp_info ();
+  struct interp *old_interp = ui_interp->current_interpreter;
   int first_time = 0;
   char buffer[64];
 
   /* If we already have an interpreter, then trying to
      set top level interpreter is kinda pointless.  */
-  gdb_assert (!top_level || !current_interpreter);
-  gdb_assert (!top_level || !top_level_interpreter_ptr);
+  gdb_assert (!top_level || !ui_interp->current_interpreter);
+  gdb_assert (!top_level || !ui_interp->top_level_interpreter);
 
-  if (current_interpreter != NULL)
+  if (old_interp != NULL)
     {
       ui_out_flush (current_uiout);
-      if (current_interpreter->procs->suspend_proc
-	  && !current_interpreter->procs->suspend_proc (current_interpreter->
-							data))
+      if (old_interp->procs->suspend_proc
+	  && !old_interp->procs->suspend_proc (old_interp->data))
 	{
 	  error (_("Could not suspend interpreter \"%s\"."),
-		 current_interpreter->name);
+		 old_interp->name);
 	}
     }
   else
@@ -160,18 +218,18 @@ interp_set (struct interp *interp, int top_level)
       first_time = 1;
     }
 
-  current_interpreter = interp;
+  ui_interp->current_interpreter = interp;
   if (top_level)
-    top_level_interpreter_ptr = interp;
+    ui_interp->top_level_interpreter = interp;
 
   /* We use interpreter_p for the "set interpreter" variable, so we need
      to make sure we have a malloc'ed copy for the set command to free.  */
   if (interpreter_p != NULL
-      && strcmp (current_interpreter->name, interpreter_p) != 0)
+      && strcmp (interp->name, interpreter_p) != 0)
     {
       xfree (interpreter_p);
 
-      interpreter_p = xstrdup (current_interpreter->name);
+      interpreter_p = xstrdup (interp->name);
     }
 
   /* Run the init proc.  If it fails, try to restore the old interp.  */
@@ -201,36 +259,28 @@ interp_set (struct interp *interp, int top_level)
       return 0;
     }
 
-  /* Finally, put up the new prompt to show that we are indeed here. 
-     Also, display_gdb_prompt for the console does some readline magic
-     which is needed for the console interpreter, at least...  */
-
-  if (!first_time)
+  if (!first_time && !interp_quiet_p (interp))
     {
-      if (!interp_quiet_p (interp))
-	{
-	  xsnprintf (buffer, sizeof (buffer),
-		     "Switching to interpreter \"%.24s\".\n", interp->name);
-	  ui_out_text (current_uiout, buffer);
-	}
-      display_gdb_prompt (NULL);
+      xsnprintf (buffer, sizeof (buffer),
+		 "Switching to interpreter \"%.24s\".\n", interp->name);
+      ui_out_text (current_uiout, buffer);
     }
 
   return 1;
 }
 
-/* interp_lookup - Looks up the interpreter for NAME.  If no such
-   interpreter exists, return NULL, otherwise return a pointer to the
-   interpreter.  */
-struct interp *
-interp_lookup (const char *name)
+/* Look up the interpreter for NAME.  If no such interpreter exists,
+   return NULL, otherwise return a pointer to the interpreter.  */
+
+static struct interp *
+interp_lookup_existing (struct ui *ui, const char *name)
 {
+  struct ui_interp_info *ui_interp = get_interp_info (ui);
   struct interp *interp;
 
-  if (name == NULL || strlen (name) == 0)
-    return NULL;
-
-  for (interp = interp_list; interp != NULL; interp = interp->next)
+  for (interp = ui_interp->interp_list;
+       interp != NULL;
+       interp = interp->next)
     {
       if (strcmp (interp->name, name) == 0)
 	return interp;
@@ -239,39 +289,87 @@ interp_lookup (const char *name)
   return NULL;
 }
 
+/* See interps.h.  */
+
+struct interp *
+interp_lookup (struct ui *ui, const char *name)
+{
+  struct interp_factory *factory;
+  struct interp *interp;
+  int ix;
+
+  if (name == NULL || strlen (name) == 0)
+    return NULL;
+
+  /* Only create each interpreter once per top level.  */
+  interp = interp_lookup_existing (ui, name);
+  if (interp != NULL)
+    return interp;
+
+  for (ix = 0;
+       VEC_iterate (interp_factory_p, interpreter_factories, ix, factory);
+       ++ix)
+    if (strcmp (factory->name, name) == 0)
+      {
+	interp = factory->func (name);
+	interp_add (ui, interp);
+	return interp;
+      }
+
+  return NULL;
+}
+
+/* See interps.h.  */
+
+void
+set_top_level_interpreter (const char *name)
+{
+  /* Find it.  */
+  struct interp *interp = interp_lookup (current_ui, name);
+
+  if (interp == NULL)
+    error (_("Interpreter `%s' unrecognized"), name);
+  /* Install it.  */
+  if (!interp_set (interp, 1))
+    error (_("Interpreter `%s' failed to initialize."), name);
+}
+
 /* Returns the current interpreter.  */
 
 struct ui_out *
 interp_ui_out (struct interp *interp)
 {
-  if (interp != NULL)
-    return interp->procs->ui_out_proc (interp);
+  struct ui_interp_info *ui_interp = get_current_interp_info ();
 
-  return current_interpreter->procs->ui_out_proc (current_interpreter);
+  if (interp == NULL)
+    interp = ui_interp->current_interpreter;
+  return interp->procs->ui_out_proc (interp);
 }
 
 int
 current_interp_set_logging (int start_log, struct ui_file *out,
 			    struct ui_file *logfile)
 {
-  if (current_interpreter == NULL
-      || current_interpreter->procs->set_logging_proc == NULL)
+  struct ui_interp_info *ui_interp = get_current_interp_info ();
+  struct interp *interp = ui_interp->current_interpreter;
+
+  if (interp == NULL
+      || interp->procs->set_logging_proc == NULL)
     return 0;
 
-  return current_interpreter->procs->set_logging_proc (current_interpreter,
-						       start_log, out,
-						       logfile);
+  return interp->procs->set_logging_proc (interp, start_log, out, logfile);
 }
 
 /* Temporarily overrides the current interpreter.  */
 struct interp *
 interp_set_temp (const char *name)
 {
-  struct interp *interp = interp_lookup (name);
-  struct interp *old_interp = current_interpreter;
+  struct ui_interp_info *ui_interp = get_current_interp_info ();
+  struct interp *interp = interp_lookup (current_ui, name);
+  struct interp *old_interp = ui_interp->current_interpreter;
 
   if (interp)
-    current_interpreter = interp;
+    ui_interp->current_interpreter = interp;
   return old_interp;
 }
 
@@ -295,49 +393,66 @@ interp_name (struct interp *interp)
 int
 current_interp_named_p (const char *interp_name)
 {
-  if (current_interpreter)
-    return (strcmp (current_interpreter->name, interp_name) == 0);
+  struct ui_interp_info *ui_interp = get_current_interp_info ();
+  struct interp *interp = ui_interp->current_interpreter;
+
+  if (interp != NULL)
+    return (strcmp (interp->name, interp_name) == 0);
 
   return 0;
 }
 
-/* This is called in display_gdb_prompt.  If the proc returns a zero
-   value, display_gdb_prompt will return without displaying the
-   prompt.  */
-int
-current_interp_display_prompt_p (void)
+/* The interpreter that was active when a command was executed.
+   Normally that'd always be CURRENT_INTERPRETER, except that MI's
+   -interpreter-exec command doesn't actually flip the current
+   interpreter when running its sub-command.  The
+   `command_interpreter' global tracks when interp_exec is called
+   (IOW, when -interpreter-exec is called).  If that is set, it is
+   INTERP in '-interpreter-exec INTERP "CMD"' or in 'interpreter-exec
+   INTERP "CMD".  Otherwise, interp_exec isn't active, and so the
+   interpreter running the command is the current interpreter.  */
+
+struct interp *
+command_interp (void)
 {
-  if (current_interpreter == NULL
-      || current_interpreter->procs->prompt_proc_p == NULL)
-    return 0;
+  struct ui_interp_info *ui_interp = get_current_interp_info ();
+
+  if (ui_interp->command_interpreter != NULL)
+    return ui_interp->command_interpreter;
   else
-    return current_interpreter->procs->prompt_proc_p (current_interpreter->
-						      data);
+    return ui_interp->current_interpreter;
 }
 
-/* Run the current command interpreter's main loop.  */
+/* See interps.h.  */
+
 void
-current_interp_command_loop (void)
+interp_pre_command_loop (struct interp *interp)
 {
-  /* Somewhat messy.  For the moment prop up all the old ways of
-     selecting the command loop.  `deprecated_command_loop_hook'
-     should be deprecated.  */
-  if (deprecated_command_loop_hook != NULL)
-    deprecated_command_loop_hook ();
-  else if (current_interpreter != NULL
-	   && current_interpreter->procs->command_loop_proc != NULL)
-    current_interpreter->procs->command_loop_proc (current_interpreter->data);
-  else
-    cli_command_loop ();
+  gdb_assert (interp != NULL);
+
+  if (interp->procs->pre_command_loop_proc != NULL)
+    interp->procs->pre_command_loop_proc (interp);
+}
+
+/* See interp.h  */
+
+int
+interp_supports_command_editing (struct interp *interp)
+{
+  if (interp->procs->supports_command_editing_proc != NULL)
+    return interp->procs->supports_command_editing_proc (interp);
+  return 0;
 }
 
 int
 interp_quiet_p (struct interp *interp)
 {
+  struct ui_interp_info *ui_interp = get_current_interp_info ();
+
   if (interp != NULL)
     return interp->quiet_p;
   else
-    return current_interpreter->quiet_p;
+    return ui_interp->current_interpreter->quiet_p;
 }
 
 static int
@@ -351,20 +466,26 @@ interp_set_quiet (struct interp *interp, int quiet)
 
 /* interp_exec - This executes COMMAND_STR in the current 
    interpreter.  */
-int
-interp_exec_p (struct interp *interp)
-{
-  return interp->procs->exec_proc != NULL;
-}
 
 struct gdb_exception
 interp_exec (struct interp *interp, const char *command_str)
 {
-  if (interp->procs->exec_proc != NULL)
-    {
-      return interp->procs->exec_proc (interp->data, command_str);
-    }
-  return exception_none;
+  struct ui_interp_info *ui_interp = get_current_interp_info ();
+
+  struct gdb_exception ex;
+  struct interp *save_command_interp;
+
+  gdb_assert (interp->procs->exec_proc != NULL);
+
+  /* See `command_interp' for why we do this.  */
+  save_command_interp = ui_interp->command_interpreter;
+  ui_interp->command_interpreter = interp;
+
+  ex = interp->procs->exec_proc (interp->data, command_str);
+
+  ui_interp->command_interpreter = save_command_interp;
+
+  return ex;
 }
 
 /* A convenience routine that nulls out all the common command hooks.
@@ -372,7 +493,6 @@ interp_exec (struct interp *interp, const char *command_str)
 void
 clear_interpreter_hooks (void)
 {
-  deprecated_init_ui_hook = 0;
   deprecated_print_frame_info_listing_hook = 0;
   /*print_frame_more_info_hook = 0; */
   deprecated_query_hook = 0;
@@ -381,40 +501,29 @@ clear_interpreter_hooks (void)
   deprecated_readline_begin_hook = 0;
   deprecated_readline_hook = 0;
   deprecated_readline_end_hook = 0;
-  deprecated_register_changed_hook = 0;
   deprecated_context_hook = 0;
   deprecated_target_wait_hook = 0;
   deprecated_call_command_hook = 0;
   deprecated_error_begin_hook = 0;
-  deprecated_command_loop_hook = 0;
-}
-
-/* This is a lazy init routine, called the first time the interpreter
-   module is used.  I put it here just in case, but I haven't thought
-   of a use for it yet.  I will probably bag it soon, since I don't
-   think it will be necessary.  */
-static void
-initialize_interps (void)
-{
-  interpreter_initialized = 1;
-  /* Don't know if anything needs to be done here...  */
 }
 
 static void
 interpreter_exec_cmd (char *args, int from_tty)
 {
+  struct ui_interp_info *ui_interp = get_current_interp_info ();
   struct interp *old_interp, *interp_to_use;
   char **prules = NULL;
   char **trule = NULL;
   unsigned int nrules;
   unsigned int i;
   int old_quiet, use_quiet;
+  struct cleanup *cleanup;
 
   if (args == NULL)
     error_no_arg (_("interpreter-exec command"));
 
   prules = gdb_buildargv (args);
-  make_cleanup_freeargv (prules);
+  cleanup = make_cleanup_freeargv (prules);
 
   nrules = 0;
   for (trule = prules; *trule != NULL; trule++)
@@ -423,9 +532,9 @@ interpreter_exec_cmd (char *args, int from_tty)
   if (nrules < 2)
     error (_("usage: interpreter-exec <interpreter> [ <command> ... ]"));
 
-  old_interp = current_interpreter;
+  old_interp = ui_interp->current_interpreter;
 
-  interp_to_use = interp_lookup (prules[0]);
+  interp_to_use = interp_lookup (current_ui, prules[0]);
   if (interp_to_use == NULL)
     error (_("Could not find interpreter \"%s\"."), prules[0]);
 
@@ -452,18 +561,25 @@ interpreter_exec_cmd (char *args, int from_tty)
   interp_set (old_interp, 0);
   interp_set_quiet (interp_to_use, use_quiet);
   interp_set_quiet (old_interp, old_quiet);
+
+  do_cleanups (cleanup);
 }
 
-/* List the possible interpreters which could complete the given text.  */
-static VEC (char_ptr) *
-interpreter_completer (struct cmd_list_element *ignore, char *text, char *word)
+/* See interps.h.  */
+
+VEC (char_ptr) *
+interpreter_completer (struct cmd_list_element *ignore,
+		       const char *text, const char *word)
 {
+  struct interp_factory *interp;
   int textlen;
   VEC (char_ptr) *matches = NULL;
-  struct interp *interp;
+  int ix;
 
   textlen = strlen (text);
-  for (interp = interp_list; interp != NULL; interp = interp->next)
+  for (ix = 0;
+       VEC_iterate (interp_factory_p, interpreter_factories, ix, interp);
+       ++ix)
     {
       if (strncmp (interp->name, text, textlen) == 0)
 	{
@@ -494,14 +610,29 @@ interpreter_completer (struct cmd_list_element *ignore, char *text, char *word)
 struct interp *
 top_level_interpreter (void)
 {
-  return top_level_interpreter_ptr;  
+  struct ui_interp_info *ui_interp = get_current_interp_info ();
+
+  return ui_interp->top_level_interpreter;
 }
 
 void *
 top_level_interpreter_data (void)
 {
-  gdb_assert (top_level_interpreter_ptr);
-  return top_level_interpreter_ptr->data;  
+  struct interp *interp;
+
+  interp = top_level_interpreter ();
+  gdb_assert (interp != NULL);
+  return interp->data;
+}
+
+/* See interps.h.  */
+
+struct interp *
+current_interpreter (void)
+{
+  struct ui_interp_info *ui_interp = get_interp_info (current_ui);
+
+  return ui_interp->current_interpreter;
 }
 
 /* This just adds the "interpreter-exec" command.  */

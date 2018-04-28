@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -15,6 +15,18 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#ifdef GDBSERVER
+#include <server.h>
+#include <cuda-tdep-server.h>
+#else
+#include <defs.h>
+#include <common-defs.h>
+#include <cuda-options.h>
+#include <cuda-tdep.h>
+#include <ptid.h>
+#include <inferior.h>
+#endif
+
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -26,18 +38,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <pthread.h>
-
-#ifdef GDBSERVER
-#include <server.h>
-#include <cuda-tdep-server.h>
-#else
-#include <defs.h>
-#include <gdb_assert.h>
-#include <cuda-options.h>
-#include <cuda-tdep.h>
-#include <ptid.h>
-#include <inferior.h>
-#endif
+#include "rsp-low.h"
 
 #include <cuda-utils.h>
 #include <libcudbg.h>
@@ -95,6 +96,9 @@ cudbgCallbackHandler(void *arg)
 static CUDBGResult
 cudbgipcCreate(CUDBGIPC_t *ipc, int from, int to, int flags)
 {
+    const char *env = getenv("CUDA_GDB_IPC_OPEN_NONBLOCKING");
+    int timeout_in_seconds = env ? atoi(env) : 0;
+
     snprintf(ipc->name, sizeof (ipc->name), "%s/pipe.%d.%d",
              cuda_gdb_session_get_dir (), from, to);
 
@@ -122,7 +126,7 @@ cudbgipcCreate(CUDBGIPC_t *ipc, int from, int to, int flags)
     /* If cuda-gdb is launched as root, make pipes are writeable by UID of debugged process */
 #ifndef GDBSERVER
     if (getuid() == 0) {
-         int pid = (int) PIDGET (inferior_ptid);
+         int pid = (int) ptid_get_pid (inferior_ptid);
          if (pid > 0 && !cuda_gdb_chown_to_pid_uid (pid, ipc->name)) {
              cudbgipc_trace("Changing ownership to pid %d uid failed for %s, errno=%d",
                        pid, ipc->name, errno);
@@ -131,8 +135,26 @@ cudbgipcCreate(CUDBGIPC_t *ipc, int from, int to, int flags)
     }
 #endif
 
-    if ((ipc->fd = open(ipc->name, flags)) == -1) {
-        cudbgipc_trace("Pipe opening failure (from=%u, to=%u, flags=%x, file=%s, errno=%d)",
+    if (timeout_in_seconds > 0)
+        flags |= O_NONBLOCK;
+
+    do {
+        if ((ipc->fd = open(ipc->name, flags)) >= 0)
+            break;
+
+        if (errno == ENXIO) {
+            sleep(1);
+        }
+        else {
+            cudbgipc_trace("Pipe opening failure (from=%u, to=%u, flags=%x, file=%s, errno=%d)",
+                           ipc->from, ipc->to, flags, ipc->name, errno);
+            return CUDBG_ERROR_COMMUNICATION_FAILURE;
+        }
+	--timeout_in_seconds;
+    } while (timeout_in_seconds >= 0);
+
+    if (timeout_in_seconds < 0) {
+        cudbgipc_trace("Pipe opening timeout (from=%u, to=%u, flags=%x, file=%s, errno=%d)",
                        ipc->from, ipc->to, flags, ipc->name, errno);
         return CUDBG_ERROR_COMMUNICATION_FAILURE;
     }
@@ -148,7 +170,9 @@ cudbgipcCreate(CUDBGIPC_t *ipc, int from, int to, int flags)
 
     /* Initialize message */
     ipc->dataSize = sizeof(ipc->dataSize);
-    ipc->data     = malloc(sizeof(ipc->dataSize));
+    ipc->data     = (char *) malloc(sizeof(ipc->dataSize));
+    if (!ipc->data)
+        return CUDBG_ERROR_OS_RESOURCES;
     memset(ipc->data, 0, ipc->dataSize);
 
     /* Indicate successful initialization */
@@ -253,9 +277,9 @@ static uint32_t outBufferUsed = 0;
 static CUDBGResult
 cudbgipcInitializeRemote (void)
 {
-   outBuffer = xmalloc (outBufferSize = 4096);
+  outBuffer = (char *) xmalloc (outBufferSize = 4096);
 
-   inBuffer = xmalloc (inBufferSize = 65535);
+  inBuffer = (char *) xmalloc (inBufferSize = 65535);
 
    outBufferUsed = snprintf (outBuffer, outBufferSize, "vCUDA;");
    return CUDBG_SUCCESS;
@@ -266,16 +290,20 @@ cudbgipcAppendRemote(void *d, uint32_t size)
 {
     int out_len, bytes_processed;
 
-    if (outBufferUsed + size > outBufferSize)  {
-        char *buf = realloc ( outBuffer, outBufferSize + size);
+    if (outBufferUsed + size > outBufferSize)
+      {
+	char *buf = (char *)realloc (outBuffer, outBufferSize + size);
 
         if (!buf)
-            return CUDBG_ERROR_UNKNOWN;
+	  return CUDBG_ERROR_UNKNOWN;
         outBuffer = buf;
         outBufferSize += size;
-    }
+      }
 
-    out_len = remote_escape_output (d, size, outBuffer+outBufferUsed, &bytes_processed, outBufferSize-outBufferUsed);
+    out_len = remote_escape_output ((const gdb_byte *) d, size, 1,
+				    (gdb_byte *) outBuffer+outBufferUsed,
+				    &bytes_processed, 
+				    outBufferSize-outBufferUsed);
     gdb_assert (bytes_processed == size);
 
     outBufferUsed += out_len;
@@ -292,7 +320,7 @@ cudbgipcRequestRemote(void **d, size_t *size)
 
     if (!recvBuffer) {
         recvBufferSize = get_remote_packet_size();
-        recvBuffer = xmalloc (recvBufferSize);
+        recvBuffer = (char *) xmalloc (recvBufferSize);
     }
 
     putpkt_binary (outBuffer, outBufferUsed);
@@ -311,15 +339,17 @@ cudbgipcRequestRemote(void **d, size_t *size)
                   recvBuffer[2]>='0' && recvBuffer[2]<='9');
 
             outBufferUsed = snprintf (outBuffer, outBufferSize, "vCUDA;");
-            return atoi(recvBuffer+1);
+            return (CUDBGResult) atoi(recvBuffer+1);
         }
 
         /* Adjust input buffer size, if necessary */
         if (inBufferSize < totalRecvSize + recvBytes)
-             inBuffer = xrealloc (inBuffer, inBufferSize += 2*recvBytes);
+	  inBuffer = (char *) xrealloc (inBuffer, inBufferSize += 2*recvBytes);
 
-        recvBytes = remote_unescape_input (recvBuffer + strlen("OK;"), recvBytes - strlen ("OK;"),
-                                           inBuffer + totalRecvSize, inBufferSize - totalRecvSize);
+        recvBytes = remote_unescape_input ((const gdb_byte *) (recvBuffer + strlen("OK;")),
+					   recvBytes - strlen ("OK;"),
+                                           (gdb_byte *) (inBuffer + totalRecvSize),
+					   inBufferSize - totalRecvSize);
         totalRecvSize += recvBytes;
         /* If a multi-packet reply received, send a request for more data */
         if (memcmp (recvBuffer, "MP;", strlen ("MP;")) == 0) {
@@ -416,7 +446,7 @@ cudbgipcPull(CUDBGIPC_t *in)
     }
 
     /* Allocate memory given the size */
-    if ((in->data = realloc(in->data, in->dataSize)) == 0) {
+    if ((in->data = (char *) realloc(in->data, in->dataSize)) == 0) {
         cudbgipc_trace("Memory reallocation failed (res=%d)", res);
         return CUDBG_ERROR_COMMUNICATION_FAILURE;
     }
@@ -487,7 +517,7 @@ cudbgipcAppendLocal(void *d, uint32_t size)
 
     memcpy(((char *)data) + commOut.dataSize, d, size);
 
-    commOut.data = data;
+    commOut.data = (char *)data;
     commOut.dataSize = dataSize;
 
     return CUDBG_SUCCESS;
@@ -678,7 +708,7 @@ ATTRIBUTE_PRINTF(1, 2) void cudbgipc_trace(char *fmt, ...)
 
   va_start (ap, fmt);
 #ifdef GDBSERVER
-  msg = xmalloc (sizeof (*msg));
+  msg = (struct cuda_trace_msg *) xmalloc (sizeof (*msg));
   if (!cuda_first_trace_msg)
     cuda_first_trace_msg = msg;
   else

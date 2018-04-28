@@ -1,4 +1,4 @@
-# Copyright 2011-2013 Free Software Foundation, Inc.
+# Copyright 2011-2016 Free Software Foundation, Inc.
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 3 of the License, or
@@ -12,7 +12,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-load_lib "trace-support.exp";
+load_lib "trace-support.exp"
 
 if {[skip_shlib_tests]} {
     return 0
@@ -43,8 +43,8 @@ if { [gdb_compile $srcdir/$subdir/$srcfile $binfile executable $exec_opts] != ""
 
 clean_restart $executable
 
-gdb_load_shlibs $lib_sl1
-gdb_load_shlibs $lib_sl2
+gdb_load_shlib $lib_sl1
+gdb_load_shlib $lib_sl2
 
 if ![runto_main] {
     fail "Can't run to main to check for trace support"
@@ -53,112 +53,122 @@ if ![runto_main] {
 
 if ![gdb_target_supports_trace] {
     unsupported "Current target does not support trace"
-    return -1;
+    return -1
 }
 
 # Verify pending tracepoint is resolved to running to main.
 
-proc pending_tracepoint_resolved { trace_type } { with_test_prefix "$trace_type resolved" {
-    global srcdir
-    global subdir
-    global binfile
-    global srcfile
-    global lib_sl1
+proc pending_tracepoint_resolved { trace_type } {
+    with_test_prefix "$trace_type resolved" {
+	global srcdir
+	global subdir
+	global binfile
+	global srcfile
+	global lib_sl1
 
-    # Start with a fresh gdb.
-    gdb_exit
-    gdb_start
-    gdb_reinitialize_dir $srcdir/$subdir
+	# Start with a fresh gdb.
+	gdb_exit
+	gdb_start
+	gdb_reinitialize_dir $srcdir/$subdir
 
-    gdb_test_multiple "$trace_type set_point1" "set pending tracepoint" {
-	-re ".*Make \(fast |\)tracepoint pending.*y or \\\[n\\\]. $" {
-	    gdb_test "y" "\(Fast t|T\)racepoint.*set_point1.*pending." \
-		"set pending tracepoint (without symbols)"
-	}
-    }
-
-    gdb_test "info trace" \
-	"Num     Type\[ \]+Disp Enb Address\[ \]+What.*
-\[0-9\]+\[\t \]+\(fast |\)tracepoint\[ \]+keep y.*PENDING.*set_point1.*" \
-	"single pending tracepoint info (without symbols)"
-
-    gdb_load ${binfile}
-
-    gdb_test "break main" "Breakpoint.*at.* file .*$srcfile, line.*" \
-	"breakpoint function"
-
-    gdb_run_cmd
-    gdb_test "" "Breakpoint 2, main.*"
-
-    # Run to main which should resolve a pending tracepoint
-    gdb_test "info trace" \
-	"Num     Type\[ \]+Disp Enb Address\[ \]+What.*
-\[0-9\]+\[\t \]+\(fast |\)tracepoint\[ \]+keep y.*pendfunc.*" \
-	"single tracepoint info"
-}}
-
-# Verify pending tracepoint is resolved and works as expected.
-
-proc pending_tracepoint_works { trace_type } { with_test_prefix "$trace_type works" {
-    global executable
-    global srcfile
-    global lib_sl1
-    global gdb_prompt
-
-    # Restart with a fresh gdb.
-    clean_restart $executable
-
-    # Test setting and querying pending tracepoints
-
-    gdb_test_multiple "$trace_type set_point1" "set pending tracepoint" {
-	-re ".*Make \(fast |\)tracepoint pending.*y or \\\[n\\\]. $" {
-	    gdb_test "y" "\(Fast t|T\)racepoint.*set_point1.*pending." "set pending tracepoint"
-	}
-    }
-
-    gdb_test "info trace" \
-	"Num     Type\[ \]+Disp Enb Address\[ \]+What.*
-\[0-9\]+\[\t \]+\(fast |\)tracepoint\[ \]+keep y.*PENDING.*set_point1.*" \
-	"single pending tracepoint info"
-
-    # Run to main which should resolve a pending tracepoint
-    gdb_test "break main" "Breakpoint.*at.* file .*$srcfile, line.*" \
-	"breakpoint function"
-    gdb_run_cmd
-    gdb_test "" "Breakpoint 2, main.*"
-
-    gdb_test "break marker" "Breakpoint.*at.* file .*$srcfile, line.*" \
-	"breakpoint on marker"
-
-    set test "start trace experiment"
-    gdb_test_multiple "tstart" $test {
-	-re "^tstart\r\n$gdb_prompt $" {
-	    pass $test
-	}
-	-re "Target returns error code .* too far .*$gdb_prompt $" {
-	    if [string equal $trace_type "ftrace"] {
-		# The target was unable to install the fast tracepoint
-		# (e.g., jump pad too far from tracepoint).
-		pass "$test (too far)"
-		# Skip the rest of the tests.
-		return
-	    } else {
-		fail $test
+	gdb_test_multiple "$trace_type set_point1" "set pending tracepoint" {
+	    -re ".*Make \(fast |\)tracepoint pending.*y or \\\[n\\\]. $" {
+		gdb_test "y" "\(Fast t|T\)racepoint.*set_point1.*pending." \
+		    "set pending tracepoint (without symbols)"
 	    }
 	}
 
+	gdb_test "info trace" \
+	    "Num     Type\[ \]+Disp Enb Address\[ \]+What.*
+\[0-9\]+\[\t \]+\(fast |\)tracepoint\[ \]+keep y.*PENDING.*set_point1.*" \
+	    "single pending tracepoint info (without symbols)"
+
+	gdb_load ${binfile}
+
+	gdb_test "break main" "Breakpoint.*at.* file .*$srcfile, line.*" \
+	    "breakpoint function"
+
+	gdb_run_cmd
+	gdb_test "" "Breakpoint 2, main.*"
+
+	# Run to main which should resolve a pending tracepoint
+	gdb_test "info trace" \
+	    "Num     Type\[ \]+Disp Enb Address\[ \]+What.*
+\[0-9\]+\[\t \]+\(fast |\)tracepoint\[ \]+keep y.*pendfunc.*" \
+	    "single tracepoint info"
     }
+}
 
-    gdb_test "continue" "Continuing.\r\n\r\nBreakpoint.*marker.*at.*$srcfile.*" \
-	"continue to marker"
+# Verify pending tracepoint is resolved and works as expected.
 
-    gdb_test "tstop" "\[\r\n\]+" "stop trace experiment"
+proc pending_tracepoint_works { trace_type } {
+    with_test_prefix "$trace_type works" {
+	global executable
+	global srcfile
+	global lib_sl1
+	global gdb_prompt
 
-    gdb_test "tfind start" "#0 .*" "tfind test frame 0"
-    gdb_test "tfind" "Found trace frame 1, tracepoint 1.*" "tfind test frame 1"
-    gdb_test "tfind" "Found trace frame 2, tracepoint 1.*" "tfind test frame 2"
-    gdb_test "tfind" "Target failed to find requested trace frame..*" "tfind test frame"
-}}
+	# Restart with a fresh gdb.
+	clean_restart $executable
+
+	# Test setting and querying pending tracepoints
+
+	gdb_test_multiple "$trace_type set_point1" "set pending tracepoint" {
+	    -re ".*Make \(fast |\)tracepoint pending.*y or \\\[n\\\]. $" {
+		gdb_test "y" \
+		    "\(Fast t|T\)racepoint.*set_point1.*pending." \
+		    "set pending tracepoint"
+	    }
+	}
+
+	gdb_test "info trace" \
+	    "Num     Type\[ \]+Disp Enb Address\[ \]+What.*
+\[0-9\]+\[\t \]+\(fast |\)tracepoint\[ \]+keep y.*PENDING.*set_point1.*" \
+	    "single pending tracepoint info"
+
+	# Run to main which should resolve a pending tracepoint
+	gdb_test "break main" "Breakpoint.*at.* file .*$srcfile, line.*" \
+	    "breakpoint function"
+	gdb_run_cmd
+	gdb_test "" "Breakpoint 2, main.*"
+
+	gdb_test "break marker" "Breakpoint.*at.* file .*$srcfile, line.*" \
+	    "breakpoint on marker"
+
+	set test "start trace experiment"
+	gdb_test_multiple "tstart" $test {
+	    -re "^tstart\r\n$gdb_prompt $" {
+		pass $test
+	    }
+	    -re "Target returns error code .* too far .*$gdb_prompt $" {
+		if [string equal $trace_type "ftrace"] {
+		    # The target was unable to install the fast tracepoint
+		    # (e.g., jump pad too far from tracepoint).
+		    pass "$test (too far)"
+		    # Skip the rest of the tests.
+		    return
+		} else {
+		    fail $test
+		}
+	    }
+
+	}
+
+	gdb_test "continue" "Continuing.\r\n\r\n(Thread .* hit )?Breakpoint.*marker.*at.*$srcfile.*" \
+	    "continue to marker"
+
+	gdb_test "tstop" "\[\r\n\]+" "stop trace experiment"
+
+	gdb_test "tfind start" "#0 .*" "tfind test frame 0"
+	gdb_test "tfind" "Found trace frame 1, tracepoint 1.*" \
+	    "tfind test frame 1"
+	gdb_test "tfind" "Found trace frame 2, tracepoint 1.*" \
+	    "tfind test frame 2"
+	gdb_test "tfind" \
+	    "Target failed to find requested trace frame..*" \
+	    "tfind test frame"
+    }
+}
 
 # Verify pending tracepoint is resolved during trace.
 
@@ -194,7 +204,7 @@ proc pending_tracepoint_resolved_during_trace { trace_type } \
 
     gdb_test_no_output "tstart" "start trace experiment"
 
-    gdb_test "continue" "Continuing.\r\n\r\nBreakpoint.*marker.*at.*pending.c.*" \
+    gdb_test "continue" "Continuing.\r\n\r\n(Thread .* hit )?Breakpoint.*marker.*at.*pending.c.*" \
 	"continue to marker 1"
 
     set test "continue to marker 2"
@@ -211,7 +221,7 @@ proc pending_tracepoint_resolved_during_trace { trace_type } \
 		fail $test
 	    }
 	}
-	-re "Continuing.\r\n\r\nBreakpoint.*marker.*at.*$srcfile.*$gdb_prompt $" {
+	-re "Continuing.\r\n(Reading .* from remote target...\r\n)?\r\n(Thread .* hit )?Breakpoint.*marker.*at.*$srcfile.*$gdb_prompt $" {
 	    pass $test
 	}
     }
@@ -254,7 +264,7 @@ proc pending_tracepoint_installed_during_trace { trace_type } \
 
     gdb_test_no_output "tstart" "start trace experiment"
 
-    gdb_test "continue" "Continuing.\r\n\r\nBreakpoint.*marker.*at.*${srcfile}.*" \
+    gdb_test "continue" "Continuing.\r\n\r\n(Thread .* hit )?Breakpoint.*marker.*at.*${srcfile}.*" \
 	"continue to marker 1"
 
     # Set a pending tracepoint during a tracing experiment.
@@ -284,7 +294,7 @@ proc pending_tracepoint_installed_during_trace { trace_type } \
 		fail $test
 	    }
 	}
-	-re "Continuing.\r\n\r\nBreakpoint.*marker.*at.*$srcfile.*$gdb_prompt $" {
+	-re "Continuing.\r\n(Reading .* from remote target...\r\n)?\r\n(Thread .* hit )?Breakpoint.*marker.*at.*$srcfile.*$gdb_prompt $" {
            pass $test
        }
     }
@@ -297,7 +307,8 @@ proc pending_tracepoint_installed_during_trace { trace_type } \
 \[0-9\]+\[\t \]+\(fast |\)tracepoint\[ \]+keep y.*pendfunc2.*" \
 	"tracepoint is resolved"
 
-    gdb_test "tfind start" "#0  $hex in pendfunc2 .*" "tfind test frame 0"
+    # powerpc64 shows "in .pendfunc2" here.
+    gdb_test "tfind start" "#0  $hex in .?pendfunc2 .*" "tfind test frame 0"
     gdb_test "tfind" "Target failed to find requested trace frame..*" "tfind test frame"
 }}
 
@@ -331,7 +342,7 @@ proc pending_tracepoint_disconnect_during_trace { trace_type } \
 
     gdb_test_no_output "tstart" "start trace experiment"
 
-    gdb_test "continue" "Continuing.\r\n\r\nBreakpoint.*marker.*at.*pending.c.*" \
+    gdb_test "continue" "Continuing.\r\n\r\n(Thread .* hit )?Breakpoint.*marker.*at.*pending.c.*" \
 	"continue to marker"
 
     set test "disconnect with pending tracepoint"
@@ -379,9 +390,9 @@ proc pending_tracepoint_disconnect_after_resolved { trace_type } \
 
     gdb_test_no_output "tstart" "start trace experiment"
 
-    gdb_test "continue" "Continuing.\r\n\r\nBreakpoint.*marker.*at.*pending.c.*" \
+    gdb_test "continue" "Continuing.\r\n\r\n(Thread .* hit )?Breakpoint.*marker.*at.*pending.c.*" \
 	"continue to marker 1"
-    gdb_test "continue" "Continuing.\r\n\r\nBreakpoint.*marker.*at.*pending.c.*" \
+    gdb_test "continue" "Continuing.\r\n(Reading .* from remote target...\r\n)?\r\n(Thread .* hit )?Breakpoint.*marker.*at.*pending.c.*" \
 	"continue to marker 2"
 
     # There should be no pending tracepoint, so no warning should be emitted.
@@ -411,6 +422,7 @@ proc pending_tracepoint_with_action_resolved { trace_type } \
     global srcfile
     global lib_sl1
     global gdb_prompt
+    global pcreg
 
     # Start with a fresh gdb.
     clean_restart $executable
@@ -426,13 +438,6 @@ proc pending_tracepoint_with_action_resolved { trace_type } \
 	}
     }
 
-    set pcreg "pc"
-    if [is_amd64_regs_target] {
-	set pcreg "rip"
-    } elseif [is_x86_like_target] {
-	set pcreg "eip"
-    }
-
     gdb_trace_setactions "set action for pending tracepoint" "" \
 	"collect \$$pcreg" "^$"
 
@@ -446,7 +451,7 @@ proc pending_tracepoint_with_action_resolved { trace_type } \
 
     gdb_test_no_output "tstart" "start trace experiment"
 
-    gdb_test "continue" "Continuing.\r\n\r\nBreakpoint.*marker.*at.*pending.c.*" \
+    gdb_test "continue" "Continuing.\r\n\r\n(Thread .* hit )?Breakpoint.*marker.*at.*pending.c.*" \
 	"continue to marker 1"
 
     set test "continue to marker 2"
@@ -463,7 +468,7 @@ proc pending_tracepoint_with_action_resolved { trace_type } \
 		fail $test
             }
 	}
-	-re "Continuing.\r\n\r\nBreakpoint.*marker.*at.*$srcfile.*$gdb_prompt $" {
+	-re "Continuing.\r\n(Reading .* from remote target...\r\n)?\r\n(Thread .* hit )?Breakpoint.*marker.*at.*$srcfile.*$gdb_prompt $" {
 	    pass "continue to marker 2"
 	}
 
@@ -498,7 +503,7 @@ pending_tracepoint_installed_during_trace "trace"
 
 # Re-compile test case with IPA.
 set libipa [get_in_proc_agent]
-gdb_load_shlibs $libipa
+gdb_load_shlib $libipa
 
 lappend exec_opts "shlib=$libipa"
 

@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -110,7 +110,7 @@ void cuda_remote_query_device_spec (uint32_t dev_id, uint32_t *num_sms, uint32_t
 bool cuda_remote_notification_pending (void);
 bool cuda_remote_notification_received (void);
 bool cuda_remote_notification_aliased_event (void);
-void cuda_remote_notification_analyze (void);
+void cuda_remote_notification_analyze (ptid_t ptid);
 void cuda_remote_notification_mark_consumed (void);
 void cuda_remote_notification_consume_pending (void);
 

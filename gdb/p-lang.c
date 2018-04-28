@@ -1,6 +1,6 @@
 /* Pascal language support routines for GDB, the GNU debugger.
 
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -20,12 +20,12 @@
 /* This file is derived from c-lang.c */
 
 #include "defs.h"
-#include "gdb_string.h"
 #include "symtab.h"
 #include "gdbtypes.h"
 #include "expression.h"
 #include "parser-defs.h"
 #include "language.h"
+#include "varobj.h"
 #include "p-lang.h"
 #include "valprint.h"
 #include "value.h"
@@ -58,23 +58,23 @@ static const char GPC_MAIN_PROGRAM_NAME_2[] = "pascal_main_program";
 const char *
 pascal_main_name (void)
 {
-  struct minimal_symbol *msym;
+  struct bound_minimal_symbol msym;
 
   msym = lookup_minimal_symbol (GPC_P_INITIALIZE, NULL, NULL);
 
   /*  If '_p_initialize' was not found, the main program is likely not
      written in Pascal.  */
-  if (msym == NULL)
+  if (msym.minsym == NULL)
     return NULL;
 
   msym = lookup_minimal_symbol (GPC_MAIN_PROGRAM_NAME_1, NULL, NULL);
-  if (msym != NULL)
+  if (msym.minsym != NULL)
     {
       return GPC_MAIN_PROGRAM_NAME_1;
     }
 
   msym = lookup_minimal_symbol (GPC_MAIN_PROGRAM_NAME_2, NULL, NULL);
-  if (msym != NULL)
+  if (msym.minsym != NULL)
     {
       return GPC_MAIN_PROGRAM_NAME_2;
     }
@@ -339,7 +339,7 @@ const struct op_print pascal_op_print_tab[] =
   {"^", UNOP_IND, PREC_SUFFIX, 1},
   {"@", UNOP_ADDR, PREC_PREFIX, 0},
   {"sizeof", UNOP_SIZEOF, PREC_PREFIX, 0},
-  {NULL, 0, 0, 0}
+  {NULL, OP_NULL, PREC_PREFIX, 0}
 };
 
 enum pascal_primitive_types {
@@ -412,17 +412,24 @@ pascal_language_arch_info (struct gdbarch *gdbarch,
   lai->bool_type_default = builtin->builtin_bool;
 }
 
+static const char *p_extensions[] =
+{
+  ".pas", ".p", ".pp", NULL
+};
+
 const struct language_defn pascal_language_defn =
 {
   "pascal",			/* Language name */
+  "Pascal",
   language_pascal,
   range_check_on,
   case_sensitive_on,
   array_row_major,
   macro_expansion_no,
+  p_extensions,
   &exp_descriptor_standard,
   pascal_parse,
-  pascal_error,
+  pascal_yyerror,
   null_post_parser,
   pascal_printchar,		/* Print a character constant */
   pascal_printstr,		/* Function to print string constant */
@@ -437,6 +444,7 @@ const struct language_defn pascal_language_defn =
   basic_lookup_symbol_nonlocal,	/* lookup_symbol_nonlocal */
   basic_lookup_transparent_type,/* lookup_transparent_type */
   NULL,				/* Language specific symbol demangler */
+  NULL,
   NULL,				/* Language specific class_name_from_physname */
   pascal_op_print_tab,		/* expression operators for printing */
   1,				/* c-style arrays */
@@ -449,6 +457,9 @@ const struct language_defn pascal_language_defn =
   default_get_string,
   NULL,				/* la_get_symbol_name_cmp */
   iterate_over_symbols,
+  &default_varobj_ops,
+  NULL,
+  NULL,
   LANG_MAGIC
 };
 

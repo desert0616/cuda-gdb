@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -133,7 +133,7 @@ cuda_iterator_filter_coords(const cuda_coords_t *in, cuda_iterator_type type)
 static bool
 cuda_iterator_step (cuda_iterator itr)
 {
-  uint64_t validWarpsMask;
+  cuda_api_warpmask* validWarpsMask;
   uint64_t validLanesMask;
   bool validWarp;
   bool validLane;
@@ -165,12 +165,12 @@ cuda_iterator_step (cuda_iterator itr)
             continue;
 
           validWarpsMask = sm_get_valid_warps_mask (c->dev, c->sm);
-          if (valid && validWarpsMask == 0)
+          if (valid && cuda_api_has_bit(validWarpsMask) == 0)
              continue;
 
           for (; c->wp < device_get_num_warps (c->dev); ++c->wp)
             {
-              validWarp = (validWarpsMask>>c->wp)&1;
+              validWarp = cuda_api_get_bit(validWarpsMask, c->wp);
               if (valid && !validWarp)
                 continue;
               if (filter && !cuda_val_matches (filter->wp, c->wp))
@@ -218,7 +218,7 @@ cuda_iterator_step (cuda_iterator itr)
                   if (itr->num_elements >= itr->list_size)
                     {
                       itr->list_size *= 2;
-                      itr->list = xrealloc (itr->list, itr->list_size * sizeof (*itr->list));
+                      itr->list = (cuda_coords_t *) xrealloc (itr->list, itr->list_size * sizeof (*itr->list));
                     }
 
                   itr->list[itr->num_elements++] = cuda_iterator_filter_coords (c, itr->type);

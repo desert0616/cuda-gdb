@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -15,7 +15,7 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "gdb_assert.h"
+#include "common-defs.h"
 
 #include "cuda-context.h"
 #include "cuda-options.h"
@@ -37,7 +37,7 @@ context_new (uint64_t context_id, uint32_t dev_id)
   cuda_trace ("create context dev_id %u context_id 0x%llx",
               dev_id, (unsigned long long)context_id);
 
-  context = xmalloc (sizeof *context);
+  context = (context_t) xmalloc (sizeof *context);
   context->context_id = context_id;
   context->dev_id     = dev_id;
   context->modules    = modules_new ();
@@ -46,56 +46,52 @@ context_new (uint64_t context_id, uint32_t dev_id)
 }
 
 void
-context_delete (context_t this)
+context_delete (context_t ctx)
 {
-  uint32_t dev_id;
-
-  gdb_assert (this);
-  gdb_assert (get_current_context () != this);
+  gdb_assert (ctx);
+  gdb_assert (get_current_context () != ctx);
 
   cuda_trace ("delete context dev_id %u context_id 0x%llx",
-              this->dev_id, (unsigned long long)this->context_id);
+              ctx->dev_id, (unsigned long long)ctx->context_id);
 
-  dev_id = context_get_device_id(this);
-
-  modules_delete (context_get_modules (this));
-  xfree (this);
+  modules_delete (context_get_modules (ctx));
+  xfree (ctx);
 }
 
 uint64_t
-context_get_id (context_t this)
+context_get_id (context_t ctx)
 {
-  gdb_assert (this);
+  gdb_assert (ctx);
 
-  return this->context_id;
+  return ctx->context_id;
 }
 
 uint32_t
-context_get_device_id (context_t this)
+context_get_device_id (context_t ctx)
 {
-  gdb_assert (this);
+  gdb_assert (ctx);
 
-  return this->dev_id;
+  return ctx->dev_id;
 }
 
 modules_t
-context_get_modules (context_t this)
+context_get_modules (context_t ctx)
 {
-  gdb_assert (this);
+  gdb_assert (ctx);
 
-  return this->modules;
+  return ctx->modules;
 }
 
 void
-context_print (context_t this)
+context_print (context_t ctx)
 {
-  gdb_assert (this);
+  gdb_assert (ctx);
 
   cuda_trace ("context %p context_id 0x%llx dev_id %u modules %p",
-              this, (unsigned long long)this->context_id,
-              this->dev_id, this->modules);
+              ctx, (unsigned long long)ctx->context_id,
+              ctx->dev_id, ctx->modules);
 
-  modules_print (this->modules);
+  modules_print (ctx->modules);
 }
 
 static context_t
@@ -144,50 +140,50 @@ contexts_new (void)
 {
   contexts_t contexts;
 
-  contexts = xcalloc (1, sizeof *contexts);
+  contexts = (contexts_t) xcalloc (1, sizeof *contexts);
 
   return contexts;
 }
 
 void
-contexts_delete (contexts_t this)
+contexts_delete (contexts_t ctx)
 {
   context_t  context;
   list_elt_t next;
   uint32_t   ctxtid;
   uint32_t   tid;
 
-  gdb_assert (this);
+  gdb_assert (ctx);
 
-  for (ctxtid = 0; ctxtid < this->num_ctxtids; ++ctxtid)
-    while (this->stacks[ctxtid])
+  for (ctxtid = 0; ctxtid < ctx->num_ctxtids; ++ctxtid)
+    while (ctx->stacks[ctxtid])
       {
-        tid = this->ctxtid_to_tid[ctxtid];
-        contexts_unstack_context (this, tid);
+        tid = ctx->ctxtid_to_tid[ctxtid];
+        contexts_unstack_context (ctx, tid);
       }
 
-  while (this->list)
+  while (ctx->list)
     {
-      context = context_remove_context_from_list (NULL, &this->list);
-      this->list_size--;
+      context = context_remove_context_from_list (NULL, &ctx->list);
+      ctx->list_size--;
       context_delete (context);
     }
 
-  xfree (this->stacks);
-  xfree (this->ctxtid_to_tid);
+  xfree (ctx->stacks);
+  xfree (ctx->ctxtid_to_tid);
 }
 
 void
-contexts_print (contexts_t this)
+contexts_print (contexts_t ctx)
 {
   list_elt_t     elt;
   context_t      context;
 
-  gdb_assert (this);
+  gdb_assert (ctx);
 
   cuda_trace (" Contexts: ");
 
-  for (elt = this->list; elt ; elt = this->list->next)
+  for (elt = ctx->list; elt ; elt = ctx->list->next)
     {
       context = elt->context;
       context_print (context);
@@ -195,107 +191,107 @@ contexts_print (contexts_t this)
 }
 
 void
-contexts_add_context (contexts_t this, context_t context)
+contexts_add_context (contexts_t ctx, context_t context)
 {
   list_elt_t elt;
 
-  gdb_assert (this);
+  gdb_assert (ctx);
 
   /* Create a new list element to contain the context. */
-  elt = xmalloc (sizeof *elt);
+  elt = (list_elt_t) xmalloc (sizeof *elt);
   elt->context = context;
-  elt->next    = this->list;
+  elt->next    = ctx->list;
 
   /* Add the element at the head of the list */
-  this->list = elt;
-  this->list_size++;
+  ctx->list = elt;
+  ctx->list_size++;
 }
 
 static list_elt_t * 
-contexts_find_stack_by_tid (contexts_t this, uint32_t tid)
+contexts_find_stack_by_tid (contexts_t ctx, uint32_t tid)
 {
   uint32_t ctxtid;
   bool     found = false;
 
-  for (ctxtid = 0; ctxtid < this->num_ctxtids; ++ctxtid)
-    if (tid == this->ctxtid_to_tid[ctxtid])
+  for (ctxtid = 0; ctxtid < ctx->num_ctxtids; ++ctxtid)
+    if (tid == ctx->ctxtid_to_tid[ctxtid])
       {
         found = true;
         break;
       }
   
   if (found)
-    return &this->stacks[ctxtid];
+    return &ctx->stacks[ctxtid];
   else
     return NULL;
 }
 
 context_t
-contexts_remove_context (contexts_t this, context_t context)
+contexts_remove_context (contexts_t ctx, context_t context)
 {
   uint32_t ctxtid;
   context_t removed_context = context;
 
-  gdb_assert (this);
+  gdb_assert (ctx);
 
   /* Remove context from all device stacks */
-  for (ctxtid = 0; ctxtid < this->num_ctxtids; ctxtid++)
+  for (ctxtid = 0; ctxtid < ctx->num_ctxtids; ctxtid++)
     {
       /* The context may have been pushed multiple times */
       while (removed_context)
       {
-        removed_context = context_remove_context_from_list (context, &this->stacks[ctxtid]);
+        removed_context = context_remove_context_from_list (context, &ctx->stacks[ctxtid]);
       }
     }
 
   /* Remove context from the list of all device contexts */
-  context_remove_context_from_list (context, &this->list);
-  this->list_size--;
+  context_remove_context_from_list (context, &ctx->list);
+  ctx->list_size--;
 
   return context;
 }
 
 static void 
-contexts_add_stack_for_tid (contexts_t this, uint32_t tid)
+contexts_add_stack_for_tid (contexts_t ctx, uint32_t tid)
 {
   uint32_t ctxtid;
 
-  ctxtid = this->num_ctxtids++;
+  ctxtid = ctx->num_ctxtids++;
 
-  this->stacks = xrealloc (this->stacks,
-                                 this->num_ctxtids * sizeof (*this->stacks));
-  this->ctxtid_to_tid = xrealloc (this->ctxtid_to_tid,
-                                    this->num_ctxtids * sizeof (*this->ctxtid_to_tid));
+  ctx->stacks = (list_elt_t *) xrealloc (ctx->stacks,
+					 ctx->num_ctxtids * sizeof (*ctx->stacks));
+  ctx->ctxtid_to_tid = (uint32_t *) xrealloc (ctx->ctxtid_to_tid,
+					      ctx->num_ctxtids * sizeof (*ctx->ctxtid_to_tid));
 
-  this->stacks[ctxtid] = NULL; 
-  this->ctxtid_to_tid[ctxtid] = tid;
+  ctx->stacks[ctxtid] = NULL; 
+  ctx->ctxtid_to_tid[ctxtid] = tid;
 }
 
 void
-contexts_stack_context (contexts_t this, context_t context, uint32_t tid)
+contexts_stack_context (contexts_t ctx, context_t context, uint32_t tid)
 {
   uint32_t     ctxtid;
   list_elt_t   elt;
   list_elt_t  *stack;
 
-  gdb_assert (this);
+  gdb_assert (ctx);
 
-  /* Make sure this context exists on the device */
-  gdb_assert (contexts_find_context_by_id (this, context_get_id (context)));
+  /* Make sure ctx context exists on the device */
+  gdb_assert (contexts_find_context_by_id (ctx, context_get_id (context)));
 
-  /* Get the stack to add this context to */
-  stack = contexts_find_stack_by_tid (this, tid);
+  /* Get the stack to add ctx context to */
+  stack = contexts_find_stack_by_tid (ctx, tid);
 
   if (NULL == stack)
     {
       /* Add a new stack */
-      contexts_add_stack_for_tid (this, tid); 
-      ctxtid = this->num_ctxtids - 1;
-      stack = &this->stacks[ctxtid];
+      contexts_add_stack_for_tid (ctx, tid); 
+      ctxtid = ctx->num_ctxtids - 1;
+      stack = &ctx->stacks[ctxtid];
     }
 
   /* Insert the element at the top of the stack list */
-  elt = xmalloc (sizeof *elt);
+  elt = (list_elt_t) xmalloc (sizeof *elt);
   elt->context = context;
   elt->next = *stack;
   *stack = elt;
@@ -303,16 +299,16 @@ contexts_stack_context (contexts_t this, context_t context, uint32_t tid)
 
 /* Pop the topmost context from the stack for this tid */
 context_t
-contexts_unstack_context (contexts_t this, uint32_t tid)
+contexts_unstack_context (contexts_t ctx, uint32_t tid)
 {
   list_elt_t  elt;
   context_t   context;
   list_elt_t *stack;
 
-  gdb_assert (this);
+  gdb_assert (ctx);
 
   /* Get the stack for this tid */
-  stack = contexts_find_stack_by_tid (this, tid);
+  stack = contexts_find_stack_by_tid (ctx, tid);
 
   if (NULL == stack)
       return NULL;
@@ -332,14 +328,14 @@ contexts_unstack_context (contexts_t this, uint32_t tid)
 }
 
 context_t
-contexts_find_context_by_id  (contexts_t this, uint64_t context_id)
+contexts_find_context_by_id  (contexts_t ctx, uint64_t context_id)
 {
   list_elt_t elt;
 
-  gdb_assert (this);
+  gdb_assert (ctx);
 
   /* Look for the context in the context list */
-  for (elt = this->list; elt; elt = elt->next)
+  for (elt = ctx->list; elt; elt = elt->next)
     if (context_get_id (elt->context) == context_id)
       return elt->context;
 
@@ -348,15 +344,15 @@ contexts_find_context_by_id  (contexts_t this, uint64_t context_id)
 }
 
 context_t
-contexts_get_active_context (contexts_t this, uint32_t tid)
+contexts_get_active_context (contexts_t ctx, uint32_t tid)
 {
   uint32_t    ctxtid;
   list_elt_t *stack;
 
-  gdb_assert (this);
+  gdb_assert (ctx);
 
   /* Get the stack for this tid */
-  stack = contexts_find_stack_by_tid (this, tid);
+  stack = contexts_find_stack_by_tid (ctx, tid);
 
   if (NULL == stack || NULL == *stack)
     return NULL;
@@ -367,13 +363,13 @@ contexts_get_active_context (contexts_t this, uint32_t tid)
 /* expensive: traverse all the objfiles to see if addr corresponds to
    any of them. Return the context if found, 0 otherwise. */
 context_t
-contexts_find_context_by_address (contexts_t this, CORE_ADDR addr)
+contexts_find_context_by_address (contexts_t ctx, CORE_ADDR addr)
 {
   list_elt_t elt;
 
-  gdb_assert (this);
+  gdb_assert (ctx);
 
-  for (elt = this->list; elt; elt = elt->next)
+  for (elt = ctx->list; elt; elt = elt->next)
     if (modules_find_module_by_address (elt->context->modules, addr))
       return elt->context;
 
@@ -381,30 +377,30 @@ contexts_find_context_by_address (contexts_t this, CORE_ADDR addr)
 }
 
 bool
-contexts_is_any_context_present (contexts_t this)
+contexts_is_any_context_present (contexts_t ctx)
 {
-  gdb_assert (this);
+  gdb_assert (ctx);
 
-  return (NULL != this->list);
+  return (NULL != ctx->list);
 }
 
 bool
-contexts_is_active_context (contexts_t this, context_t context)
+contexts_is_active_context (contexts_t ctx, context_t context)
 {
   uint32_t ctxtid;
-  gdb_assert (this);
+  gdb_assert (ctx);
 
-  for (ctxtid = 0; ctxtid < this->num_ctxtids; ++ctxtid)
-    if (this->stacks[ctxtid] && context == this->stacks[ctxtid]->context)
+  for (ctxtid = 0; ctxtid < ctx->num_ctxtids; ++ctxtid)
+    if (ctx->stacks[ctxtid] && context == ctx->stacks[ctxtid]->context)
       return true;
 
   return false;
 }
 
 uint32_t
-contexts_get_list_size (contexts_t this)
+contexts_get_list_size (contexts_t ctx)
 {
-  return this->list_size;
+  return ctx->list_size;
 }
 
 /******************************************************************************

@@ -1,4 +1,4 @@
-# Copyright 2010-2013 Free Software Foundation, Inc.
+# Copyright 2010-2016 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -21,13 +21,11 @@ if { ![isnative] || [is_remote host] || [target_info exists use_gdb_stub]
 
 load_lib prelink-support.exp
 
-set test "attach-pie-misread"
-set srcfile ${test}.c
-set genfile ${objdir}/${subdir}/${test}-gen.h
-set executable ${test}
-set binfile ${objdir}/${subdir}/${executable}
+standard_testfile .c
+set genfile [standard_output_file ${testfile}-gen.h]
+set executable $testfile
 
-if {[build_executable_own_libs ${test}.exp $executable $srcfile [list additional_flags=-fPIE ldflags=-pie]] == ""} {
+if {[build_executable_own_libs ${testfile}.exp $executable $srcfile [list additional_flags=-fPIE ldflags=-pie]] == ""} {
     return -1
 }
 
@@ -38,7 +36,7 @@ if {[build_executable_own_libs ${test}.exp $executable $srcfile [list additional
 #   DYNAMIC        0x134f618 0x000000000194f618 0x000000000194f618 0x000200 0x000200 RW  0x8
 #
 proc read_phdr {binfile test} {
-    set readelf_program [transform readelf]
+    set readelf_program [gdb_find_readelf]
     set command "exec $readelf_program -Wl $binfile"
     verbose -log "command is $command"
     set result [catch $command output]
@@ -128,25 +126,25 @@ if {$first_offset == 0} {
 set test "start inferior"
 gdb_exit
 
-set res [remote_spawn host $binfile];
-if { $res < 0 || $res == "" } {
+set test_spawn_id [remote_spawn host $binfile]
+if { $test_spawn_id < 0 || $test_spawn_id == "" } {
     perror "Spawning $binfile failed."
     fail $test
     return
 }
-set pid [exp_pid -i $res]
+set testpid [spawn_id_get_pid $test_spawn_id]
 gdb_expect {
     -re "sleeping\r\n" {
 	pass $test
     }
     eof {
 	fail "$test (eof)"
-	remote_exec host "kill -9 $pid"
+	wait -i $test_spawn_id
 	return
     }
     timeout {
 	fail "$test (timeout)"
-	remote_exec host "kill -9 $pid"
+	kill_wait_spawned_process $test_spawn_id
 	return
     }
 }
@@ -178,8 +176,8 @@ foreach align_mult {1 2} { with_test_prefix "shift-by-$align_mult" {
     clean_restart $executable
 
     set test "attach"
-    gdb_test_multiple "attach $pid" $test {
-	-re "Attaching to program: .*, process $pid\r\n" {
+    gdb_test_multiple "attach $testpid" $test {
+	-re "Attaching to program: .*, process $testpid\r\n" {
 	    # Missing "$gdb_prompt $" is intentional.
 	    pass $test
 	}
@@ -198,4 +196,4 @@ foreach align_mult {1 2} { with_test_prefix "shift-by-$align_mult" {
     gdb_test "detach" "Detaching from program: .*"
 }}
 
-remote_exec host "kill -9 $pid"
+kill_wait_spawned_process $test_spawn_id

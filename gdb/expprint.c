@@ -1,6 +1,6 @@
 /* Print in infix form a struct expression.
 
-   Copyright (C) 1986-2013 Free Software Foundation, Inc.
+   Copyright (C) 1986-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -26,10 +26,8 @@
 #include "parser-defs.h"
 #include "user-regs.h"		/* For user_reg_map_regnum_to_name.  */
 #include "target.h"
-#include "gdb_string.h"
 #include "block.h"
 #include "objfiles.h"
-#include "gdb_assert.h"
 #include "valprint.h"
 
 #include <ctype.h>
@@ -99,7 +97,7 @@ print_subexp_standard (struct expression *exp, int *pos,
       {
 	struct value_print_options opts;
 
-	get_raw_print_options (&opts);
+	get_no_prettyformat_print_options (&opts);
 	(*pos) += 3;
 	value_print (value_from_longest (exp->elts[pc + 1].type,
 					 exp->elts[pc + 2].longconst),
@@ -111,7 +109,7 @@ print_subexp_standard (struct expression *exp, int *pos,
       {
 	struct value_print_options opts;
 
-	get_raw_print_options (&opts);
+	get_no_prettyformat_print_options (&opts);
 	(*pos) += 3;
 	value_print (value_from_double (exp->elts[pc + 1].type,
 					exp->elts[pc + 2].doubleconst),
@@ -242,7 +240,7 @@ print_subexp_standard (struct expression *exp, int *pos,
 	  {
 	    char *s, *nextS;
 
-	    s = alloca (strlen (selector) + 1);
+	    s = (char *) alloca (strlen (selector) + 1);
 	    strcpy (s, selector);
 	    for (tem = 0; tem < nargs; tem++)
 	      {
@@ -282,7 +280,7 @@ print_subexp_standard (struct expression *exp, int *pos,
 	     a simple string, revert back to array printing.  Note that
 	     the last expression element is an explicit null terminator
 	     byte, which doesn't get printed.  */
-	  tempstr = alloca (nargs);
+	  tempstr = (char *) alloca (nargs);
 	  pc += 4;
 	  while (tem < nargs)
 	    {
@@ -448,7 +446,7 @@ print_subexp_standard (struct expression *exp, int *pos,
 	  (*pos) += 4;
 	  val = value_at_lazy (exp->elts[pc + 1].type,
 			       (CORE_ADDR) exp->elts[pc + 5].longconst);
-	  get_raw_print_options (&opts);
+	  get_no_prettyformat_print_options (&opts);
 	  value_print (val, stream, &opts);
 	}
       else
@@ -558,6 +556,26 @@ print_subexp_standard (struct expression *exp, int *pos,
 	(*pos) += 2;
 	print_subexp (exp, pos, stream, PREC_PREFIX);
 	fputs_unfiltered (")", stream);
+	return;
+      }
+
+    case OP_RANGE:
+      {
+	enum range_type range_type;
+
+	range_type = (enum range_type)
+	  longest_to_int (exp->elts[pc + 1].longconst);
+	*pos += 2;
+
+	fputs_filtered ("RANGE(", stream);
+	if (range_type == HIGH_BOUND_DEFAULT
+	    || range_type == NONE_BOUND_DEFAULT)
+	  print_subexp (exp, pos, stream, PREC_ABOVE_COMMA);
+	fputs_filtered ("..", stream);
+	if (range_type == LOW_BOUND_DEFAULT
+	    || range_type == NONE_BOUND_DEFAULT)
+	  print_subexp (exp, pos, stream, PREC_ABOVE_COMMA);
+	fputs_filtered (")", stream);
 	return;
       }
 
@@ -802,8 +820,6 @@ dump_subexp_body_standard (struct expression *exp,
     case BINOP_ASSIGN_MODIFY:
     case BINOP_VAL:
     case BINOP_CONCAT:
-    case BINOP_IN:
-    case BINOP_RANGE:
     case BINOP_END:
     case STRUCTOP_MEMBER:
     case STRUCTOP_MPTR:
@@ -947,7 +963,7 @@ dump_subexp_body_standard (struct expression *exp,
       gdb_print_host_address (exp->elts[elt + 1].type, stream);
       fprintf_filtered (stream, " (__thread /* \"%s\" */ ",
                         (exp->elts[elt].objfile == NULL ? "(null)"
-			 : exp->elts[elt].objfile->name));
+			 : objfile_name (exp->elts[elt].objfile)));
       type_print (exp->elts[elt + 1].type, NULL, stream, 0);
       fprintf_filtered (stream, ")");
       elt = dump_subexp (exp, stream, elt + 3);
@@ -963,6 +979,11 @@ dump_subexp_body_standard (struct expression *exp,
     case OP_TYPEOF:
     case OP_DECLTYPE:
       fprintf_filtered (stream, "Typeof (");
+      elt = dump_subexp (exp, stream, elt);
+      fprintf_filtered (stream, ")");
+      break;
+    case OP_TYPEID:
+      fprintf_filtered (stream, "typeid (");
       elt = dump_subexp (exp, stream, elt);
       fprintf_filtered (stream, ")");
       break;
@@ -1019,12 +1040,65 @@ dump_subexp_body_standard (struct expression *exp,
 	elt = dump_subexp (exp, stream, elt);
       }
       break;
+    case OP_STRING:
+      {
+	LONGEST len = exp->elts[elt].longconst;
+	LONGEST type = exp->elts[elt + 1].longconst;
+
+	fprintf_filtered (stream, "Language-specific string type: %s",
+			  plongest (type));
+
+	/* Skip length.  */
+	elt += 1;
+
+	/* Skip string content. */
+	elt += BYTES_TO_EXP_ELEM (len);
+
+	/* Skip length and ending OP_STRING. */
+	elt += 2;
+      }
+      break;
+    case OP_RANGE:
+      {
+	enum range_type range_type;
+
+	range_type = (enum range_type)
+	  longest_to_int (exp->elts[elt].longconst);
+	elt += 2;
+
+	switch (range_type)
+	  {
+	  case BOTH_BOUND_DEFAULT:
+	    fputs_filtered ("Range '..'", stream);
+	    break;
+	  case LOW_BOUND_DEFAULT:
+	    fputs_filtered ("Range '..EXP'", stream);
+	    break;
+	  case HIGH_BOUND_DEFAULT:
+	    fputs_filtered ("Range 'EXP..'", stream);
+	    break;
+	  case NONE_BOUND_DEFAULT:
+	    fputs_filtered ("Range 'EXP..EXP'", stream);
+	    break;
+	  default:
+	    fputs_filtered ("Invalid Range!", stream);
+	    break;
+	  }
+
+	if (range_type == HIGH_BOUND_DEFAULT
+	    || range_type == NONE_BOUND_DEFAULT)
+	  elt = dump_subexp (exp, stream, elt);
+	if (range_type == LOW_BOUND_DEFAULT
+	    || range_type == NONE_BOUND_DEFAULT)
+	  elt = dump_subexp (exp, stream, elt);
+      }
+      break;
+
     default:
     case OP_NULL:
     case MULTI_SUBSCRIPT:
     case OP_F77_UNDETERMINED_ARGLIST:
     case OP_COMPLEX:
-    case OP_STRING:
     case OP_BOOL:
     case OP_M2_STRING:
     case OP_THIS:

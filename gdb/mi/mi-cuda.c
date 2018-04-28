@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -39,7 +39,7 @@ concatenate_string (char **argv, int argc)
       if (copied + size + 1 > allocated)
         {
           allocated += min (128, size + 1);
-          result = xrealloc (result, allocated);
+          result = (char *) xrealloc (result, allocated);
         }
       memcpy (result + copied, argv[i], size);
       *(result + copied + size) = ' ';
@@ -48,7 +48,7 @@ concatenate_string (char **argv, int argc)
 
   if (!result)
     {
-      result = xrealloc (result, 1);
+      result = (char *) xrealloc (result, 1);
       *result = 0;
     }
   else

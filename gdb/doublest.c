@@ -1,6 +1,6 @@
 /* Floating point routines for GDB, the GNU debugger.
 
-   Copyright (C) 1986-2013 Free Software Foundation, Inc.
+   Copyright (C) 1986-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -26,8 +26,6 @@
 #include "defs.h"
 #include "doublest.h"
 #include "floatformat.h"
-#include "gdb_assert.h"
-#include "gdb_string.h"
 #include "gdbtypes.h"
 #include <math.h>		/* ldexp */
 
@@ -185,7 +183,7 @@ convert_floatformat_to_doublest (const struct floatformat *fmt,
   /* For non-numbers, reuse libiberty's logic to find the correct
      format.  We do not lose any precision in this case by passing
      through a double.  */
-  kind = floatformat_classify (fmt, from);
+  kind = floatformat_classify (fmt, (const bfd_byte *) from);
   if (kind == float_infinite || kind == float_nan)
     {
       double dto;
@@ -305,7 +303,7 @@ put_field (unsigned char *data, enum floatformat_byteorders order,
   if (cur_bitshift > -FLOATFORMAT_CHAR_BIT)
     {
       *(data + cur_byte) &=
-	~(((1 << ((start + len) % FLOATFORMAT_CHAR_BIT)) - 1)
+	~(((1 << (len % FLOATFORMAT_CHAR_BIT)) - 1)
 	  << (-cur_bitshift));
       *(data + cur_byte) |=
 	(stuff_to_put & ((1 << FLOATFORMAT_CHAR_BIT) - 1)) << (-cur_bitshift);
@@ -337,59 +335,12 @@ put_field (unsigned char *data, enum floatformat_byteorders order,
     }
 }
 
-#ifdef HAVE_LONG_DOUBLE
-/* Return the fractional part of VALUE, and put the exponent of VALUE in *EPTR.
-   The range of the returned value is >= 0.5 and < 1.0.  This is equivalent to
-   frexp, but operates on the long double data type.  */
-
-static long double ldfrexp (long double value, int *eptr);
-
-static long double
-ldfrexp (long double value, int *eptr)
-{
-  long double tmp;
-  int exp;
-
-  /* Unfortunately, there are no portable functions for extracting the
-     exponent of a long double, so we have to do it iteratively by
-     multiplying or dividing by two until the fraction is between 0.5
-     and 1.0.  */
-
-  if (value < 0.0l)
-    value = -value;
-
-  tmp = 1.0l;
-  exp = 0;
-
-  if (value >= tmp)		/* Value >= 1.0 */
-    while (value >= tmp)
-      {
-	tmp *= 2.0l;
-	exp++;
-      }
-  else if (value != 0.0l)	/* Value < 1.0  and > 0.0 */
-    {
-      while (value < tmp)
-	{
-	  tmp /= 2.0l;
-	  exp--;
-	}
-      tmp *= 2.0l;
-      exp++;
-    }
-
-  *eptr = exp;
-  return value / tmp;
-}
-#endif /* HAVE_LONG_DOUBLE */
-
-
 /* The converse: convert the DOUBLEST *FROM to an extended float and
    store where TO points.  Neither FROM nor TO have any alignment
    restrictions.  */
 
 static void
-convert_doublest_to_floatformat (CONST struct floatformat *fmt,
+convert_doublest_to_floatformat (const struct floatformat *fmt,
 				 const DOUBLEST *from, void *to)
 {
   DOUBLEST dfrom;
@@ -467,7 +418,7 @@ convert_doublest_to_floatformat (CONST struct floatformat *fmt,
     }
 
 #ifdef HAVE_LONG_DOUBLE
-  mant = ldfrexp (dfrom, &exponent);
+  mant = frexpl (dfrom, &exponent);
 #else
   mant = frexp (dfrom, &exponent);
 #endif
@@ -735,37 +686,55 @@ floatformat_mantissa (const struct floatformat *fmt,
    If the host and target formats agree, we just copy the raw data
    into the appropriate type of variable and return, letting the host
    increase precision as necessary.  Otherwise, we call the conversion
-   routine and let it do the dirty work.  */
+   routine and let it do the dirty work.  Note that even if the target
+   and host floating-point formats match, the length of the types
+   might still be different, so the conversion routines must make sure
+   to not overrun any buffers.  For example, on x86, long double is
+   the 80-bit extended precision type on both 32-bit and 64-bit ABIs,
+   but by default it is stored as 12 bytes on 32-bit, and 16 bytes on
+   64-bit, for alignment reasons.  See comment in store_typed_floating
+   for a discussion about zeroing out remaining bytes in the target
+   buffer.  */
 
 static const struct floatformat *host_float_format = GDB_HOST_FLOAT_FORMAT;
 static const struct floatformat *host_double_format = GDB_HOST_DOUBLE_FORMAT;
 static const struct floatformat *host_long_double_format
   = GDB_HOST_LONG_DOUBLE_FORMAT;
 
+/* See doublest.h.  */
+
+size_t
+floatformat_totalsize_bytes (const struct floatformat *fmt)
+{
+  return ((fmt->totalsize + FLOATFORMAT_CHAR_BIT - 1)
+	  / FLOATFORMAT_CHAR_BIT);
+}
+
 void
 floatformat_to_doublest (const struct floatformat *fmt,
 			 const void *in, DOUBLEST *out)
 {
   gdb_assert (fmt != NULL);
+
   if (fmt == host_float_format)
     {
-      float val;
+      float val = 0;
 
-      memcpy (&val, in, sizeof (val));
+      memcpy (&val, in, floatformat_totalsize_bytes (fmt));
       *out = val;
     }
   else if (fmt == host_double_format)
     {
-      double val;
+      double val = 0;
 
-      memcpy (&val, in, sizeof (val));
+      memcpy (&val, in, floatformat_totalsize_bytes (fmt));
       *out = val;
     }
   else if (fmt == host_long_double_format)
     {
-      long double val;
+      long double val = 0;
 
-      memcpy (&val, in, sizeof (val));
+      memcpy (&val, in, floatformat_totalsize_bytes (fmt));
       *out = val;
     }
   else
@@ -777,23 +746,24 @@ floatformat_from_doublest (const struct floatformat *fmt,
 			   const DOUBLEST *in, void *out)
 {
   gdb_assert (fmt != NULL);
+
   if (fmt == host_float_format)
     {
       float val = *in;
 
-      memcpy (out, &val, sizeof (val));
+      memcpy (out, &val, floatformat_totalsize_bytes (fmt));
     }
   else if (fmt == host_double_format)
     {
       double val = *in;
 
-      memcpy (out, &val, sizeof (val));
+      memcpy (out, &val, floatformat_totalsize_bytes (fmt));
     }
   else if (fmt == host_long_double_format)
     {
       long double val = *in;
 
-      memcpy (out, &val, sizeof (val));
+      memcpy (out, &val, floatformat_totalsize_bytes (fmt));
     }
   else
     convert_doublest_to_floatformat (fmt, in, out);
@@ -851,12 +821,16 @@ const struct floatformat *
 floatformat_from_type (const struct type *type)
 {
   struct gdbarch *gdbarch = get_type_arch (type);
+  const struct floatformat *fmt;
 
   gdb_assert (TYPE_CODE (type) == TYPE_CODE_FLT);
   if (TYPE_FLOATFORMAT (type) != NULL)
-    return TYPE_FLOATFORMAT (type)[gdbarch_byte_order (gdbarch)];
+    fmt = TYPE_FLOATFORMAT (type)[gdbarch_byte_order (gdbarch)];
   else
-    return floatformat_from_length (gdbarch, TYPE_LENGTH (type));
+    fmt = floatformat_from_length (gdbarch, TYPE_LENGTH (type));
+
+  gdb_assert (TYPE_LENGTH (type) >= floatformat_totalsize_bytes (fmt));
+  return fmt;
 }
 
 /* Extract a floating-point number of type TYPE from a target-order

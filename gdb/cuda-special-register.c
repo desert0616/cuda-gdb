@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -95,7 +95,7 @@ bool
 cuda_special_register_p (regmap_t regmap)
 {
   uint32_t num_regs;
-  CUDBGRegClass class;
+  CUDBGRegClass reg_class;
 
   gdb_assert (regmap);
 
@@ -105,8 +105,8 @@ cuda_special_register_p (regmap_t regmap)
     return false;
 
   /* Only 1 full register does not require using the special register framework */
-  class = regmap_get_class (regmap, 0);
-  if (num_regs == 1 && class == REG_CLASS_REG_FULL)
+  reg_class = regmap_get_class (regmap, 0);
+  if (num_regs == 1 && reg_class == REG_CLASS_REG_FULL)
     return false;
 
   /* All the necessary chunks must be present */

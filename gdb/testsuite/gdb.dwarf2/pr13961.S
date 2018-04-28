@@ -1,4 +1,4 @@
-/* Copyright 2012-2013 Free Software Foundation, Inc.
+/* Copyright 2012-2016 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -37,12 +37,21 @@
    further hand-edited to support that.
 */
 
+#define CONCAT1(a, b) CONCAT2(a, b)
+#define CONCAT2(a, b) a ## b
+
+#ifdef SYMBOL_PREFIX
+# define SYMBOL(str)     CONCAT1(SYMBOL_PREFIX, str)
+#else
+# define SYMBOL(str)     str
+#endif
+
 	.file	"pr13961.cc"
 
 	.globl	baz
 	.data	/* Previously this used .bss, but it's not portable.  */
 	.align 4
-	.type	baz, @object
+	.type	baz, %object
 	.size	baz, 4
 baz:
 #if 0
@@ -55,16 +64,16 @@ baz:
 
 	.text
 .Ltext0:
-	.globl	main
-	.type	main, @function
-main:
+	.globl	SYMBOL(main)
+	.type	SYMBOL(main), %function
+SYMBOL(main):
 .LFB0:
 	.4byte 0
 .LFE0:
-	.size	main, .-main
+	.size	SYMBOL(main), .-SYMBOL(main)
 .Letext0:
 
-	.section	.debug_types,"",@progbits
+	.section	.debug_types,"",%progbits
 .Ldebug_types0:
 	.4byte	.Ltu_end - .Ltu_start	/* Length of Compilation Unit Info */
 .Ltu_start:
@@ -121,7 +130,7 @@ main:
 
 .Ltu_end:
 
-	.section	.debug_info,"",@progbits
+	.section	.debug_info,"",%progbits
 .Ldebug_info0:
 	.4byte	.Lcu_end - .Lcu_start	/* Length of Compilation Unit Info */
 .Lcu_start:
@@ -205,7 +214,7 @@ main:
 
 .Lcu_end:
 
-	.section	.debug_abbrev,"",@progbits
+	.section	.debug_abbrev,"",%progbits
 .Ldebug_abbrev0:
 	.uleb128 0x1	/* (abbrev code) */
 	.uleb128 0x41	/* (TAG: DW_TAG_type_unit) */
@@ -333,7 +342,7 @@ main:
 
 	.byte	0
 
-	.section	.debug_aranges,"",@progbits
+	.section	.debug_aranges,"",%progbits
 	.4byte	0x1c	/* Length of Address Ranges Info */
 	.2byte	0x2	/* DWARF Version */
 	.4byte	.Ldebug_info0	/* Offset of Compilation Unit Info */
@@ -346,10 +355,10 @@ main:
 	.4byte	0
 	.4byte	0
 
-	.section	.debug_line,"",@progbits
+	.section	.debug_line,"",%progbits
 .Ldebug_line0:
 
-	.section	.debug_str,"MS",@progbits,1
+	.section	.debug_str,"MS",%progbits,1
 .LASF0:
 	.string	"GNU C++ 4.6.3 20120306"
 .LASF2:

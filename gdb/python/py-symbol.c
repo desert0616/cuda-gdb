@@ -1,6 +1,6 @@
 /* Python interface to symbols.
 
-   Copyright (C) 2008-2013 Free Software Foundation, Inc.
+   Copyright (C) 2008-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -19,7 +19,6 @@
 
 #include "defs.h"
 #include "block.h"
-#include "exceptions.h"
 #include "frame.h"
 #include "symtab.h"
 #include "python-internal.h"
@@ -88,7 +87,10 @@ sympy_get_symtab (PyObject *self, void *closure)
 
   SYMPY_REQUIRE_VALID (self, symbol);
 
-  return symtab_to_symtab_object (SYMBOL_SYMTAB (symbol));
+  if (!SYMBOL_OBJFILE_OWNED (symbol))
+    GDB_PY_RETURN_NONE;
+
+  return symtab_to_symtab_object (symbol_symtab (symbol));
 }
 
 static PyObject *
@@ -145,42 +147,42 @@ static PyObject *
 sympy_is_constant (PyObject *self, void *closure)
 {
   struct symbol *symbol = NULL;
-  enum address_class class;
+  enum address_class theclass;
 
   SYMPY_REQUIRE_VALID (self, symbol);
 
-  class = SYMBOL_CLASS (symbol);
+  theclass = SYMBOL_CLASS (symbol);
 
-  return PyBool_FromLong (class == LOC_CONST || class == LOC_CONST_BYTES);
+  return PyBool_FromLong (theclass == LOC_CONST || theclass == LOC_CONST_BYTES);
 }
 
 static PyObject *
 sympy_is_function (PyObject *self, void *closure)
 {
   struct symbol *symbol = NULL;
-  enum address_class class;
+  enum address_class theclass;
 
   SYMPY_REQUIRE_VALID (self, symbol);
 
-  class = SYMBOL_CLASS (symbol);
+  theclass = SYMBOL_CLASS (symbol);
 
-  return PyBool_FromLong (class == LOC_BLOCK);
+  return PyBool_FromLong (theclass == LOC_BLOCK);
 }
 
 static PyObject *
 sympy_is_variable (PyObject *self, void *closure)
 {
   struct symbol *symbol = NULL;
-  enum address_class class;
+  enum address_class theclass;
 
   SYMPY_REQUIRE_VALID (self, symbol);
 
-  class = SYMBOL_CLASS (symbol);
+  theclass = SYMBOL_CLASS (symbol);
 
   return PyBool_FromLong (!SYMBOL_IS_ARGUMENT (symbol)
-			  && (class == LOC_LOCAL || class == LOC_REGISTER
-			      || class == LOC_STATIC || class == LOC_COMPUTED
-			      || class == LOC_OPTIMIZED_OUT));
+			  && (theclass == LOC_LOCAL || theclass == LOC_REGISTER
+			      || theclass == LOC_STATIC || theclass == LOC_COMPUTED
+			      || theclass == LOC_OPTIMIZED_OUT));
 }
 
 /* Implementation of gdb.Symbol.needs_frame -> Boolean.
@@ -190,16 +192,19 @@ static PyObject *
 sympy_needs_frame (PyObject *self, void *closure)
 {
   struct symbol *symbol = NULL;
-  volatile struct gdb_exception except;
   int result = 0;
 
   SYMPY_REQUIRE_VALID (self, symbol);
 
-  TRY_CATCH (except, RETURN_MASK_ALL)
+  TRY
     {
       result = symbol_read_needs_frame (symbol);
     }
-  GDB_PY_HANDLE_EXCEPTION (except);
+  CATCH (except, RETURN_MASK_ALL)
+    {
+      GDB_PY_HANDLE_EXCEPTION (except);
+    }
+  END_CATCH
 
   if (result)
     GDB_PY_RETURN_TRUE;
@@ -244,7 +249,6 @@ sympy_value (PyObject *self, PyObject *args)
   struct frame_info *frame_info = NULL;
   PyObject *frame_obj = NULL;
   struct value *value = NULL;
-  volatile struct gdb_exception except;
 
   if (!gdbpy_ArgParseTuple (args, "|O", &frame_obj))
     return NULL;
@@ -262,7 +266,7 @@ sympy_value (PyObject *self, PyObject *args)
       return NULL;
     }
 
-  TRY_CATCH (except, RETURN_MASK_ALL)
+  TRY
     {
       if (frame_obj != NULL)
 	{
@@ -270,13 +274,21 @@ sympy_value (PyObject *self, PyObject *args)
 	  if (frame_info == NULL)
 	    error (_("invalid frame"));
 	}
-      
+
       if (symbol_read_needs_frame (symbol) && frame_info == NULL)
 	error (_("symbol requires a frame to compute its value"));
 
-      value = read_var_value (symbol, frame_info);
+      /* TODO: currently, we have no way to recover the block in which SYMBOL
+	 was found, so we have no block to pass to read_var_value.  This will
+	 yield an incorrect value when symbol is not local to FRAME_INFO (this
+	 can happen with nested functions).  */
+      value = read_var_value (symbol, NULL, frame_info);
     }
-  GDB_PY_HANDLE_EXCEPTION (except);
+  CATCH (except, RETURN_MASK_ALL)
+    {
+      GDB_PY_HANDLE_EXCEPTION (except);
+    }
+  END_CATCH
 
   return value_to_value_object (value);
 }
@@ -291,15 +303,16 @@ set_symbol (symbol_object *obj, struct symbol *symbol)
 {
   obj->symbol = symbol;
   obj->prev = NULL;
-  if (SYMBOL_SYMTAB (symbol))
+  if (SYMBOL_OBJFILE_OWNED (symbol)
+      && symbol_symtab (symbol) != NULL)
     {
-      obj->next = objfile_data (SYMBOL_SYMTAB (symbol)->objfile,
-				sympy_objfile_data_key);
+      struct objfile *objfile = symbol_objfile (symbol);
 
+      obj->next = ((struct sympy_symbol_object *)
+		   objfile_data (objfile, sympy_objfile_data_key));
       if (obj->next)
 	obj->next->prev = obj;
-      set_objfile_data (SYMBOL_SYMTAB (symbol)->objfile,
-			sympy_objfile_data_key, obj);
+      set_objfile_data (objfile, sympy_objfile_data_key, obj);
     }
   else
     obj->next = NULL;
@@ -335,9 +348,11 @@ sympy_dealloc (PyObject *obj)
 
   if (sym_obj->prev)
     sym_obj->prev->next = sym_obj->next;
-  else if (sym_obj->symbol && SYMBOL_SYMTAB (sym_obj->symbol))
+  else if (sym_obj->symbol != NULL
+	   && SYMBOL_OBJFILE_OWNED (sym_obj->symbol)
+	   && symbol_symtab (sym_obj->symbol) != NULL)
     {
-      set_objfile_data (SYMBOL_SYMTAB (sym_obj->symbol)->objfile,
+      set_objfile_data (symbol_objfile (sym_obj->symbol),
 			sympy_objfile_data_key, sym_obj->next);
     }
   if (sym_obj->next)
@@ -361,7 +376,6 @@ gdbpy_lookup_symbol (PyObject *self, PyObject *args, PyObject *kw)
   struct symbol *symbol = NULL;
   PyObject *block_obj = NULL, *ret_tuple, *sym_obj, *bool_obj;
   const struct block *block = NULL;
-  volatile struct gdb_exception except;
 
   if (! gdbpy_ArgParseTupleAndKeywords (args, kw, "s|O!i", keywords, &name,
 				     &block_object_type, &block_obj, &domain))
@@ -372,21 +386,29 @@ gdbpy_lookup_symbol (PyObject *self, PyObject *args, PyObject *kw)
   else
     {
       struct frame_info *selected_frame;
-      volatile struct gdb_exception except;
 
-      TRY_CATCH (except, RETURN_MASK_ALL)
+      TRY
 	{
 	  selected_frame = get_selected_frame (_("No frame selected."));
 	  block = get_frame_block (selected_frame, NULL);
 	}
-      GDB_PY_HANDLE_EXCEPTION (except);
+      CATCH (except, RETURN_MASK_ALL)
+	{
+	  GDB_PY_HANDLE_EXCEPTION (except);
+	}
+      END_CATCH
     }
 
-  TRY_CATCH (except, RETURN_MASK_ALL)
+  TRY
     {
-      symbol = lookup_symbol (name, block, domain, &is_a_field_of_this);
+      symbol = lookup_symbol (name, block, (domain_enum) domain,
+			      &is_a_field_of_this).symbol;
     }
-  GDB_PY_HANDLE_EXCEPTION (except);
+  CATCH (except, RETURN_MASK_ALL)
+    {
+      GDB_PY_HANDLE_EXCEPTION (except);
+    }
+  END_CATCH
 
   ret_tuple = PyTuple_New (2);
   if (!ret_tuple)
@@ -426,17 +448,20 @@ gdbpy_lookup_global_symbol (PyObject *self, PyObject *args, PyObject *kw)
   static char *keywords[] = { "name", "domain", NULL };
   struct symbol *symbol = NULL;
   PyObject *sym_obj;
-  volatile struct gdb_exception except;
 
   if (! gdbpy_ArgParseTupleAndKeywords (args, kw, "s|i", keywords, &name,
 				     &domain))
     return NULL;
 
-  TRY_CATCH (except, RETURN_MASK_ALL)
+  TRY
     {
-      symbol = lookup_symbol_global (name, NULL, domain);
+      symbol = lookup_global_symbol (name, NULL, (domain_enum) domain).symbol;
     }
-  GDB_PY_HANDLE_EXCEPTION (except);
+  CATCH (except, RETURN_MASK_ALL)
+    {
+      GDB_PY_HANDLE_EXCEPTION (except);
+    }
+  END_CATCH
 
   if (symbol)
     {
@@ -461,7 +486,7 @@ gdbpy_lookup_global_symbol (PyObject *self, PyObject *args, PyObject *kw)
 static void
 del_objfile_symbols (struct objfile *objfile, void *datum)
 {
-  symbol_object *obj = datum;
+  symbol_object *obj = (symbol_object *) datum;
   while (obj)
     {
       symbol_object *next = obj->next;
@@ -474,11 +499,11 @@ del_objfile_symbols (struct objfile *objfile, void *datum)
     }
 }
 
-void
+int
 gdbpy_initialize_symbols (void)
 {
   if (PyType_Ready (&symbol_object_type) < 0)
-    return;
+    return -1;
 
   /* Register an objfile "free" callback so we can properly
      invalidate symbol when an object file that is about to be
@@ -486,37 +511,53 @@ gdbpy_initialize_symbols (void)
   sympy_objfile_data_key
     = register_objfile_data_with_cleanup (NULL, del_objfile_symbols);
 
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_UNDEF", LOC_UNDEF);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_CONST", LOC_CONST);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_STATIC", LOC_STATIC);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_REGISTER", LOC_REGISTER);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_ARG", LOC_ARG);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_REF_ARG", LOC_REF_ARG);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_LOCAL", LOC_LOCAL);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_TYPEDEF", LOC_TYPEDEF);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_LABEL", LOC_LABEL);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_BLOCK", LOC_BLOCK);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_CONST_BYTES",
-			   LOC_CONST_BYTES);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_UNRESOLVED",
-			   LOC_UNRESOLVED);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_OPTIMIZED_OUT",
-			   LOC_OPTIMIZED_OUT);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_COMPUTED", LOC_COMPUTED);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_REGPARM_ADDR",
-			   LOC_REGPARM_ADDR);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_UNDEF_DOMAIN", UNDEF_DOMAIN);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_VAR_DOMAIN", VAR_DOMAIN);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_STRUCT_DOMAIN", STRUCT_DOMAIN);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_LABEL_DOMAIN", LABEL_DOMAIN);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_VARIABLES_DOMAIN",
-			   VARIABLES_DOMAIN);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_FUNCTIONS_DOMAIN",
-			   FUNCTIONS_DOMAIN);
-  PyModule_AddIntConstant (gdb_module, "SYMBOL_TYPES_DOMAIN", TYPES_DOMAIN);
+  if (PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_UNDEF", LOC_UNDEF) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_CONST",
+				  LOC_CONST) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_STATIC",
+				  LOC_STATIC) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_REGISTER",
+				  LOC_REGISTER) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_ARG",
+				  LOC_ARG) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_REF_ARG",
+				  LOC_REF_ARG) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_LOCAL",
+				  LOC_LOCAL) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_TYPEDEF",
+				  LOC_TYPEDEF) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_LABEL",
+				  LOC_LABEL) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_BLOCK",
+				  LOC_BLOCK) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_CONST_BYTES",
+				  LOC_CONST_BYTES) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_UNRESOLVED",
+				  LOC_UNRESOLVED) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_OPTIMIZED_OUT",
+				  LOC_OPTIMIZED_OUT) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_COMPUTED",
+				  LOC_COMPUTED) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LOC_REGPARM_ADDR",
+				  LOC_REGPARM_ADDR) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_UNDEF_DOMAIN",
+				  UNDEF_DOMAIN) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_VAR_DOMAIN",
+				  VAR_DOMAIN) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_STRUCT_DOMAIN",
+				  STRUCT_DOMAIN) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_LABEL_DOMAIN",
+				  LABEL_DOMAIN) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_VARIABLES_DOMAIN",
+				  VARIABLES_DOMAIN) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_FUNCTIONS_DOMAIN",
+				  FUNCTIONS_DOMAIN) < 0
+      || PyModule_AddIntConstant (gdb_module, "SYMBOL_TYPES_DOMAIN",
+				  TYPES_DOMAIN) < 0)
+    return -1;
 
-  Py_INCREF (&symbol_object_type);
-  PyModule_AddObject (gdb_module, "Symbol", (PyObject *) &symbol_object_type);
+  return gdb_pymodule_addobject (gdb_module, "Symbol",
+				 (PyObject *) &symbol_object_type);
 }
 
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2015 NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2014-2017 NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -194,6 +194,9 @@ int cuCoreReadSymbolData(CudaCore *cc, Elf *e, Elf_Scn *scn,
 static _INLINE int getBit(uint64_t val, unsigned bitNo) {
 	return ((val >> bitNo) & 1);
 }
+
+#define CUDA_COREDUMP_SHARED_WINDOW_SIZE (16 * 1024 * 1024) // bytes
+#define CUDA_COREDUMP_LOCAL_WINDOW_SIZE (16 * 1024 * 1024) // bytes
 
 
 /* Microsoft Compiler specific defenitions of macros with variadic arguments */

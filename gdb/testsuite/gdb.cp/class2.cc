@@ -1,6 +1,6 @@
 /* This testcase is part of GDB, the GNU debugger.
 
-   Copyright 2003-2013 Free Software Foundation, Inc.
+   Copyright 2003-2016 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -13,8 +13,7 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.
-   */
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 struct A
 {
@@ -47,6 +46,23 @@ struct C : public B
   A *c2;
 };
 
+/* Use a typedef for the baseclass, with a virtual method, to exercise
+   gnu-v3-abi.c:gnuv3_dynamic_class recursion.  It's important that the
+   class itself have no name to make sure the typedef makes it through
+   to the recursive call.  */
+typedef class {
+ public:
+  /* This class has no members as gcc 4.9.x doesn't emit the debug info
+     for them.  */
+  virtual int get () { return 42; }
+} Dbase;
+
+class D : public Dbase
+{
+ public:
+  int d1;
+};
+
 // Stop the compiler from optimizing away data.
 void refer (A *)
 {
@@ -66,11 +82,14 @@ int main (void)
   A alpha, *aap, *abp, *acp;
   B beta, *bbp;
   C gamma;
+  D delta;
   empty e;
+  A &aref (alpha);
 
   alpha.a1 = 100;
   beta.a1 = 200; beta.b1 = 201; beta.b2 = 202;
   gamma.c1 = 0; gamma.c2 = (A *) ~0UL;
+  delta.d1 = 400;
 
   aap = &alpha; refer (aap);
   abp = &beta;  refer (abp);

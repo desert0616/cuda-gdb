@@ -1,6 +1,6 @@
 /* Print values for GNU debugger GDB.
 
-   Copyright (C) 1986-2013 Free Software Foundation, Inc.
+   Copyright (C) 1986-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -18,7 +18,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -36,7 +36,6 @@
  */
 
 #include "defs.h"
-#include "gdb_string.h"
 #include "frame.h"
 #include "symtab.h"
 #include "gdbtypes.h"
@@ -55,12 +54,9 @@
 #include "objfiles.h"		/* ditto */
 #include "completer.h"		/* for completion functions */
 #include "ui-out.h"
-#include "gdb_assert.h"
 #include "block.h"
 #include "disasm.h"
 #include "dfp.h"
-#include "valprint.h"
-#include "exceptions.h"
 #include "observer.h"
 #include "solist.h"
 #include "parser-defs.h"
@@ -74,26 +70,12 @@
 #include "tui/tui.h"		/* For tui_active et al.   */
 #endif
 
-struct format_data
-  {
-    int count;
-    char format;
-    char size;
-
-    /* CUDA - memory segments */
-    enum type_instance_flag_value segment_type;
-
-    /* True if the value should be printed raw -- that is, bypassing
-       python-based formatters.  */
-    unsigned char raw;
-  };
-
 /* Last specified output format.  */
 
 static char last_format = 0;
 
 /* Last CUDA memory segment used. */
-static enum type_instance_flag_value last_segment_type = 0;
+static enum type_instance_flag_value last_segment_type = (enum type_instance_flag_value) 0;
 
 /* Last specified examination size.  'b', 'h', 'w' or `q'.  */
 
@@ -219,11 +201,11 @@ static void do_one_display (struct display *);
    past the specification and past all whitespace following it.  */
 
 static struct format_data
-decode_format (char **string_ptr, int oformat, int osize,
-               enum type_instance_flag_value st)
+decode_format (const char **string_ptr, int oformat, int osize,
+	       enum type_instance_flag_value st)
 {
   struct format_data val;
-  char *p = *string_ptr;
+  const char *p = *string_ptr;
 
   val.format = '?';
   val.size = '?';
@@ -231,8 +213,13 @@ decode_format (char **string_ptr, int oformat, int osize,
   val.raw = 0;
   val.segment_type = st;
 
+  if (*p == '-')
+    {
+      val.count = -1;
+      p++;
+    }
   if (*p >= '0' && *p <= '9')
-    val.count = atoi (p);
+    val.count *= atoi (p);
   while (*p >= '0' && *p <= '9')
     p++;
 
@@ -376,7 +363,9 @@ float_type_from_length (struct type *type)
   struct gdbarch *gdbarch = get_type_arch (type);
   const struct builtin_type *builtin = builtin_type (gdbarch);
 
-  if (TYPE_LENGTH (type) == TYPE_LENGTH (builtin->builtin_float))
+  if (TYPE_LENGTH (type) == TYPE_LENGTH (builtin->builtin_half))
+    type = builtin->builtin_half;
+  else if (TYPE_LENGTH (type) == TYPE_LENGTH (builtin->builtin_float))
     type = builtin->builtin_float;
   else if (TYPE_LENGTH (type) == TYPE_LENGTH (builtin->builtin_double))
     type = builtin->builtin_double;
@@ -391,7 +380,7 @@ float_type_from_length (struct type *type)
    supported at this level.  */
 
 void
-print_scalar_formatted (const void *valaddr, struct type *type,
+print_scalar_formatted (const gdb_byte *valaddr, struct type *type,
 			const struct value_print_options *options,
 			int size, struct ui_file *stream)
 {
@@ -403,9 +392,9 @@ print_scalar_formatted (const void *valaddr, struct type *type,
   /* String printing should go through val_print_scalar_formatted.  */
   gdb_assert (options->format != 's');
 
-  if (len > sizeof(LONGEST) &&
-      (TYPE_CODE (type) == TYPE_CODE_INT
-       || TYPE_CODE (type) == TYPE_CODE_ENUM))
+  if (len > sizeof(LONGEST)
+      && (TYPE_CODE (type) == TYPE_CODE_INT
+	  || TYPE_CODE (type) == TYPE_CODE_ENUM))
     {
       switch (options->format)
 	{
@@ -563,6 +552,10 @@ print_scalar_formatted (const void *valaddr, struct type *type,
       }
       break;
 
+    case 'z':
+      print_hex_chars (stream, valaddr, len, byte_order);
+      break;
+
     default:
       error (_("Undefined output format \"%c\"."), options->format);
     }
@@ -658,7 +651,7 @@ build_address_symbolic (struct gdbarch *gdbarch,
 			int *line,       /* OUT */
 			int *unmapped)   /* OUT */
 {
-  struct minimal_symbol *msymbol;
+  struct bound_minimal_symbol msymbol;
   struct symbol *symbol;
   CORE_ADDR name_location = 0;
   struct obj_section *section = NULL;
@@ -707,29 +700,40 @@ build_address_symbolic (struct gdbarch *gdbarch,
 	name_temp = SYMBOL_LINKAGE_NAME (symbol);
     }
 
-  if (msymbol != NULL
-      && MSYMBOL_HAS_SIZE (msymbol)
-      && MSYMBOL_SIZE (msymbol) == 0
-      && MSYMBOL_TYPE (msymbol) != mst_text
-      && MSYMBOL_TYPE (msymbol) != mst_text_gnu_ifunc
-      && MSYMBOL_TYPE (msymbol) != mst_file_text)
-    msymbol = NULL;
+  if (msymbol.minsym != NULL
+      && MSYMBOL_HAS_SIZE (msymbol.minsym)
+      && MSYMBOL_SIZE (msymbol.minsym) == 0
+      && MSYMBOL_TYPE (msymbol.minsym) != mst_text
+      && MSYMBOL_TYPE (msymbol.minsym) != mst_text_gnu_ifunc
+      && MSYMBOL_TYPE (msymbol.minsym) != mst_file_text)
+    msymbol.minsym = NULL;
 
-  if (msymbol != NULL)
+  if (msymbol.minsym != NULL)
     {
-      if (SYMBOL_VALUE_ADDRESS (msymbol) > name_location || symbol == NULL)
+      if (BMSYMBOL_VALUE_ADDRESS (msymbol) > name_location || symbol == NULL)
 	{
+	  /* If this is a function (i.e. a code address), strip out any
+	     non-address bits.  For instance, display a pointer to the
+	     first instruction of a Thumb function as <function>; the
+	     second instruction will be <function+2>, even though the
+	     pointer is <function+3>.  This matches the ISA behavior.  */
+	  if (MSYMBOL_TYPE (msymbol.minsym) == mst_text
+	      || MSYMBOL_TYPE (msymbol.minsym) == mst_text_gnu_ifunc
+	      || MSYMBOL_TYPE (msymbol.minsym) == mst_file_text
+	      || MSYMBOL_TYPE (msymbol.minsym) == mst_solib_trampoline)
+	    addr = gdbarch_addr_bits_remove (gdbarch, addr);
+
 	  /* The msymbol is closer to the address than the symbol;
 	     use the msymbol instead.  */
 	  symbol = 0;
-	  name_location = SYMBOL_VALUE_ADDRESS (msymbol);
+	  name_location = BMSYMBOL_VALUE_ADDRESS (msymbol);
 	  if (do_demangle || asm_demangle)
-	    name_temp = SYMBOL_PRINT_NAME (msymbol);
+	    name_temp = MSYMBOL_PRINT_NAME (msymbol.minsym);
 	  else
-	    name_temp = SYMBOL_LINKAGE_NAME (msymbol);
+	    name_temp = MSYMBOL_LINKAGE_NAME (msymbol.minsym);
 	}
     }
-  if (symbol == NULL && msymbol == NULL)
+  if (symbol == NULL && msymbol.minsym == NULL)
     return 1;
 
   /* If the nearest symbol is too far away, don't print anything symbolic.  */
@@ -815,6 +819,221 @@ print_address_demangle (const struct value_print_options *opts,
 }
 
 
+/* Find the address of the instruction that is INST_COUNT instructions before
+   the instruction at ADDR.
+   Since some architectures have variable-length instructions, we can't just
+   simply subtract INST_COUNT * INSN_LEN from ADDR.  Instead, we use line
+   number information to locate the nearest known instruction boundary,
+   and disassemble forward from there.  If we go out of the symbol range
+   during disassembling, we return the lowest address we've got so far and
+   set the number of instructions read to INST_READ.  */
+
+static CORE_ADDR
+find_instruction_backward (struct gdbarch *gdbarch, CORE_ADDR addr,
+                           int inst_count, int *inst_read)
+{
+  /* The vector PCS is used to store instruction addresses within
+     a pc range.  */
+  CORE_ADDR loop_start, loop_end, p;
+  VEC (CORE_ADDR) *pcs = NULL;
+  struct symtab_and_line sal;
+  struct cleanup *cleanup = make_cleanup (VEC_cleanup (CORE_ADDR), &pcs);
+
+  *inst_read = 0;
+  loop_start = loop_end = addr;
+
+  /* In each iteration of the outer loop, we get a pc range that ends before
+     LOOP_START, then we count and store every instruction address of the range
+     iterated in the loop.
+     If the number of instructions counted reaches INST_COUNT, return the
+     stored address that is located INST_COUNT instructions back from ADDR.
+     If INST_COUNT is not reached, we subtract the number of counted
+     instructions from INST_COUNT, and go to the next iteration.  */
+  do
+    {
+      VEC_truncate (CORE_ADDR, pcs, 0);
+      sal = find_pc_sect_line (loop_start, NULL, 1);
+      if (sal.line <= 0)
+        {
+          /* We reach here when line info is not available.  In this case,
+             we print a message and just exit the loop.  The return value
+             is calculated after the loop.  */
+          printf_filtered (_("No line number information available "
+                             "for address "));
+          wrap_here ("  ");
+          print_address (gdbarch, loop_start - 1, gdb_stdout);
+          printf_filtered ("\n");
+          break;
+        }
+
+      loop_end = loop_start;
+      loop_start = sal.pc;
+
+      /* This loop pushes instruction addresses in the range from
+         LOOP_START to LOOP_END.  */
+      for (p = loop_start; p < loop_end;)
+        {
+          VEC_safe_push (CORE_ADDR, pcs, p);
+          p += gdb_insn_length (gdbarch, p);
+        }
+
+      inst_count -= VEC_length (CORE_ADDR, pcs);
+      *inst_read += VEC_length (CORE_ADDR, pcs);
+    }
+  while (inst_count > 0);
+
+  /* After the loop, the vector PCS has instruction addresses of the last
+     source line we processed, and INST_COUNT has a negative value.
+     We return the address at the index of -INST_COUNT in the vector for
+     the reason below.
+     Let's assume the following instruction addresses and run 'x/-4i 0x400e'.
+       Line X of File
+          0x4000
+          0x4001
+          0x4005
+       Line Y of File
+          0x4009
+          0x400c
+       => 0x400e
+          0x4011
+     find_instruction_backward is called with INST_COUNT = 4 and expected to
+     return 0x4001.  When we reach here, INST_COUNT is set to -1 because
+     it was subtracted by 2 (from Line Y) and 3 (from Line X).  The value
+     4001 is located at the index 1 of the last iterated line (= Line X),
+     which is simply calculated by -INST_COUNT.
+     The case when the length of PCS is 0 means that we reached an area for
+     which line info is not available.  In such case, we return LOOP_START,
+     which was the lowest instruction address that had line info.  */
+  p = VEC_length (CORE_ADDR, pcs) > 0
+    ? VEC_index (CORE_ADDR, pcs, -inst_count)
+    : loop_start;
+
+  /* INST_READ includes all instruction addresses in a pc range.  Need to
+     exclude the beginning part up to the address we're returning.  That
+     is, exclude {0x4000} in the example above.  */
+  if (inst_count < 0)
+    *inst_read += inst_count;
+
+  do_cleanups (cleanup);
+  return p;
+}
+
+/* Backward read LEN bytes of target memory from address MEMADDR + LEN,
+   placing the results in GDB's memory from MYADDR + LEN.  Returns
+   a count of the bytes actually read.  */
+
+static int
+read_memory_backward (struct gdbarch *gdbarch,
+                      CORE_ADDR memaddr, gdb_byte *myaddr, int len)
+{
+  int errcode;
+  int nread;      /* Number of bytes actually read.  */
+
+  /* First try a complete read.  */
+  errcode = target_read_memory (memaddr, myaddr, len);
+  if (errcode == 0)
+    {
+      /* Got it all.  */
+      nread = len;
+    }
+  else
+    {
+      /* Loop, reading one byte at a time until we get as much as we can.  */
+      memaddr += len;
+      myaddr += len;
+      for (nread = 0; nread < len; ++nread)
+        {
+          errcode = target_read_memory (--memaddr, --myaddr, 1);
+          if (errcode != 0)
+            {
+              /* The read was unsuccessful, so exit the loop.  */
+              printf_filtered (_("Cannot access memory at address %s\n"),
+                               paddress (gdbarch, memaddr));
+              break;
+            }
+        }
+    }
+  return nread;
+}
+
+/* Returns true if X (which is LEN bytes wide) is the number zero.  */
+
+static int
+integer_is_zero (const gdb_byte *x, int len)
+{
+  int i = 0;
+
+  while (i < len && x[i] == 0)
+    ++i;
+  return (i == len);
+}
+
+/* Find the start address of a string in which ADDR is included.
+   Basically we search for '\0' and return the next address,
+   but if OPTIONS->PRINT_MAX is smaller than the length of a string,
+   we stop searching and return the address to print characters as many as
+   PRINT_MAX from the string.  */
+
+static CORE_ADDR
+find_string_backward (struct gdbarch *gdbarch,
+                      CORE_ADDR addr, int count, int char_size,
+                      const struct value_print_options *options,
+                      int *strings_counted)
+{
+  const int chunk_size = 0x20;
+  gdb_byte *buffer = NULL;
+  struct cleanup *cleanup = NULL;
+  int read_error = 0;
+  int chars_read = 0;
+  int chars_to_read = chunk_size;
+  int chars_counted = 0;
+  int count_original = count;
+  CORE_ADDR string_start_addr = addr;
+
+  gdb_assert (char_size == 1 || char_size == 2 || char_size == 4);
+  buffer = (gdb_byte *) xmalloc (chars_to_read * char_size);
+  cleanup = make_cleanup (xfree, buffer);
+  while (count > 0 && read_error == 0)
+    {
+      int i;
+
+      addr -= chars_to_read * char_size;
+      chars_read = read_memory_backward (gdbarch, addr, buffer,
+                                         chars_to_read * char_size);
+      chars_read /= char_size;
+      read_error = (chars_read == chars_to_read) ? 0 : 1;
+      /* Searching for '\0' from the end of buffer in backward direction.  */
+      for (i = 0; i < chars_read && count > 0 ; ++i, ++chars_counted)
+        {
+          int offset = (chars_to_read - i - 1) * char_size;
+
+          if (integer_is_zero (buffer + offset, char_size)
+              || chars_counted == options->print_max)
+            {
+              /* Found '\0' or reached print_max.  As OFFSET is the offset to
+                 '\0', we add CHAR_SIZE to return the start address of
+                 a string.  */
+              --count;
+              string_start_addr = addr + offset + char_size;
+              chars_counted = 0;
+            }
+        }
+    }
+
+  /* Update STRINGS_COUNTED with the actual number of loaded strings.  */
+  *strings_counted = count_original - count;
+
+  if (read_error != 0)
+    {
+      /* In error case, STRING_START_ADDR is pointing to the string that
+         was last successfully loaded.  Rewind the partially loaded string.  */
+      string_start_addr -= chars_counted * char_size;
+    }
+
+  do_cleanups (cleanup);
+  return string_start_addr;
+}
+
 /* Examine data at address ADDR in format FMT.
    Fetch it from memory and print on gdb_stdout.  */
 
@@ -828,6 +1047,8 @@ do_examine (struct format_data fmt, struct gdbarch *gdbarch, CORE_ADDR addr)
   int i;
   int maxelts;
   struct value_print_options opts;
+  int need_to_update_next_address = 0;
+  CORE_ADDR addr_rewound = 0;
 
   format = fmt.format;
   size = fmt.size;
@@ -902,6 +1123,38 @@ do_examine (struct format_data fmt, struct gdbarch *gdbarch, CORE_ADDR addr)
 
   get_formatted_print_options (&opts, format);
 
+  if (count < 0)
+    {
+      /* This is the negative repeat count case.
+         We rewind the address based on the given repeat count and format,
+         then examine memory from there in forward direction.  */
+
+      count = -count;
+      if (format == 'i')
+        {
+          next_address = find_instruction_backward (gdbarch, addr, count,
+                                                    &count);
+        }
+      else if (format == 's')
+        {
+          next_address = find_string_backward (gdbarch, addr, count,
+                                               TYPE_LENGTH (val_type),
+                                               &opts, &count);
+        }
+      else
+        {
+          next_address = addr - count * TYPE_LENGTH (val_type);
+        }
+
+      /* The following call to print_formatted updates next_address in every
+         iteration.  In backward case, we store the start address here
+         and update next_address with it before exiting the function.  */
+      addr_rewound = (format == 's'
+                      ? next_address - TYPE_LENGTH (val_type)
+                      : next_address);
+      need_to_update_next_address = 1;
+    }
+
   /* Print as many objects as specified in COUNT, at most maxelts per line,
      with the address of the next one at the start of each line.  */
 
@@ -947,10 +1200,13 @@ do_examine (struct format_data fmt, struct gdbarch *gdbarch, CORE_ADDR addr)
       printf_filtered ("\n");
       gdb_flush (gdb_stdout);
     }
+
+  if (need_to_update_next_address)
+    next_address = addr_rewound;
 }
 
 static void
-validate_format (struct format_data fmt, char *cmdname)
+validate_format (struct format_data fmt, const char *cmdname)
 {
   if (fmt.size != 0)
     error (_("Size letters are meaningless in \"%s\" command."), cmdname);
@@ -962,41 +1218,75 @@ validate_format (struct format_data fmt, char *cmdname)
 	   fmt.format, cmdname);
 }
 
+/* Parse print command format string into *FMTP and update *EXPP.
+   CMDNAME should name the current command.  */
+
+void
+print_command_parse_format (const char **expp, const char *cmdname,
+			    struct format_data *fmtp)
+{
+  const char *exp = *expp;
+
+  if (exp && *exp == '/')
+    {
+      exp++;
+      *fmtp = decode_format (&exp, last_format, 0, (enum type_instance_flag_value) 0);
+      validate_format (*fmtp, cmdname);
+      last_format = fmtp->format;
+    }
+  else
+    {
+      fmtp->count = 1;
+      fmtp->format = 0;
+      fmtp->size = 0;
+      fmtp->raw = 0;
+    }
+
+  *expp = exp;
+}
+
+/* Print VAL to console according to *FMTP, including recording it to
+   the history.  */
+
+void
+print_value (struct value *val, const struct format_data *fmtp)
+{
+  struct value_print_options opts;
+  int histindex = record_latest_value (val);
+
+  annotate_value_history_begin (histindex, value_type (val));
+
+  printf_filtered ("$%d = ", histindex);
+
+  annotate_value_history_value ();
+
+  get_formatted_print_options (&opts, fmtp->format);
+  opts.raw = fmtp->raw;
+
+  print_formatted (val, fmtp->size, &opts, gdb_stdout);
+  printf_filtered ("\n");
+
+  annotate_value_history_end ();
+}
+
 /* Evaluate string EXP as an expression in the current language and
    print the resulting value.  EXP may contain a format specifier as the
    first argument ("/x myvar" for example, to print myvar in hex).  */
 
 static void
-print_command_1 (char *exp, int voidprint)
+print_command_1 (const char *exp, int voidprint)
 {
   struct expression *expr;
-  struct cleanup *old_chain = 0;
-  char format = 0;
+  struct cleanup *old_chain = make_cleanup (null_cleanup, NULL);
   struct value *val;
   struct format_data fmt;
-  int cleanup = 0;
 
-  if (exp && *exp == '/')
-    {
-      exp++;
-      fmt = decode_format (&exp, last_format, 0, 0);
-      validate_format (fmt, "print");
-      last_format = format = fmt.format;
-    }
-  else
-    {
-      fmt.count = 1;
-      fmt.format = 0;
-      fmt.size = 0;
-      fmt.raw = 0;
-      fmt.segment_type = 0;
-    }
+  print_command_parse_format (&exp, "print", &fmt);
 
   if (exp && *exp)
     {
       expr = parse_expression (exp);
-      old_chain = make_cleanup (free_current_contents, &expr);
-      cleanup = 1;
+      make_cleanup (free_current_contents, &expr);
       val = evaluate_expression (expr);
     }
   else
@@ -1004,35 +1294,9 @@ print_command_1 (char *exp, int voidprint)
 
   if (voidprint || (val && value_type (val) &&
 		    TYPE_CODE (value_type (val)) != TYPE_CODE_VOID))
-    {
-      struct value_print_options opts;
-      int histindex = record_latest_value (val);
+    print_value (val, &fmt);
 
-      if (histindex >= 0)
-	annotate_value_history_begin (histindex, value_type (val));
-      else
-	annotate_value_begin (value_type (val));
-
-      if (histindex >= 0)
-	printf_filtered ("$%d = ", histindex);
-
-      if (histindex >= 0)
-	annotate_value_history_value ();
-
-      get_formatted_print_options (&opts, format);
-      opts.raw = fmt.raw;
-
-      print_formatted (val, fmt.size, &opts, gdb_stdout);
-      printf_filtered ("\n");
-
-      if (histindex >= 0)
-	annotate_value_history_end ();
-      else
-	annotate_value_end ();
-    }
-
-  if (cleanup)
-    do_cleanups (old_chain);
+  do_cleanups (old_chain);
 }
 
 static void
@@ -1048,8 +1312,18 @@ call_command (char *exp, int from_tty)
   print_command_1 (exp, 0);
 }
 
-void
+/* Implementation of the "output" command.  */
+
+static void
 output_command (char *exp, int from_tty)
+{
+  output_command_const (exp, from_tty);
+}
+
+/* Like output_command, but takes a const string as argument.  */
+
+void
+output_command_const (const char *exp, int from_tty)
 {
   struct expression *expr;
   struct cleanup *old_chain;
@@ -1064,7 +1338,7 @@ output_command (char *exp, int from_tty)
   if (exp && *exp == '/')
     {
       exp++;
-      fmt = decode_format (&exp, 0, 0, 0);
+      fmt = decode_format (&exp, 0, 0, (enum type_instance_flag_value) 0);
       validate_format (fmt, "output");
       format = fmt.format;
     }
@@ -1140,17 +1414,18 @@ sym_info (char *arg, int from_tty)
 
     if (obj_section_addr (osect) <= sect_addr
 	&& sect_addr < obj_section_endaddr (osect)
-	&& (msymbol = lookup_minimal_symbol_by_pc_section (sect_addr, osect)))
+	&& (msymbol
+	    = lookup_minimal_symbol_by_pc_section (sect_addr, osect).minsym))
       {
 	const char *obj_name, *mapped, *sec_name, *msym_name;
 	char *loc_string;
 	struct cleanup *old_chain;
 
 	matches = 1;
-	offset = sect_addr - SYMBOL_VALUE_ADDRESS (msymbol);
+	offset = sect_addr - MSYMBOL_VALUE_ADDRESS (objfile, msymbol);
 	mapped = section_is_mapped (osect) ? _("mapped") : _("unmapped");
 	sec_name = osect->the_bfd_section->name;
-	msym_name = SYMBOL_PRINT_NAME (msymbol);
+	msym_name = MSYMBOL_PRINT_NAME (msymbol);
 
 	/* Don't print the offset if it is zero.
 	   We assume there's no need to handle i18n of "sym + offset".  */
@@ -1163,8 +1438,8 @@ sym_info (char *arg, int from_tty)
 	   a pagination request inside printf_filtered.  */
 	old_chain = make_cleanup (xfree, loc_string);
 
-	gdb_assert (osect->objfile && osect->objfile->name);
-	obj_name = osect->objfile->name;
+	gdb_assert (osect->objfile && objfile_name (osect->objfile));
+	obj_name = objfile_name (osect->objfile);
 
 	if (MULTI_OBJFILE_P ())
 	  if (pc_in_unmapped_range (addr, osect))
@@ -1213,7 +1488,7 @@ address_info (char *exp, int from_tty)
   struct gdbarch *gdbarch;
   int regno;
   struct symbol *sym;
-  struct minimal_symbol *msymbol;
+  struct bound_minimal_symbol msymbol;
   long val;
   struct obj_section *section;
   CORE_ADDR load_addr, context_pc = 0;
@@ -1223,7 +1498,7 @@ address_info (char *exp, int from_tty)
     error (_("Argument required."));
 
   sym = lookup_symbol (exp, get_selected_block (&context_pc), VAR_DOMAIN,
-		       &is_a_field_of_this);
+		       &is_a_field_of_this).symbol;
   if (sym == NULL)
     {
       if (is_a_field_of_this.type != NULL)
@@ -1239,12 +1514,14 @@ address_info (char *exp, int from_tty)
 	  return;
 	}
 
-      msymbol = lookup_minimal_symbol (exp, NULL, NULL);
+      msymbol = lookup_bound_minimal_symbol (exp);
 
-      if (msymbol != NULL)
+      if (msymbol.minsym != NULL)
 	{
-	  gdbarch = get_objfile_arch (msymbol_objfile (msymbol));
-	  load_addr = SYMBOL_VALUE_ADDRESS (msymbol);
+	  struct objfile *objfile = msymbol.objfile;
+
+	  gdbarch = get_objfile_arch (objfile);
+	  load_addr = BMSYMBOL_VALUE_ADDRESS (msymbol);
 
 	  printf_filtered ("Symbol \"");
 	  fprintf_symbol_filtered (gdb_stdout, exp,
@@ -1252,7 +1529,7 @@ address_info (char *exp, int from_tty)
 	  printf_filtered ("\" is at ");
 	  fputs_filtered (paddress (gdbarch, load_addr), gdb_stdout);
 	  printf_filtered (" in a file compiled without debugging");
-	  section = SYMBOL_OBJ_SECTION (msymbol);
+	  section = MSYMBOL_OBJ_SECTION (objfile, msymbol.minsym);
 	  if (section_is_overlay (section))
 	    {
 	      load_addr = overlay_unmapped_address (load_addr, section);
@@ -1273,8 +1550,19 @@ address_info (char *exp, int from_tty)
 			   current_language->la_language, DMGL_ANSI);
   printf_filtered ("\" is ");
   val = SYMBOL_VALUE (sym);
-  section = SYMBOL_OBJ_SECTION (sym);
-  gdbarch = get_objfile_arch (SYMBOL_SYMTAB (sym)->objfile);
+  if (SYMBOL_OBJFILE_OWNED (sym))
+    section = SYMBOL_OBJ_SECTION (symbol_objfile (sym), sym);
+  else
+    section = NULL;
+  gdbarch = symbol_arch (sym);
+
+  if (SYMBOL_COMPUTED_OPS (sym) != NULL)
+    {
+      SYMBOL_COMPUTED_OPS (sym)->describe_location (sym, context_pc,
+						    gdb_stdout);
+      printf_filtered (".\n");
+      return;
+    }
 
   switch (SYMBOL_CLASS (sym))
     {
@@ -1298,14 +1586,7 @@ address_info (char *exp, int from_tty)
       break;
 
     case LOC_COMPUTED:
-      /* FIXME: cagney/2004-01-26: It should be possible to
-	 unconditionally call the SYMBOL_COMPUTED_OPS method when available.
-	 Unfortunately DWARF 2 stores the frame-base (instead of the
-	 function) location in a function's symbol.  Oops!  For the
-	 moment enable this when/where applicable.  */
-      SYMBOL_COMPUTED_OPS (sym)->describe_location (sym, context_pc,
-						    gdb_stdout);
-      break;
+      gdb_assert_not_reached (_("LOC_COMPUTED variable missing a method"));
 
     case LOC_REGISTER:
       /* GDBARCH is the architecture associated with the objfile the symbol
@@ -1377,24 +1658,27 @@ address_info (char *exp, int from_tty)
 
     case LOC_UNRESOLVED:
       {
-	struct minimal_symbol *msym;
+	struct bound_minimal_symbol msym;
 
-	msym = lookup_minimal_symbol (SYMBOL_LINKAGE_NAME (sym), NULL, NULL);
-	if (msym == NULL)
+	msym = lookup_minimal_symbol_and_objfile (SYMBOL_LINKAGE_NAME (sym));
+	if (msym.minsym == NULL)
 	  printf_filtered ("unresolved");
 	else
 	  {
-	    section = SYMBOL_OBJ_SECTION (msym);
-	    load_addr = SYMBOL_VALUE_ADDRESS (msym);
+	    section = MSYMBOL_OBJ_SECTION (msym.objfile, msym.minsym);
 
 	    if (section
 		&& (section->the_bfd_section->flags & SEC_THREAD_LOCAL) != 0)
-	      printf_filtered (_("a thread-local variable at offset %s "
-				 "in the thread-local storage for `%s'"),
-			       paddress (gdbarch, load_addr),
-			       section->objfile->name);
+	      {
+		load_addr = MSYMBOL_VALUE_RAW_ADDRESS (msym.minsym);
+		printf_filtered (_("a thread-local variable at offset %s "
+				   "in the thread-local storage for `%s'"),
+				 paddress (gdbarch, load_addr),
+				 objfile_name (section->objfile));
+	      }
 	    else
 	      {
+		load_addr = BMSYMBOL_VALUE_ADDRESS (msym);
 		printf_filtered (_("static storage at address "));
 		fputs_filtered (paddress (gdbarch, load_addr), gdb_stdout);
 		if (section_is_overlay (section))
@@ -1457,16 +1741,19 @@ x_command (char *exp, int from_tty)
   struct value *val;
   struct type *type;
 
-  fmt.segment_type = cuda_focus_is_device()?last_segment_type:0;
+  fmt.segment_type = cuda_focus_is_device() ? last_segment_type : (enum type_instance_flag_value) 0;
   fmt.format = last_format ? last_format : 'x';
   fmt.size = last_size;
   fmt.count = 1;
   fmt.raw = 0;
+  fmt.segment_type = (enum type_instance_flag_value) 0;
 
   if (exp && *exp == '/')
     {
-      exp++;
-      fmt = decode_format (&exp, last_format, last_size, fmt.segment_type);
+      const char *tmp = exp + 1;
+
+      fmt = decode_format (&tmp, last_format, last_size, fmt.segment_type);
+      exp = (char *) tmp;
     }
 
   /* If we have an expression, evaluate it and use it as the address.  */
@@ -1498,8 +1785,8 @@ x_command (char *exp, int from_tty)
          type = TYPE_TARGET_TYPE(type);
       if (TYPE_CUDA_ALL(type))
         {
-          fmt.segment_type = TYPE_INSTANCE_FLAGS(type);
-          fmt.segment_type &= TYPE_INSTANCE_FLAG_CUDA_ALL;
+	  fmt.segment_type = (enum type_instance_flag_value) (TYPE_INSTANCE_FLAGS(type)
+							      & TYPE_INSTANCE_FLAG_CUDA_ALL);
           last_segment_type = fmt.segment_type;
         }
 
@@ -1547,66 +1834,66 @@ x_command (char *exp, int from_tty)
    Specify the expression.  */
 
 static void
-display_command (char *exp, int from_tty)
+display_command (char *arg, int from_tty)
 {
   struct format_data fmt;
   struct expression *expr;
-  struct display *new;
-  int display_it = 1;
+  struct display *newobj;
+  const char *exp = arg;
 
-#if defined(TUI)
-  /* NOTE: cagney/2003-02-13 The `tui_active' was previously
-     `tui_version'.  */
-  if (tui_active && exp != NULL && *exp == '$')
-    display_it = (tui_set_layout_for_display_command (exp) == TUI_FAILURE);
-#endif
-
-  if (display_it)
+  if (exp == 0)
     {
-      if (exp == 0)
-	{
-	  do_displays ();
-	  return;
-	}
-
-      if (*exp == '/')
-	{
-	  exp++;
-	  fmt = decode_format (&exp, 0, 0, 0);
-	  if (fmt.size && fmt.format == 0)
-	    fmt.format = 'x';
-	  if (fmt.format == 'i' || fmt.format == 's')
-	    fmt.size = 'b';
-	}
-      else
-	{
-	  fmt.format = 0;
-	  fmt.size = 0;
-	  fmt.count = 0;
-	  fmt.raw = 0;
-	  fmt.segment_type = 0;
-	}
-
-      innermost_block = NULL;
-      expr = parse_expression (exp);
-
-      new = (struct display *) xmalloc (sizeof (struct display));
-
-      new->exp_string = xstrdup (exp);
-      new->exp = expr;
-      new->block = innermost_block;
-      new->pspace = current_program_space;
-      new->next = display_chain;
-      new->number = ++display_number;
-      new->format = fmt;
-      new->enabled_p = 1;
-      display_chain = new;
-
-      if (from_tty && target_has_execution)
-	do_one_display (new);
-
-      dont_repeat ();
+      do_displays ();
+      return;
     }
+
+  if (*exp == '/')
+    {
+      exp++;
+      fmt = decode_format (&exp, 0, 0, (enum type_instance_flag_value) 0);
+      if (fmt.size && fmt.format == 0)
+	fmt.format = 'x';
+      if (fmt.format == 'i' || fmt.format == 's')
+	fmt.size = 'b';
+    }
+  else
+    {
+      fmt.format = 0;
+      fmt.size = 0;
+      fmt.count = 0;
+      fmt.raw = 0;
+      fmt.segment_type = (enum type_instance_flag_value) 0;
+    }
+
+  innermost_block = NULL;
+  expr = parse_expression (exp);
+
+  newobj = XNEW (struct display);
+
+  newobj->exp_string = xstrdup (exp);
+  newobj->exp = expr;
+  newobj->block = innermost_block;
+  newobj->pspace = current_program_space;
+  newobj->number = ++display_number;
+  newobj->format = fmt;
+  newobj->enabled_p = 1;
+  newobj->next = NULL;
+
+  if (display_chain == NULL)
+    display_chain = newobj;
+  else
+    {
+      struct display *last;
+
+      for (last = display_chain; last->next != NULL; last = last->next)
+	;
+      last->next = newobj;
+    }
+
+  if (from_tty)
+    do_one_display (newobj);
+
+  dont_repeat ();
 }
 
 static void
@@ -1673,7 +1960,7 @@ map_display_numbers (char *args,
 
   while (!state.finished)
     {
-      char *p = state.string;
+      const char *p = state.string;
 
       num = get_number_or_range (&state);
       if (num == 0)
@@ -1747,15 +2034,14 @@ do_one_display (struct display *d)
 
   if (d->exp == NULL)
     {
-      volatile struct gdb_exception ex;
 
-      TRY_CATCH (ex, RETURN_MASK_ALL)
+      TRY
 	{
 	  innermost_block = NULL;
 	  d->exp = parse_expression (d->exp_string);
 	  d->block = innermost_block;
 	}
-      if (ex.reason < 0)
+      CATCH (ex, RETURN_MASK_ALL)
 	{
 	  /* Can't re-parse the expression.  Disable this display item.  */
 	  d->enabled_p = 0;
@@ -1763,6 +2049,7 @@ do_one_display (struct display *d)
 		   d->exp_string, ex.message);
 	  return;
 	}
+      END_CATCH
     }
 
   if (d->block)
@@ -1786,7 +2073,6 @@ do_one_display (struct display *d)
   printf_filtered (": ");
   if (d->format.size)
     {
-      volatile struct gdb_exception ex;
 
       annotate_display_format ();
 
@@ -1810,7 +2096,7 @@ do_one_display (struct display *d)
 
       annotate_display_value ();
 
-      TRY_CATCH (ex, RETURN_MASK_ERROR)
+      TRY
         {
 	  struct value *val;
 	  CORE_ADDR addr;
@@ -1821,13 +2107,15 @@ do_one_display (struct display *d)
 	    addr = gdbarch_addr_bits_remove (d->exp->gdbarch, addr);
 	  do_examine (d->format, d->exp->gdbarch, addr);
 	}
-      if (ex.reason < 0)
-	fprintf_filtered (gdb_stdout, _("<error: %s>\n"), ex.message);
+      CATCH (ex, RETURN_MASK_ERROR)
+	{
+	  fprintf_filtered (gdb_stdout, _("<error: %s>\n"), ex.message);
+	}
+      END_CATCH
     }
   else
     {
       struct value_print_options opts;
-      volatile struct gdb_exception ex;
 
       annotate_display_format ();
 
@@ -1846,15 +2134,19 @@ do_one_display (struct display *d)
       get_formatted_print_options (&opts, d->format.format);
       opts.raw = d->format.raw;
 
-      TRY_CATCH (ex, RETURN_MASK_ERROR)
+      TRY
         {
 	  struct value *val;
 
 	  val = evaluate_expression (d->exp);
 	  print_formatted (val, d->format.size, &opts, gdb_stdout);
 	}
-      if (ex.reason < 0)
-	fprintf_filtered (gdb_stdout, _("<error: %s>"), ex.message);
+      CATCH (ex, RETURN_MASK_ERROR)
+	{
+	  fprintf_filtered (gdb_stdout, _("<error: %s>"), ex.message);
+	}
+      END_CATCH
+
       printf_filtered ("\n");
     }
 
@@ -1986,21 +2278,24 @@ disable_display_command (char *args, int from_tty)
    an item by re-parsing .exp_string field in the new execution context.  */
 
 static void
-clear_dangling_display_expressions (struct so_list *solib)
+clear_dangling_display_expressions (struct objfile *objfile)
 {
-  struct objfile *objfile = solib->objfile;
   struct display *d;
+  struct program_space *pspace;
 
   /* With no symbol file we cannot have a block or expression from it.  */
   if (objfile == NULL)
     return;
+  pspace = objfile->pspace;
   if (objfile->separate_debug_objfile_backlink)
-    objfile = objfile->separate_debug_objfile_backlink;
-  gdb_assert (objfile->pspace == solib->pspace);
+    {
+      objfile = objfile->separate_debug_objfile_backlink;
+      gdb_assert (objfile->pspace == pspace);
+    }
 
   for (d = display_chain; d != NULL; d = d->next)
     {
-      if (d->pspace != solib->pspace)
+      if (d->pspace != pspace)
 	continue;
 
       if (lookup_objfile_from_block (d->block) == objfile
@@ -2027,18 +2322,21 @@ print_variable_and_value (const char *name, struct symbol *var,
 			  struct frame_info *frame,
 			  struct ui_file *stream, int indent)
 {
-  volatile struct gdb_exception except;
 
   if (!name)
     name = SYMBOL_PRINT_NAME (var);
 
   fprintf_filtered (stream, "%s%s = ", n_spaces (2 * indent), name);
-  TRY_CATCH (except, RETURN_MASK_ERROR)
+  TRY
     {
       struct value *val;
       struct value_print_options opts;
 
-      val = read_var_value (var, frame);
+      /* READ_VAR_VALUE needs a block in order to deal with non-local
+	 references (i.e. to handle nested functions).  In this context, we
+	 print variables that are local to this frame, so we can avoid passing
+	 a block to it.  */
+      val = read_var_value (var, NULL, frame);
       get_user_print_options (&opts);
       opts.deref_ref = 1;
       common_val_print (val, stream, indent, &opts, current_language);
@@ -2047,9 +2345,13 @@ print_variable_and_value (const char *name, struct symbol *var,
 	 function.  */
       frame = NULL;
     }
-  if (except.reason < 0)
-    fprintf_filtered(stream, "<error reading variable %s (%s)>", name,
-		     except.message);
+  CATCH (except, RETURN_MASK_ERROR)
+    {
+      fprintf_filtered(stream, "<error reading variable %s (%s)>", name,
+		       except.message);
+    }
+  END_CATCH
+
   fprintf_filtered (stream, "\n");
 }
 
@@ -2103,7 +2405,7 @@ printf_wide_c_string (struct ui_file *stream, const char *format,
   struct type *wctype = lookup_typename (current_language, gdbarch,
 					 "wchar_t", NULL, 0);
   int wcwidth = TYPE_LENGTH (wctype);
-  gdb_byte *buf = alloca (wcwidth);
+  gdb_byte *buf = (gdb_byte *) alloca (wcwidth);
   struct obstack output;
   struct cleanup *inner_cleanup;
 
@@ -2242,7 +2544,7 @@ printf_pointer (struct ui_file *stream, const char *format,
   long val = value_as_long (value);
 #endif
 
-  fmt = alloca (strlen (format) + 5);
+  fmt = (char *) alloca (strlen (format) + 5);
 
   /* Copy up to the leading %.  */
   p = format;
@@ -2298,7 +2600,7 @@ ui_printf (const char *arg, struct ui_file *stream)
   int allocated_args = 20;
   struct cleanup *old_cleanups;
 
-  val_args = xmalloc (allocated_args * sizeof (struct value *));
+  val_args = XNEWVEC (struct value *, allocated_args);
   old_cleanups = make_cleanup (free_current_contents, &val_args);
 
   if (s == 0)
@@ -2504,6 +2806,7 @@ static void
 printf_command (char *arg, int from_tty)
 {
   ui_printf (arg, gdb_stdout);
+  gdb_flush (gdb_stdout);
 }
 
 /* Implement the "eval" command.  */
@@ -2620,7 +2923,7 @@ _initialize_printcmd (void)
 
   current_display_number = -1;
 
-  observer_attach_solib_unloaded (clear_dangling_display_expressions);
+  observer_attach_free_objfile (clear_dangling_display_expressions);
 
   add_info ("address", address_info,
 	    _("Describe where symbol SYM is stored."));
@@ -2637,10 +2940,12 @@ Examine memory: x/FMT ADDRESS.\n\
 ADDRESS is an expression for the memory address to examine.\n\
 FMT is a repeat count followed by a format letter and a size letter.\n\
 Format letters are o(octal), x(hex), d(decimal), u(unsigned decimal),\n\
-  t(binary), f(float), a(address), i(instruction), c(char) and s(string).\n\
+  t(binary), f(float), a(address), i(instruction), c(char), s(string)\n\
+  and z(hex, zero padded on the left).\n\
 Size letters are b(byte), h(halfword), w(word), g(giant, 8 bytes).\n\
 The specified number of objects of the specified size are printed\n\
-according to the format.\n\n\
+according to the format.  If a negative number is specified, memory is\n\
+examined backward from the address.\n\n\
 Defaults for format and size letters are those previously used.\n\
 Default count is 1.  Default address is following last thing printed\n\
 with this command or \"print\"."));
@@ -2764,7 +3069,12 @@ but no count or size letter (see \"x\" command)."));
   add_setshow_uinteger_cmd ("max-symbolic-offset", no_class,
 			    &max_symbolic_offset, _("\
 Set the largest offset that will be printed in <symbol+1234> form."), _("\
-Show the largest offset that will be printed in <symbol+1234> form."), NULL,
+Show the largest offset that will be printed in <symbol+1234> form."), _("\
+Tell GDB to only display the symbolic form of an address if the\n\
+offset between the closest earlier symbol and the address is less than\n\
+the specified maximum offset.  The default is \"unlimited\", which tells GDB\n\
+to always print the symbolic form of an address if any symbol precedes\n\
+it.  Zero is equivalent to \"unlimited\"."),
 			    NULL,
 			    show_max_symbolic_offset,
 			    &setprintlist, &showprintlist);

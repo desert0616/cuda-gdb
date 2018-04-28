@@ -1,6 +1,6 @@
 /* Support for printing Java values for GDB, the GNU debugger.
 
-   Copyright (C) 1997-2013 Free Software Foundation, Inc.
+   Copyright (C) 1997-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -29,8 +29,6 @@
 #include "jv-lang.h"
 #include "c-lang.h"
 #include "annotate.h"
-#include "gdb_string.h"
-
 /* Local functions */
 
 void
@@ -65,6 +63,7 @@ java_value_print (struct value *val, struct ui_file *stream,
 	  type = lookup_pointer_type (type);
 
 	  val = value_at (type, address);
+	  type = value_type (val);
 	}
     }
 
@@ -100,7 +99,8 @@ java_value_print (struct value *val, struct ui_file *stream,
 	    {
 	      gdb_byte *buf;
 
-	      buf = alloca (gdbarch_ptr_bit (gdbarch) / HOST_CHAR_BIT);
+	      buf = ((gdb_byte *)
+		     alloca (gdbarch_ptr_bit (gdbarch) / HOST_CHAR_BIT));
 	      fputs_filtered (", ", stream);
 	      wrap_here (n_spaces (2));
 
@@ -182,10 +182,10 @@ java_value_print (struct value *val, struct ui_file *stream,
 		  set_value_offset (next_v, value_offset (next_v)
 				    + TYPE_LENGTH (el_type));
 		  value_fetch_lazy (next_v);
-		  if (!(value_available_contents_eq
-			(v, value_embedded_offset (v),
-			 next_v, value_embedded_offset (next_v),
-			 TYPE_LENGTH (el_type))))
+		  if (!value_contents_eq (v, value_embedded_offset (v),
+					  next_v,
+					  value_embedded_offset (next_v),
+					  TYPE_LENGTH (el_type)))
 		    break;
 		}
 
@@ -266,7 +266,7 @@ java_value_print (struct value *val, struct ui_file *stream,
 
 static void
 java_print_value_fields (struct type *type, const gdb_byte *valaddr,
-			 int offset,
+			 LONGEST offset,
 			 CORE_ADDR address, struct ui_file *stream,
 			 int recurse,
 			 const struct value *val,
@@ -274,7 +274,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 {
   int i, len, n_baseclasses;
 
-  CHECK_TYPEDEF (type);
+  type = check_typedef (type);
 
   fprintf_filtered (stream, "{");
   len = TYPE_NFIELDS (type);
@@ -299,7 +299,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 
 	  boffset = 0;
 
-	  if (options->pretty)
+	  if (options->prettyformat)
 	    {
 	      fprintf_filtered (stream, "\n");
 	      print_spaces_filtered (2 * (recurse + 1), stream);
@@ -341,7 +341,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 	    fprintf_filtered (stream, ", ");
 	  else if (n_baseclasses > 0)
 	    {
-	      if (options->pretty)
+	      if (options->prettyformat)
 		{
 		  fprintf_filtered (stream, "\n");
 		  print_spaces_filtered (2 + 2 * recurse, stream);
@@ -352,7 +352,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 	    }
 	  fields_seen = 1;
 
-	  if (options->pretty)
+	  if (options->prettyformat)
 	    {
 	      fprintf_filtered (stream, "\n");
 	      print_spaces_filtered (2 + 2 * recurse, stream);
@@ -392,11 +392,6 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 		{
 		  fputs_filtered (_("<synthetic pointer>"), stream);
 		}
-	      else if (!value_bits_valid (val, TYPE_FIELD_BITPOS (type, i),
-					  TYPE_FIELD_BITSIZE (type, i)))
-		{
-		  val_print_optimized_out (stream);
-		}
 	      else
 		{
 		  struct value_print_options opts;
@@ -417,22 +412,16 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 		}
 	      else if (field_is_static (&TYPE_FIELD (type, i)))
 		{
+		  struct value_print_options opts;
 		  struct value *v = value_static_field (type, i);
+		  struct type *t = check_typedef (value_type (v));
 
-		  if (v == NULL)
-		    val_print_optimized_out (stream);
-		  else
-		    {
-		      struct value_print_options opts;
-		      struct type *t = check_typedef (value_type (v));
-
-		      if (TYPE_CODE (t) == TYPE_CODE_STRUCT)
-			v = value_addr (v);
-		      opts = *options;
-		      opts.deref_ref = 0;
-		      common_val_print (v, stream, recurse + 1,
-					&opts, current_language);
-		    }
+		  if (TYPE_CODE (t) == TYPE_CODE_STRUCT)
+		    v = value_addr (v);
+		  opts = *options;
+		  opts.deref_ref = 0;
+		  common_val_print (v, stream, recurse + 1,
+				    &opts, current_language);
 		}
 	      else if (TYPE_FIELD_TYPE (type, i) == NULL)
 		fputs_filtered ("<unknown type>", stream);
@@ -451,7 +440,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 	  annotate_field_end ();
 	}
 
-      if (options->pretty)
+      if (options->prettyformat)
 	{
 	  fprintf_filtered (stream, "\n");
 	  print_spaces_filtered (2 * recurse, stream);
@@ -474,7 +463,7 @@ java_val_print (struct type *type, const gdb_byte *valaddr,
   struct type *target_type;
   CORE_ADDR addr;
 
-  CHECK_TYPEDEF (type);
+  type = check_typedef (type);
   switch (TYPE_CODE (type))
     {
     case TYPE_CODE_PTR:

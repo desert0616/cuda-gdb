@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -18,6 +18,7 @@
 #ifndef CUDA_UTILS_H
 #define CUDA_UTILS_H 1
 
+#include "target.h"
 #include "cuda-defs.h"
 
 /* Utility functions for cuda-gdb */
@@ -68,15 +69,16 @@ void cuda_ptx_cache_local_vars_iterator (const char *, struct symbol *, void *);
 struct minimal_symbol;
 void cuda_set_host_address_resident_on_gpu (bool);
 bool cuda_is_host_address_resident_on_gpu (void);
-bool cuda_managed_msymbol_p (struct minimal_symbol *);
 void cuda_managed_memory_clean_regions (void);
 bool cuda_is_value_managed_pointer (struct value *value);
 bool cuda_is_uvm_used (void);
 void cuda_set_uvm_used (bool);
 #ifndef GDBSERVER
+bool cuda_managed_msymbol_p (struct bound_minimal_symbol);
+
 static inline void cuda_write_bool (CORE_ADDR addr, bool val)
 {
-  target_write_memory (addr, (char *)&val, 1);
+  target_write_memory (addr, (const gdb_byte *)&val, 1);
 }
 bool cuda_managed_address_p (CORE_ADDR addr);
 void cuda_managed_memory_add_region (CORE_ADDR begin, CORE_ADDR end);

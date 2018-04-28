@@ -1,6 +1,6 @@
 /* Handle Darwin shared libraries for GDB, the GNU Debugger.
 
-   Copyright (C) 2009-2013 Free Software Foundation, Inc.
+   Copyright (C) 2009-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -18,7 +18,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -48,8 +48,6 @@
 #include "gdbthread.h"
 #include "gdb_bfd.h"
 
-#include "gdb_assert.h"
-
 #include "solist.h"
 #include "solib.h"
 #include "solib-svr4.h"
@@ -58,7 +56,6 @@
 #include "elf-bfd.h"
 #include "exec.h"
 #include "auxv.h"
-#include "exceptions.h"
 #include "mach-o.h"
 #include "mach-o/external.h"
 #include "cuda-tdep.h"
@@ -107,10 +104,7 @@ static const struct program_space_data *solib_darwin_pspace_data;
 static void
 darwin_pspace_data_cleanup (struct program_space *pspace, void *arg)
 {
-  struct darwin_info *info;
-
-  info = program_space_data (pspace, solib_darwin_pspace_data);
-  xfree (info);
+  xfree (arg);
 }
 
 /* Get the current darwin data.  If none is found yet, add it now.  This
@@ -121,11 +115,12 @@ get_darwin_info (void)
 {
   struct darwin_info *info;
 
-  info = program_space_data (current_program_space, solib_darwin_pspace_data);
+  info = (struct darwin_info *) program_space_data (current_program_space,
+						    solib_darwin_pspace_data);
   if (info != NULL)
     return info;
 
-  info = XZALLOC (struct darwin_info);
+  info = XCNEW (struct darwin_info);
   set_program_space_data (current_program_space,
 			  solib_darwin_pspace_data, info);
   return info;
@@ -186,31 +181,31 @@ cuda_dyld_compute_adjustment (CORE_ADDR dyld_all_image_addr)
 
   /* Should use /usr/include/mach-o/dyld_images.h instead but the header file
      is not present on Linux */
-  struct dyld_all_image_infos_offsets offsets =
-    { .version                         = 0,
-      .infoArrayCount                  = i,
-      .infoArray                       = i + i,
-      .notification                    = i + i + p,
-      .processDetachedFromSharedRegion = i + i + p + p,
-      .libSystemInitialized            = i + i + p + p + b,
-      /* there is padding inserted before the next word-aligned field */
-      .dyldImageLoadAddress            = i + i + p + p + b + b + (p - 2 * b),
-      .jitInfo                         = i + i + p + p + b + b + (p - 2 * b) + p,
-      .dyldVersion                     = i + i + p + p + b + b + (p - 2 * b) + p + p,
-      .errorMessage                    = i + i + p + p + b + b + (p - 2 * b) + p + p + p,
-      .terminationFlags                = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p,
-      .coreSymbolicationShmPage        = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p,
-      .systemOrderFlag                 = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p,
-      .uuidArrayCount                  = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p,
-      .uuidArray                       = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p,
-      .dyldAllImageInfosAddress        = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p,
-      .initialImageCount               = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p,
-      .errorKind                       = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p + p,
-      .errorClientOfDylibPath          = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p + p + p,
-      .errorTargetDylibPath            = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p + p + p + p,
-      .errorSymbol                     = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p + p + p + p + p,
-      .sharedCacheSlide                = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p + p + p + p + p + p,
-    };
+  struct dyld_all_image_infos_offsets offsets;
+  memset(&offsets, 0, sizeof(offsets));
+  offsets.version                         = 0;
+  offsets.infoArrayCount                  = i;
+  offsets.infoArray                       = i + i;
+  offsets.notification                    = i + i + p;
+  offsets.processDetachedFromSharedRegion = i + i + p + p;
+  offsets.libSystemInitialized            = i + i + p + p + b;
+  /* there is padding inserted before the next word-aligned field */
+  offsets.dyldImageLoadAddress            = i + i + p + p + b + b + (p - 2 * b);
+  offsets.jitInfo                         = i + i + p + p + b + b + (p - 2 * b) + p;
+  offsets.dyldVersion                     = i + i + p + p + b + b + (p - 2 * b) + p + p;
+  offsets.errorMessage                    = i + i + p + p + b + b + (p - 2 * b) + p + p + p;
+  offsets.terminationFlags                = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p;
+  offsets.coreSymbolicationShmPage        = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p;
+  offsets.systemOrderFlag                 = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p;
+  offsets.uuidArrayCount                  = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p;
+  offsets.uuidArray                       = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p;
+  offsets.dyldAllImageInfosAddress        = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p;
+  offsets.initialImageCount               = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p;
+  offsets.errorKind                       = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p + p;
+  offsets.errorClientOfDylibPath          = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p + p + p;
+  offsets.errorTargetDylibPath            = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p + p + p + p;
+  offsets.errorSymbol                     = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p + p + p + p + p;
+  offsets.sharedCacheSlide                = i + i + p + p + b + b + (p - 2 * b) + p + p + p + p + p + p + p + p + p + p + p + p + p + p + p;
 
   /* Read the dyld version */
   target_read_memory (dyld_all_image_addr, version_buf, 4);
@@ -251,7 +246,7 @@ darwin_load_image_infos (struct darwin_info *info)
 
   /* The structure has 4 fields: version (4 bytes), count (4 bytes),
      info (pointer) and notifier (pointer).  */
-  len = 4 + 4 + 2 * ptr_type->length;
+  len = 4 + 4 + 2 * TYPE_LENGTH (ptr_type);
   gdb_assert (len <= sizeof (buf));
   memset (&info->all_image, 0, sizeof (info->all_image));
 
@@ -267,7 +262,7 @@ darwin_load_image_infos (struct darwin_info *info)
   info->all_image.count = extract_unsigned_integer (buf + 4, 4, byte_order);
   info->all_image.info = extract_typed_address (buf + 8, ptr_type);
   info->all_image.notifier = extract_typed_address
-    (buf + 8 + ptr_type->length, ptr_type);
+    (buf + 8 + TYPE_LENGTH (ptr_type), ptr_type);
 
   /* CUDA - Support static linker on Mac OS X 10.7 */
   adjustment = cuda_dyld_compute_adjustment (info->all_image_addr);
@@ -329,10 +324,10 @@ lookup_symbol_from_bfd (bfd *abfd, char *symname)
 
 /* Return program interpreter string.  */
 
-static gdb_byte *
+static char *
 find_program_interpreter (void)
 {
-  gdb_byte *buf = NULL;
+  char *buf = NULL;
 
   /* If we have an exec_bfd, get the interpreter from the load commands.  */
   if (exec_bfd)
@@ -396,7 +391,7 @@ darwin_current_sos (void)
       char *file_path;
       int errcode;
       struct darwin_so_list *dnew;
-      struct so_list *new;
+      struct so_list *newobj;
       struct cleanup *old_chain;
 
       /* Read image info from inferior.  */
@@ -407,7 +402,7 @@ darwin_current_sos (void)
       path_addr = extract_typed_address (buf + ptr_len, ptr_type);
 
       /* Read Mach-O header from memory.  */
-      if (target_read_memory (load_addr, (char *) &hdr, sizeof (hdr) - 4))
+      if (target_read_memory (load_addr, (gdb_byte *) &hdr, sizeof (hdr) - 4))
 	break;
       /* Discard wrong magic numbers.  Shouldn't happen.  */
       hdr_val = extract_unsigned_integer
@@ -426,23 +421,23 @@ darwin_current_sos (void)
 	break;
 
       /* Create and fill the new so_list element.  */
-      dnew = XZALLOC (struct darwin_so_list);
-      new = &dnew->sl;
+      dnew = XCNEW (struct darwin_so_list);
+      newobj = &dnew->sl;
       old_chain = make_cleanup (xfree, dnew);
 
-      new->lm_info = &dnew->li;
+      newobj->lm_info = &dnew->li;
 
-      strncpy (new->so_name, file_path, SO_NAME_MAX_PATH_SIZE - 1);
-      new->so_name[SO_NAME_MAX_PATH_SIZE - 1] = '\0';
-      strcpy (new->so_original_name, new->so_name);
+      strncpy (newobj->so_name, file_path, SO_NAME_MAX_PATH_SIZE - 1);
+      newobj->so_name[SO_NAME_MAX_PATH_SIZE - 1] = '\0';
+      strcpy (newobj->so_original_name, newobj->so_name);
       xfree (file_path);
-      new->lm_info->lm_addr = load_addr;
+      newobj->lm_info->lm_addr = load_addr;
 
       if (head == NULL)
-	head = new;
+	head = newobj;
       else
-	tail->next = new;
-      tail = new;
+	tail->next = newobj;
+      tail = newobj;
 
       discard_cleanups (old_chain);
     }
@@ -450,14 +445,43 @@ darwin_current_sos (void)
   return head;
 }
 
-/* Get the load address of the executable.  We assume that the dyld info are
-   correct.  */
+/* Check LOAD_ADDR points to a Mach-O executable header.  Return LOAD_ADDR
+   in case of success, 0 in case of failure.  */
 
 static CORE_ADDR
-darwin_read_exec_load_addr (struct darwin_info *info)
+darwin_validate_exec_header (CORE_ADDR load_addr)
+{
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch ());
+  struct mach_o_header_external hdr;
+  unsigned long hdr_val;
+
+  /* Read Mach-O header from memory.  */
+  if (target_read_memory (load_addr, (gdb_byte *) &hdr, sizeof (hdr) - 4))
+    return 0;
+
+  /* Discard wrong magic numbers.  Shouldn't happen.  */
+  hdr_val = extract_unsigned_integer
+    (hdr.magic, sizeof (hdr.magic), byte_order);
+  if (hdr_val != BFD_MACH_O_MH_MAGIC && hdr_val != BFD_MACH_O_MH_MAGIC_64)
+    return 0;
+
+  /* Check executable.  */
+  hdr_val = extract_unsigned_integer
+    (hdr.filetype, sizeof (hdr.filetype), byte_order);
+  if (hdr_val == BFD_MACH_O_MH_EXECUTE)
+    return load_addr;
+
+  return 0;
+}
+
+/* Get the load address of the executable using dyld list of images.
+   We assume that the dyld info are correct (which is wrong if the target
+   is stopped at the first instruction).  */
+
+static CORE_ADDR
+darwin_read_exec_load_addr_from_dyld (struct darwin_info *info)
 {
   struct type *ptr_type = builtin_type (target_gdbarch ())->builtin_data_ptr;
-  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch ());
   int ptr_len = TYPE_LENGTH (ptr_type);
   unsigned int image_info_size = ptr_len * 3;
   int i;
@@ -468,31 +492,45 @@ darwin_read_exec_load_addr (struct darwin_info *info)
       CORE_ADDR iinfo = info->all_image.info + i * image_info_size;
       gdb_byte buf[image_info_size];
       CORE_ADDR load_addr;
-      struct mach_o_header_external hdr;
-      unsigned long hdr_val;
 
       /* Read image info from inferior.  */
       if (target_read_memory (iinfo, buf, image_info_size))
 	break;
 
       load_addr = extract_typed_address (buf, ptr_type);
-
-      /* Read Mach-O header from memory.  */
-      if (target_read_memory (load_addr, (char *) &hdr, sizeof (hdr) - 4))
-	break;
-      /* Discard wrong magic numbers.  Shouldn't happen.  */
-      hdr_val = extract_unsigned_integer
-        (hdr.magic, sizeof (hdr.magic), byte_order);
-      if (hdr_val != BFD_MACH_O_MH_MAGIC && hdr_val != BFD_MACH_O_MH_MAGIC_64)
-        continue;
-      /* Check executable.  */
-      hdr_val = extract_unsigned_integer
-        (hdr.filetype, sizeof (hdr.filetype), byte_order);
-      if (hdr_val == BFD_MACH_O_MH_EXECUTE)
+      if (darwin_validate_exec_header (load_addr) == load_addr)
 	return load_addr;
     }
 
   return 0;
+}
+
+/* Get the load address of the executable when the PC is at the dyld
+   entry point using parameter passed by the kernel (at SP). */
+
+static CORE_ADDR
+darwin_read_exec_load_addr_at_init (struct darwin_info *info)
+{
+  struct gdbarch *gdbarch = target_gdbarch ();
+  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
+  int addr_size = gdbarch_addr_bit (gdbarch) / 8;
+  ULONGEST load_ptr_addr;
+  ULONGEST load_addr;
+  gdb_byte buf[8];
+
+  /* Get SP.  */
+  if (regcache_cooked_read_unsigned (get_current_regcache (),
+				     gdbarch_sp_regnum (gdbarch),
+				     &load_ptr_addr) != REG_VALID)
+    return 0;
+
+  /* Read value at SP (image load address).  */
+  if (target_read_memory (load_ptr_addr, buf, addr_size))
+    return 0;
+
+  load_addr = extract_unsigned_integer (buf, addr_size, byte_order);
+
+  return darwin_validate_exec_header (load_addr);
 }
 
 /* Return 1 if PC lies in the dynamic symbol resolution code of the
@@ -539,7 +577,7 @@ gdb_bfd_mach_o_fat_extract (bfd *abfd, bfd_format format,
 static void
 darwin_solib_get_all_image_info_addr_at_init (struct darwin_info *info)
 {
-  gdb_byte *interp_name;
+  char *interp_name;
   CORE_ADDR load_addr = 0;
   bfd *dyld_bfd = NULL;
   struct cleanup *cleanup;
@@ -562,8 +600,8 @@ darwin_solib_get_all_image_info_addr_at_init (struct darwin_info *info)
       bfd *sub;
 
       make_cleanup_bfd_unref (dyld_bfd);
-      sub = gdb_bfd_mach_o_fat_extract (dyld_bfd, bfd_object,
-					gdbarch_bfd_arch_info (target_gdbarch ()));
+      sub = gdb_bfd_mach_o_fat_extract
+	(dyld_bfd, bfd_object, gdbarch_bfd_arch_info (target_gdbarch ()));
       if (sub)
 	{
 	  dyld_bfd = sub;
@@ -596,22 +634,28 @@ darwin_solib_get_all_image_info_addr_at_init (struct darwin_info *info)
   info->all_image_addr += load_addr;
 }
 
-/* Extract dyld_all_image_addr reading it from 
+/* Extract dyld_all_image_addr reading it from
    TARGET_OBJECT_DARWIN_DYLD_INFO.  */
 
 static void
 darwin_solib_read_all_image_info_addr (struct darwin_info *info)
 {
-  gdb_byte buf[8 + 8 + 4];
+  gdb_byte buf[8];
   LONGEST len;
-  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch ());
+  struct type *ptr_type = builtin_type (target_gdbarch ())->builtin_data_ptr;
 
-  len = target_read (&current_target, TARGET_OBJECT_DARWIN_DYLD_INFO, NULL,
-                     buf, 0, sizeof (buf));
-  if (len != sizeof (buf))
+  /* Sanity check.  */
+  if (TYPE_LENGTH (ptr_type) > sizeof (buf))
     return;
 
-  info->all_image_addr = extract_unsigned_integer (buf, 8, byte_order);
+  len = target_read (&current_target, TARGET_OBJECT_DARWIN_DYLD_INFO, NULL,
+		     buf, 0, TYPE_LENGTH (ptr_type));
+  if (len <= 0)
+    return;
+
+  /* The use of BIG endian is intended, as BUF is a raw stream of bytes.  This
+      makes the support of remote protocol easier.  */
+  info->all_image_addr = extract_unsigned_integer (buf, len, BFD_ENDIAN_BIG);
 }
 
 /* Shared library startup support.  See documentation in solib-svr4.c.  */
@@ -635,34 +679,36 @@ darwin_solib_create_inferior_hook (int from_tty)
   darwin_load_image_infos (info);
 
   if (!darwin_dyld_version_ok (info))
-    return;
+    {
+      warning (_("unhandled dyld version (%d)"), info->all_image.version);
+      return;
+    }
 
+  /* Add the breakpoint which is hit by dyld when the list of solib is
+     modified.  */
   create_solib_event_breakpoint (target_gdbarch (), info->all_image.notifier);
 
-  /* Possible relocate the main executable (PIE).  */
-  load_addr = darwin_read_exec_load_addr (info);
+  if (info->all_image.count != 0)
+    {
+      /* Possible relocate the main executable (PIE).  */
+      load_addr = darwin_read_exec_load_addr_from_dyld (info);
+    }
+  else
+    {
+      /* Possible issue:
+	 Do not break on the notifier if dyld is not initialized (deduced from
+	 count == 0).  In that case, dyld hasn't relocated itself and the
+	 notifier may point to a wrong address.  */
+
+      load_addr = darwin_read_exec_load_addr_at_init (info);
+    }
+
   if (load_addr != 0 && symfile_objfile != NULL)
     {
-      CORE_ADDR vmaddr = 0;
-      struct mach_o_data_struct *md = bfd_mach_o_get_data (exec_bfd);
-      unsigned int i, num;
+      CORE_ADDR vmaddr;
 
       /* Find the base address of the executable.  */
-      for (i = 0; i < md->header.ncmds; i++)
-	{
-	  struct bfd_mach_o_load_command *cmd = &md->commands[i];
-
-	  if (cmd->type != BFD_MACH_O_LC_SEGMENT
-	      && cmd->type != BFD_MACH_O_LC_SEGMENT_64)
-	    continue;
-	  if (cmd->command.segment.fileoff == 0
-	      && cmd->command.segment.vmaddr != 0
-	      && cmd->command.segment.filesize != 0)
-	    {
-	      vmaddr = cmd->command.segment.vmaddr;
-	      break;
-	    }
-	}
+      vmaddr = bfd_mach_o_get_base_address (exec_bfd);
 
       /* Relocate.  */
       if (vmaddr != load_addr)
@@ -707,12 +753,12 @@ darwin_relocate_section_addresses (struct so_list *so,
     so->addr_low = sec->addr;
 }
 
-static struct symbol *
-darwin_lookup_lib_symbol (const struct objfile *objfile,
+static struct block_symbol
+darwin_lookup_lib_symbol (struct objfile *objfile,
 			  const char *name,
 			  const domain_enum domain)
 {
-  return NULL;
+  return (struct block_symbol) {NULL, NULL};
 }
 
 static bfd *
@@ -743,12 +789,8 @@ darwin_bfd_open (char *pathname)
   /* The current filename for fat-binary BFDs is a name generated
      by BFD, usually a string containing the name of the architecture.
      Reset its value to the actual filename.  */
-    {
-      char *data = bfd_alloc (res, strlen (pathname) + 1);
-
-      strcpy (data, pathname);
-      res->filename = data;
-    }
+  xfree (bfd_get_filename (res));
+  res->filename = xstrdup (pathname);
 
   gdb_bfd_unref (abfd);
   return res;

@@ -1,4 +1,4 @@
-/* Copyright (C) 2008-2013 Free Software Foundation, Inc.
+/* Copyright (C) 2008-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -31,6 +31,9 @@
 #include "coff-pe-read.h"
 #include "gdb_bfd.h"
 #include "complaints.h"
+#include "solib.h"
+#include "solib-target.h"
+#include "gdbcore.h"
 
 struct cmd_list_element *info_w32_cmdlist;
 
@@ -108,7 +111,7 @@ windows_get_tlb_type (struct gdbarch *gdbarch)
   static struct type *last_tlb_type = NULL;
   struct type *dword_ptr_type, *dword32_type, *void_ptr_type;
   struct type *peb_ldr_type, *peb_ldr_ptr_type;
-  struct type *peb_type, *peb_ptr_type, *list_type, *list_ptr_type;
+  struct type *peb_type, *peb_ptr_type, *list_type;
   struct type *module_list_ptr_type;
   struct type *tib_type, *seh_type, *tib_ptr_type, *seh_ptr_type;
 
@@ -126,9 +129,6 @@ windows_get_tlb_type (struct gdbarch *gdbarch)
 
   list_type = arch_composite_type (gdbarch, NULL, TYPE_CODE_STRUCT);
   TYPE_NAME (list_type) = xstrdup ("list");
-
-  list_ptr_type = arch_type (gdbarch, TYPE_CODE_PTR,
-			    TYPE_LENGTH (void_ptr_type), NULL);
 
   module_list_ptr_type = void_ptr_type;
 
@@ -318,7 +318,7 @@ display_one_tib (ptid_t ptid)
       max = tib_size / size;
     }
   
-  tib = alloca (tib_size);
+  tib = (gdb_byte *) alloca (tib_size);
 
   if (target_get_tib_address (ptid, &thread_local_base) == 0)
     {
@@ -358,31 +358,12 @@ display_one_tib (ptid_t ptid)
   return 1;  
 }
 
-/* Display thread information block of a thread specified by ARGS.
-   If ARGS is empty, display thread information block of current_thread
-   if current_thread is non NULL.
-   Otherwise ARGS is parsed and converted to a integer that should
-   be the windows ThreadID (not the internal GDB thread ID).  */
+/* Display thread information block of the current thread.  */
 
 static void
 display_tib (char * args, int from_tty)
 {
-  if (args)
-    {
-      struct thread_info *tp;
-      int gdb_id = value_as_long (parse_and_eval (args));
-
-      tp = find_thread_id (gdb_id);
-
-      if (!tp)
-	error (_("Thread ID %d not known."), gdb_id);
-
-      if (!target_thread_alive (tp->ptid))
-	error (_("Thread ID %d has terminated."), gdb_id);
-
-      display_one_tib (tp->ptid);
-    }
-  else if (!ptid_equal (inferior_ptid, null_ptid))
+  if (!ptid_equal (inferior_ptid, null_ptid))
     display_one_tib (inferior_ptid);
 }
 
@@ -399,7 +380,7 @@ windows_xfer_shared_library (const char* so_name, CORE_ADDR load_addr,
   obstack_grow_str (obstack, p);
   xfree (p);
   obstack_grow_str (obstack, "\"><segment address=\"");
-  dll = gdb_bfd_open_maybe_remote (so_name);
+  dll = gdb_bfd_open (so_name, gnutarget, -1);
   /* The following calls are OK even if dll is NULL.
      The default value 0x1000 is returned by pe_text_section_offset
      in that case.  */
@@ -427,7 +408,7 @@ windows_xfer_shared_library (const char* so_name, CORE_ADDR load_addr,
    to print the value of another global variable defined with the same
    name, but in a different DLL.  */
 
-void
+static void
 windows_iterate_over_objfiles_in_search_order
   (struct gdbarch *gdbarch,
    iterate_over_objfiles_in_search_order_cb_ftype *cb,
@@ -479,6 +460,22 @@ init_w32_command_list (void)
 		      &info_w32_cmdlist, "info w32 ", 0, &infolist);
       w32_prefix_command_valid = 1;
     }
+}
+
+/* To be called from the various GDB_OSABI_CYGWIN handlers for the
+   various Windows architectures and machine types.  */
+
+void
+windows_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
+{
+  /* Canonical paths on this target look like
+     `c:\Program Files\Foo App\mydll.dll', for example.  */
+  set_gdbarch_has_dos_based_file_system (gdbarch, 1);
+
+  set_gdbarch_iterate_over_objfiles_in_search_order
+    (gdbarch, windows_iterate_over_objfiles_in_search_order);
+
+  set_solib_ops (gdbarch, &solib_target_so_ops);
 }
 
 /* Provide a prototype to silence -Wmissing-prototypes.  */

@@ -1,4 +1,4 @@
-# Copyright 1998-2013 Free Software Foundation, Inc.
+# Copyright 1998-2016 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -35,20 +35,6 @@ if {[prepare_for_testing $testfile.exp $testfile $srcfile {debug nowarnings}]} {
 
 set ws "\[\r\n\t \]+"
 set cr "\[\r\n\]+"
-
-if [is_amd64_regs_target] {
-    set fpreg "rbp"
-    set spreg "rsp"
-    set pcreg "rip"
-} elseif [is_x86_like_target] {
-    set fpreg "ebp"
-    set spreg "esp"
-    set pcreg "eip"
-} else {
-    set fpreg "fp"
-    set spreg "sp"
-    set pcreg "pc"
-}
 
 #
 # Utility procs
@@ -127,6 +113,22 @@ proc gdb_collect_args_test { myargs msg } {
 
     # Begin the test.
     run_trace_experiment $msg args_test_func
+
+    # Frame arguments and their entry values are displayed correctly with
+    # various values of "print entry-values" when a trace frame is
+    # selected.
+
+    gdb_test "tfind -1" ".*" ""
+    gdb_test_no_output "set print entry-values only" ""
+    gdb_test "tfind 0" \
+	" \\(argc@entry=\[^,\]*, argi@entry=\[^,\]*, argf@entry=\[^,\]*, argd@entry=\[^,\]*, argstruct@entry=\[^,\]*, argarray@entry=\[^,\]*\\) .*" \
+	"collect $msg: tfind 0 with entry-values only"
+
+    gdb_test "tfind -1" ".*" ""
+    gdb_test_no_output "set print entry-values both" ""
+    gdb_test "tfind 0" \
+	" \\(argc=\[^,\]*, argc@entry=\[^,\]*, argi=\[^,\]*, argi@entry=\[^,\]*, argf=\[^,\]*, argf@entry=\[^,\]*, argd=\[^,\]*, argd@entry=\[^,\]*, argstruct=\[^,\]*, argstruct@entry=\[^,\]*, argarray=\[^,\]*, argarray@entry=\[^,\]*\\) .*" \
+	"collect $msg: tfind 0 with entry-values both"
 
     gdb_test "print argc" \
 	    "\\$\[0-9\]+ = 1 '.001'$cr" \
@@ -776,7 +778,7 @@ runto_main
 
 if { ![gdb_target_supports_trace] } then {
     unsupported "Current target does not support trace"
-    return 1;
+    return 1
 }
 
 # Body of test encased in a proc so we can return prematurely.

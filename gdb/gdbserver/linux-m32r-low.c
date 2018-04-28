@@ -1,5 +1,5 @@
 /* GNU/Linux/m32r specific low level interface, for the remote server for GDB.
-   Copyright (C) 2005-2013 Free Software Foundation, Inc.
+   Copyright (C) 2005-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -25,6 +25,7 @@
 
 /* Defined in auto-generated file reg-m32r.c.  */
 void init_registers_m32r (void);
+extern const struct target_desc *tdesc_m32r;
 
 #define m32r_num_regs 25
 
@@ -52,25 +53,17 @@ m32r_cannot_fetch_register (int regno)
   return (regno >= m32r_num_regs);
 }
 
-static CORE_ADDR
-m32r_get_pc (struct regcache *regcache)
-{
-  unsigned long pc;
-  collect_register_by_name (regcache, "pc", &pc);
-  if (debug_threads)
-    fprintf (stderr, "stop pc is %08lx\n", pc);
-  return pc;
-}
-
-static void
-m32r_set_pc (struct regcache *regcache, CORE_ADDR pc)
-{
-  unsigned long newpc = pc;
-  supply_register_by_name (regcache, "pc", &newpc);
-}
-
 static const unsigned short m32r_breakpoint = 0x10f1;
 #define m32r_breakpoint_len 2
+
+/* Implementation of linux_target_ops method "sw_breakpoint_from_kind".  */
+
+static const gdb_byte *
+m32r_sw_breakpoint_from_kind (int kind, int *size)
+{
+  *size = m32r_breakpoint_len;
+  return (const gdb_byte *) &m32r_breakpoint;
+}
 
 static int
 m32r_breakpoint_at (CORE_ADDR where)
@@ -87,19 +80,76 @@ m32r_breakpoint_at (CORE_ADDR where)
   return 0;
 }
 
+static void
+m32r_arch_setup (void)
+{
+  current_process ()->tdesc = tdesc_m32r;
+}
+
+/* Support for hardware single step.  */
+
+static int
+m32r_supports_hardware_single_step (void)
+{
+  return 1;
+}
+
+static struct usrregs_info m32r_usrregs_info =
+  {
+    m32r_num_regs,
+    m32r_regmap,
+  };
+
+static struct regs_info regs_info =
+  {
+    NULL, /* regset_bitmap */
+    &m32r_usrregs_info,
+  };
+
+static const struct regs_info *
+m32r_regs_info (void)
+{
+  return &regs_info;
+}
+
 struct linux_target_ops the_low_target = {
-  init_registers_m32r,
-  m32r_num_regs,
-  m32r_regmap,
-  NULL,
+  m32r_arch_setup,
+  m32r_regs_info,
   m32r_cannot_fetch_register,
   m32r_cannot_store_register,
   NULL, /* fetch_register */
-  m32r_get_pc,
-  m32r_set_pc,
-  (const unsigned char *) &m32r_breakpoint,
-  m32r_breakpoint_len,
+  linux_get_pc_32bit,
+  linux_set_pc_32bit,
+  NULL, /* breakpoint_from_pc */
+  m32r_sw_breakpoint_from_kind,
   NULL,
   0,
   m32r_breakpoint_at,
+  NULL, /* supports_z_point_type */
+  NULL, /* insert_point */
+  NULL, /* remove_point */
+  NULL, /* stopped_by_watchpoint */
+  NULL, /* stopped_data_address */
+  NULL, /* collect_ptrace_register */
+  NULL, /* supply_ptrace_register */
+  NULL, /* siginfo_fixup */
+  NULL, /* new_process */
+  NULL, /* new_thread */
+  NULL, /* new_fork */
+  NULL, /* prepare_to_resume */
+  NULL, /* process_qsupported */
+  NULL, /* supports_tracepoints */
+  NULL, /* get_thread_area */
+  NULL, /* install_fast_tracepoint_jump_pad */
+  NULL, /* emit_ops */
+  NULL, /* get_min_fast_tracepoint_insn_len */
+  NULL, /* supports_range_stepping */
+  NULL, /* breakpoint_kind_from_current_state */
+  m32r_supports_hardware_single_step,
 };
+
+void
+initialize_low_arch (void)
+{
+  init_registers_m32r ();
+}

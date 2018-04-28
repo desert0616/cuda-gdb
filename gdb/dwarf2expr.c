@@ -1,6 +1,6 @@
 /* DWARF 2 Expression Evaluator.
 
-   Copyright (C) 2001-2013 Free Software Foundation, Inc.
+   Copyright (C) 2001-2016 Free Software Foundation, Inc.
 
    Contributed by Daniel Berlin (dan@dberlin.org)
 
@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -44,7 +44,7 @@
 #include "gdbcore.h"
 #include "dwarf2.h"
 #include "dwarf2expr.h"
-#include "gdb_assert.h"
+#include "dwarf2loc.h"
 #include "cuda-tdep.h"
 
 /* Local prototypes.  */
@@ -84,8 +84,9 @@ dwarf_gdbarch_types_init (struct gdbarch *gdbarch)
 static struct type *
 dwarf_expr_address_type (struct dwarf_expr_context *ctx)
 {
-  struct dwarf_gdbarch_types *types = gdbarch_data (ctx->gdbarch,
-						    dwarf_arch_cookie);
+  struct dwarf_gdbarch_types *types
+    = (struct dwarf_gdbarch_types *) gdbarch_data (ctx->gdbarch,
+						   dwarf_arch_cookie);
   int ndx;
 
   if (ctx->addr_size == 2)
@@ -114,11 +115,10 @@ new_dwarf_expr_context (void)
 {
   struct dwarf_expr_context *retval;
 
-  retval = xcalloc (1, sizeof (struct dwarf_expr_context));
+  retval = XCNEW (struct dwarf_expr_context);
   retval->stack_len = 0;
   retval->stack_allocated = 10;
-  retval->stack = xmalloc (retval->stack_allocated
-			   * sizeof (struct dwarf_stack_value));
+  retval->stack = XNEWVEC (struct dwarf_stack_value, retval->stack_allocated);
   retval->num_pieces = 0;
   retval->pieces = 0;
   retval->max_recursion_depth = 0x100;
@@ -140,7 +140,7 @@ free_dwarf_expr_context (struct dwarf_expr_context *ctx)
 static void
 free_dwarf_expr_context_cleanup (void *arg)
 {
-  free_dwarf_expr_context (arg);
+  free_dwarf_expr_context ((struct dwarf_expr_context *) arg);
 }
 
 /* Return a cleanup that calls free_dwarf_expr_context.  */
@@ -161,8 +161,7 @@ dwarf_expr_grow_stack (struct dwarf_expr_context *ctx, size_t need)
     {
       size_t newlen = ctx->stack_len + need + 10;
 
-      ctx->stack = xrealloc (ctx->stack,
-			     newlen * sizeof (struct dwarf_stack_value));
+      ctx->stack = XRESIZEVEC (struct dwarf_stack_value, ctx->stack, newlen);
       ctx->stack_allocated = newlen;
     }
 }
@@ -291,7 +290,7 @@ dwarf_expr_fetch_address (struct dwarf_expr_context *ctx, int n)
      for those architectures which require it.  */
   if (gdbarch_integer_to_address_p (ctx->gdbarch))
     {
-      gdb_byte *buf = alloca (ctx->addr_size);
+      gdb_byte *buf = (gdb_byte *) alloca (ctx->addr_size);
       struct type *int_type = get_unsigned_type (ctx->gdbarch,
 						 value_type (result_val));
 
@@ -330,9 +329,8 @@ add_piece (struct dwarf_expr_context *ctx, ULONGEST size, ULONGEST offset)
 
   ctx->num_pieces++;
 
-  ctx->pieces = xrealloc (ctx->pieces,
-			  (ctx->num_pieces
-			   * sizeof (struct dwarf_expr_piece)));
+  ctx->pieces
+    = XRESIZEVEC (struct dwarf_expr_piece, ctx->pieces, ctx->num_pieces);
 
   p = &ctx->pieces[ctx->num_pieces - 1];
   p->location = ctx->location;
@@ -633,7 +631,7 @@ dwarf_block_to_sp_offset (struct gdbarch *gdbarch, const gdb_byte *buf,
 	return 0;
     }
 
-  if (gdbarch_dwarf2_reg_to_regnum (gdbarch, dwarf_reg)
+  if (dwarf_reg_to_regnum (gdbarch, dwarf_reg)
       != gdbarch_sp_regnum (gdbarch))
     return 0;
 
@@ -674,7 +672,7 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 
   while (op_ptr < op_end)
     {
-      enum dwarf_location_atom op = *op_ptr++;
+      enum dwarf_location_atom op = (enum dwarf_location_atom) *op_ptr++;
       ULONGEST result;
       /* Assume the value is not in stack memory.
 	 Code that knows otherwise sets this to 1.
@@ -943,7 +941,8 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 	case DW_OP_breg31:
 	  {
 	    op_ptr = safe_read_sleb128 (op_ptr, op_end, &offset);
-	    result = (ctx->funcs->read_reg) (ctx->baton, op - DW_OP_breg0);
+	    result = (ctx->funcs->read_addr_from_reg) (ctx->baton,
+						       op - DW_OP_breg0);
 	    result += offset;
 	    result_val = value_from_ulongest (address_type, result);
 	  }
@@ -952,7 +951,7 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 	  {
 	    op_ptr = safe_read_uleb128 (op_ptr, op_end, &reg);
 	    op_ptr = safe_read_sleb128 (op_ptr, op_end, &offset);
-	    result = (ctx->funcs->read_reg) (ctx->baton, reg);
+	    result = (ctx->funcs->read_addr_from_reg) (ctx->baton, reg);
 	    result += offset;
 	    result_val = value_from_ulongest (address_type, result);
 	  }
@@ -977,8 +976,9 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 	    if (ctx->location == DWARF_VALUE_MEMORY)
 	      result = dwarf_expr_fetch_address (ctx, 0);
 	    else if (ctx->location == DWARF_VALUE_REGISTER)
-	      result = (ctx->funcs->read_reg) (ctx->baton,
-				     value_as_long (dwarf_expr_fetch (ctx, 0)));
+	      result = (ctx->funcs->read_addr_from_reg)
+			  (ctx->baton,
+			   value_as_long (dwarf_expr_fetch (ctx, 0)));
 	    else
 	      error (_("Not implemented: computing frame "
 		       "base using explicit value operator"));
@@ -1047,7 +1047,7 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 	case DW_OP_GNU_deref_type:
 	  {
 	    int addr_size = (op == DW_OP_deref ? ctx->addr_size : *op_ptr++);
-	    gdb_byte *buf = alloca (addr_size);
+	    gdb_byte *buf = (gdb_byte *) alloca (addr_size);
 	    CORE_ADDR addr = dwarf_expr_fetch_address (ctx, 0);
 	    struct type *type;
 
@@ -1073,7 +1073,7 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 		ULONGEST result =
 		  extract_unsigned_integer (buf, addr_size, byte_order);
 
-		buf = alloca (TYPE_LENGTH (type));
+		buf = (gdb_byte *) alloca (TYPE_LENGTH (type));
 		store_unsigned_integer (buf, TYPE_LENGTH (type),
 					byte_order, result);
 	      }
@@ -1087,7 +1087,7 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 	case DW_OP_xderef_size:
 	  {
 	    int addr_size = (op == DW_OP_xderef ? ctx->addr_size : *op_ptr++);
-	    gdb_byte *buf = alloca (addr_size);
+	    gdb_byte *buf = (gdb_byte *) alloca (addr_size);
 	    CORE_ADDR addr;
 	    ULONGEST addr_ident;
 
@@ -1101,6 +1101,7 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 
 	    (ctx->funcs->read_mem_space) (ctx->baton, buf, addr_ident, addr, addr_size);
 	    result = extract_unsigned_integer (buf, addr_size, byte_order);
+	    result_val = value_from_ulongest (address_type, result);
 	    break;
 	  }
 
@@ -1373,12 +1374,6 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 	  }
 	  goto no_push;
 
-	case DW_OP_push_object_address:
-	  if (ctx->funcs->get_object_address) {
-	    result = ctx->funcs->get_object_address(ctx->baton);
-	    break;
-	  }
-
 	case DW_OP_GNU_uninit:
 	  if (op_ptr != op_end)
 	    error (_("DWARF-2 expression error: DW_OP_GNU_uninit must always "
@@ -1489,10 +1484,7 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 	    type_die.cu_off = uoffset;
 
 	    type = dwarf_get_base_type (ctx, type_die, 0);
-	    result = (ctx->funcs->read_reg) (ctx->baton, reg);
-	    result_val = value_from_ulongest (address_type, result);
-	    result_val = value_from_contents (type,
-					      value_contents_all (result_val));
+	    result_val = ctx->funcs->get_reg_value (ctx->baton, type, reg);
 	  }
 	  break;
 
@@ -1527,6 +1519,12 @@ execute_stack_op (struct dwarf_expr_context *ctx,
 		= value_from_contents (type,
 				       value_contents_all (result_val));
 	  }
+	  break;
+
+	case DW_OP_push_object_address:
+	  /* Return the address of the object we are currently observing.  */
+	  result = (ctx->funcs->get_object_address) (ctx->baton);
+	  result_val = value_from_ulongest (address_type, result);
 	  break;
 
 	default:

@@ -1,6 +1,5 @@
 /* CGEN generic disassembler support code.
-   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2005, 2007
-   Free Software Foundation, Inc.
+   Copyright (C) 1996-2016 Free Software Foundation, Inc.
 
    This file is part of libopcodes.
 
@@ -41,7 +40,8 @@ count_decodable_bits (const CGEN_INSN *insn)
 {
   unsigned mask = CGEN_INSN_BASE_MASK (insn);
   int bits = 0;
-  int m;
+  unsigned m;
+
   for (m = 1; m != 0; m <<= 1)
     {
       if (mask & m)
@@ -50,7 +50,7 @@ count_decodable_bits (const CGEN_INSN *insn)
   return bits;
 }
 
-/* Add an instruction to the hash chain.  */     
+/* Add an instruction to the hash chain.  */
 static void
 add_insn_to_hash_chain (CGEN_INSN_LIST *hentbuf,
 			const CGEN_INSN *insn,
@@ -104,7 +104,7 @@ hash_insn_array (CGEN_CPU_DESC cd,
 		 CGEN_INSN_LIST ** htable,
 		 CGEN_INSN_LIST * hentbuf)
 {
-  int big_p = CGEN_CPU_ENDIAN (cd) == CGEN_ENDIAN_BIG;
+  int big_p = CGEN_CPU_INSN_ENDIAN (cd) == CGEN_ENDIAN_BIG;
   int i;
 
   for (i = count - 1; i >= 0; --i, ++hentbuf)
@@ -142,7 +142,7 @@ hash_insn_list (CGEN_CPU_DESC cd,
 		CGEN_INSN_LIST **htable,
 		CGEN_INSN_LIST *hentbuf)
 {
-  int big_p = CGEN_CPU_ENDIAN (cd) == CGEN_ENDIAN_BIG;
+  int big_p = CGEN_CPU_INSN_ENDIAN (cd) == CGEN_ENDIAN_BIG;
   const CGEN_INSN_LIST *ilist;
 
   for (ilist = insns; ilist != NULL; ilist = ilist->next, ++ hentbuf)

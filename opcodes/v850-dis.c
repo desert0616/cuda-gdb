@@ -1,5 +1,5 @@
 /* Disassemble V850 instructions.
-   Copyright 1996-2013 Free Software Foundation, Inc.
+   Copyright (C) 1996-2016 Free Software Foundation, Inc.
 
    This file is part of the GNU opcodes library.
 
@@ -73,7 +73,7 @@ static const char *const v850_cacheop_names[] =
   "chbwbd", "cibid", "cibiwbd", "cibwbd", "cfald", "cistd", "cildd"
 };
 
-static const int const v850_cacheop_codes[] =
+static const int v850_cacheop_codes[] =
 {
   0x00, 0x20, 0x40, 0x60, 0x61, 0x04, 0x06,
   0x07, 0x24, 0x26, 0x27, 0x44, 0x64, 0x65, -1
@@ -82,7 +82,7 @@ static const int const v850_cacheop_codes[] =
 static const char *const v850_prefop_names[] =
 { "prefi", "prefd" };
 
-static const int const v850_prefop_codes[] =
+static const int v850_prefop_codes[] =
 { 0x00, 0x04, -1};
 
 static void
@@ -94,6 +94,9 @@ print_value (int flags,
   if (flags & V850_PCREL)
     {
       bfd_vma addr = value + memaddr;
+
+      if (flags & V850_INVERSE_PCREL)
+	addr = memaddr - value;
       info->print_address_func (addr, info);
     }
   else if (flags & V850_OPERAND_DISP)
@@ -149,7 +152,7 @@ get_operand_value (const struct v850_operand *operand,
 	  if (operand->flags & V850E_IMMEDIATE16HI)
 	    value <<= 16;
 	  else if (value & 0x8000)
-	    value |= (-1L << 16);
+	    value |= (-1UL << 16);
 
 	  return value;
 	}
@@ -402,7 +405,7 @@ disassemble (bfd_vma memaddr,
 		{
 		  info->fprintf_func (info->stream, ", %s[", prefix);
 		  square = TRUE;
-		}		
+		}
 	      else if (opnum > 1)
 		info->fprintf_func (info->stream, ", %s", prefix);
 

@@ -1,6 +1,6 @@
 /* Target-dependent code for the IA-64 for GDB, the GNU debugger.
 
-   Copyright (C) 1999-2013 Free Software Foundation, Inc.
+   Copyright (C) 1999-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -30,7 +30,6 @@
 #include "frame-unwind.h"
 #include "doublest.h"
 #include "value.h"
-#include "gdb_assert.h"
 #include "objfiles.h"
 #include "elf/common.h"		/* for DT_PLTGOT value */
 #include "elf-bfd.h"
@@ -127,8 +126,6 @@ static CORE_ADDR ia64_find_global_pointer (struct gdbarch *gdbarch,
 #define NUM_IA64_RAW_REGS 462
 
 static int sp_regnum = IA64_GR12_REGNUM;
-static int fp_regnum = IA64_VFP_REGNUM;
-static int lr_regnum = IA64_VRAP_REGNUM;
 
 /* NOTE: we treat the register stack registers r32-r127 as
    pseudo-registers because they may not be accessible via the ptrace
@@ -370,7 +367,7 @@ ia64_dwarf_reg_to_regnum (struct gdbarch *gdbarch, int reg)
    bit ``from''.  */
 
 static long long
-extract_bit_field (const char *bundle, int from, int len)
+extract_bit_field (const gdb_byte *bundle, int from, int len)
 {
   long long result = 0LL;
   int to = from + len;
@@ -406,7 +403,7 @@ extract_bit_field (const char *bundle, int from, int len)
 /* Replace the specified bits in an instruction bundle.  */
 
 static void
-replace_bit_field (char *bundle, long long val, int from, int len)
+replace_bit_field (gdb_byte *bundle, long long val, int from, int len)
 {
   int to = from + len;
   int from_byte = from / 8;
@@ -456,7 +453,7 @@ replace_bit_field (char *bundle, long long val, int from, int len)
    and instruction bundle.  */
 
 static long long
-slotN_contents (char *bundle, int slotnum)
+slotN_contents (gdb_byte *bundle, int slotnum)
 {
   return extract_bit_field (bundle, 5+41*slotnum, 41);
 }
@@ -464,7 +461,7 @@ slotN_contents (char *bundle, int slotnum)
 /* Store an instruction in an instruction bundle.  */
 
 static void
-replace_slotN_contents (char *bundle, long long instr, int slotnum)
+replace_slotN_contents (gdb_byte *bundle, long long instr, int slotnum)
 {
   replace_bit_field (bundle, instr, 5+41*slotnum, 41);
 }
@@ -511,9 +508,9 @@ static const enum instruction_type template_encoding_table[32][3] =
 static CORE_ADDR
 fetch_instruction (CORE_ADDR addr, instruction_type *it, long long *instr)
 {
-  char bundle[BUNDLE_LEN];
+  gdb_byte bundle[BUNDLE_LEN];
   int slotnum = (int) (addr & 0x0f) / SLOT_MULTIPLIER;
-  long long template;
+  long long templ;
   int val;
 
   /* Warn about slot numbers greater than 2.  We used to generate
@@ -544,8 +541,8 @@ fetch_instruction (CORE_ADDR addr, instruction_type *it, long long *instr)
     return 0;
 
   *instr = slotN_contents (bundle, slotnum);
-  template = extract_bit_field (bundle, 0, 5);
-  *it = template_encoding_table[(int)template][slotnum];
+  templ = extract_bit_field (bundle, 0, 5);
+  *it = template_encoding_table[(int)templ][slotnum];
 
   if (slotnum == 2 || (slotnum == 1 && *it == L))
     addr += 16;
@@ -638,12 +635,12 @@ static int
 ia64_memory_insert_breakpoint (struct gdbarch *gdbarch,
 			       struct bp_target_info *bp_tgt)
 {
-  CORE_ADDR addr = bp_tgt->placed_address;
+  CORE_ADDR addr = bp_tgt->placed_address = bp_tgt->reqstd_address;
   gdb_byte bundle[BUNDLE_LEN];
   int slotnum = (int) (addr & 0x0f) / SLOT_MULTIPLIER, shadow_slotnum;
   long long instr_breakpoint;
   int val;
-  int template;
+  int templ;
   struct cleanup *cleanup;
 
   if (slotnum > 2)
@@ -672,8 +669,8 @@ ia64_memory_insert_breakpoint (struct gdbarch *gdbarch,
      a breakpoint on an L-X instruction.  */
   bp_tgt->shadow_len = BUNDLE_LEN - shadow_slotnum;
 
-  template = extract_bit_field (bundle, 0, 5);
-  if (template_encoding_table[template][slotnum] == X)
+  templ = extract_bit_field (bundle, 0, 5);
+  if (template_encoding_table[templ][slotnum] == X)
     {
       /* X unit types can only be used in slot 2, and are actually
 	 part of a 2-slot L-X instruction.  We cannot break at this
@@ -682,7 +679,7 @@ ia64_memory_insert_breakpoint (struct gdbarch *gdbarch,
       gdb_assert (slotnum == 2);
       error (_("Can't insert breakpoint for non-existing slot X"));
     }
-  if (template_encoding_table[template][slotnum] == L)
+  if (template_encoding_table[templ][slotnum] == L)
     {
       /* L unit types can only be used in slot 1.  But the associated
 	 opcode for that instruction is in slot 2, so bump the slot number
@@ -740,7 +737,7 @@ ia64_memory_remove_breakpoint (struct gdbarch *gdbarch,
   int slotnum = (addr & 0x0f) / SLOT_MULTIPLIER, shadow_slotnum;
   long long instr_breakpoint, instr_saved;
   int val;
-  int template;
+  int templ;
   struct cleanup *cleanup;
 
   addr &= ~0x0f;
@@ -762,8 +759,8 @@ ia64_memory_remove_breakpoint (struct gdbarch *gdbarch,
      for addressing the SHADOW_CONTENTS placement.  */
   shadow_slotnum = slotnum;
 
-  template = extract_bit_field (bundle_mem, 0, 5);
-  if (template_encoding_table[template][slotnum] == X)
+  templ = extract_bit_field (bundle_mem, 0, 5);
+  if (template_encoding_table[templ][slotnum] == X)
     {
       /* X unit types can only be used in slot 2, and are actually
 	 part of a 2-slot L-X instruction.  We refuse to insert
@@ -777,7 +774,7 @@ ia64_memory_remove_breakpoint (struct gdbarch *gdbarch,
       do_cleanups (cleanup);
       return -1;
     }
-  if (template_encoding_table[template][slotnum] == L)
+  if (template_encoding_table[templ][slotnum] == L)
     {
       /* L unit types can only be used in slot 1.  But the breakpoint
 	 was actually saved using slot 2, so update the slot number
@@ -830,7 +827,7 @@ ia64_breakpoint_from_pc (struct gdbarch *gdbarch,
   int slotnum = (int) (*pcptr & 0x0f) / SLOT_MULTIPLIER, shadow_slotnum;
   long long instr_fetched;
   int val;
-  int template;
+  int templ;
   struct cleanup *cleanup;
 
   if (slotnum > 2)
@@ -858,13 +855,13 @@ ia64_breakpoint_from_pc (struct gdbarch *gdbarch,
 
   /* Check for L type instruction in slot 1, if present then bump up the slot
      number to the slot 2.  */
-  template = extract_bit_field (bundle, 0, 5);
-  if (template_encoding_table[template][slotnum] == X)
+  templ = extract_bit_field (bundle, 0, 5);
+  if (template_encoding_table[templ][slotnum] == X)
     {
       gdb_assert (slotnum == 2);
       error (_("Can't insert breakpoint for non-existing slot X"));
     }
-  if (template_encoding_table[template][slotnum] == L)
+  if (template_encoding_table[templ][slotnum] == L)
     {
       gdb_assert (slotnum == 1);
       slotnum = 2;
@@ -1104,7 +1101,7 @@ ia64_pseudo_register_write (struct gdbarch *gdbarch, struct regcache *regcache,
       if ((cfm & 0x7f) > regnum - V32_REGNUM) 
 	{
 	  ULONGEST reg_addr = rse_address_add (bsp, (regnum - V32_REGNUM));
-	  write_memory (reg_addr, (void *) buf, 8);
+	  write_memory (reg_addr, buf, 8);
 	}
     }
   else if (IA64_NAT0_REGNUM <= regnum && regnum <= IA64_NAT31_REGNUM)
@@ -1165,7 +1162,7 @@ ia64_pseudo_register_write (struct gdbarch *gdbarch, struct regcache *regcache,
 	    }
 	  else
 	    {
-	      char nat_buf[8];
+	      gdb_byte nat_buf[8];
 	      nat_collection = read_memory_integer (nat_addr, 8, byte_order);
 	      if (natN_val)
 		nat_collection |= natN_mask;
@@ -1224,7 +1221,7 @@ ia64_register_to_value (struct frame_info *frame, int regnum,
 			int *optimizedp, int *unavailablep)
 {
   struct gdbarch *gdbarch = get_frame_arch (frame);
-  char in[MAX_REGISTER_SIZE];
+  gdb_byte in[MAX_REGISTER_SIZE];
 
   /* Convert to TYPE.  */
   if (!get_frame_register_bytes (frame, regnum, 0,
@@ -1242,7 +1239,7 @@ ia64_value_to_register (struct frame_info *frame, int regnum,
                          struct type *valtype, const gdb_byte *in)
 {
   struct gdbarch *gdbarch = get_frame_arch (frame);
-  char out[MAX_REGISTER_SIZE];
+  gdb_byte out[MAX_REGISTER_SIZE];
   convert_typed_floating (in, valtype, out, ia64_ext_type (gdbarch));
   put_frame_register (frame, regnum, out);
 }
@@ -1400,7 +1397,6 @@ examine_prologue (CORE_ADDR pc, CORE_ADDR lim_pc,
       && it == M && ((instr & 0x1ee0000003fLL) == 0x02c00000000LL))
     {
       /* alloc - start of a regular function.  */
-      int sor = (int) ((instr & 0x00078000000LL) >> 27);
       int sol = (int) ((instr & 0x00007f00000LL) >> 20);
       int sof = (int) ((instr & 0x000000fe000LL) >> 13);
       int rN = (int) ((instr & 0x00000001fc0LL) >> 6);
@@ -1851,10 +1847,10 @@ ia64_frame_cache (struct frame_info *this_frame, void **this_cache)
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   struct ia64_frame_cache *cache;
   gdb_byte buf[8];
-  CORE_ADDR cfm, psr;
+  CORE_ADDR cfm;
 
   if (*this_cache)
-    return *this_cache;
+    return (struct ia64_frame_cache *) *this_cache;
 
   cache = ia64_alloc_frame_cache ();
   *this_cache = cache;
@@ -1869,7 +1865,6 @@ ia64_frame_cache (struct frame_info *this_frame, void **this_cache)
   cache->bsp = extract_unsigned_integer (buf, 8, byte_order);
   
   get_frame_register (this_frame, IA64_PSR_REGNUM, buf);
-  psr = extract_unsigned_integer (buf, 8, byte_order);
 
   get_frame_register (this_frame, IA64_CFM_REGNUM, buf);
   cfm = extract_unsigned_integer (buf, 8, byte_order);
@@ -2241,7 +2236,7 @@ ia64_sigtramp_frame_cache (struct frame_info *this_frame, void **this_cache)
   gdb_byte buf[8];
 
   if (*this_cache)
-    return *this_cache;
+    return (struct ia64_frame_cache *) *this_cache;
 
   cache = ia64_alloc_frame_cache ();
 
@@ -2490,7 +2485,7 @@ ia64_access_reg (unw_addr_space_t as, unw_regnum_t uw_regnum, unw_word_t *val,
 {
   int regnum = ia64_uw2gdb_regnum (uw_regnum);
   unw_word_t bsp, sof, sol, cfm, psr, ip;
-  struct frame_info *this_frame = arg;
+  struct frame_info *this_frame = (struct frame_info *) arg;
   struct gdbarch *gdbarch = get_frame_arch (this_frame);
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   long new_sof, old_sof;
@@ -2553,12 +2548,12 @@ ia64_access_fpreg (unw_addr_space_t as, unw_regnum_t uw_regnum,
 		   unw_fpreg_t *val, int write, void *arg)
 {
   int regnum = ia64_uw2gdb_regnum (uw_regnum);
-  struct frame_info *this_frame = arg;
+  struct frame_info *this_frame = (struct frame_info *) arg;
   
   /* We never call any libunwind routines that need to write registers.  */
   gdb_assert (!write);
 
-  get_frame_register (this_frame, regnum, (char *) val);
+  get_frame_register (this_frame, regnum, (gdb_byte *) val);
 
   return 0;
 }
@@ -2570,7 +2565,7 @@ ia64_access_rse_reg (unw_addr_space_t as, unw_regnum_t uw_regnum,
 {
   int regnum = ia64_uw2gdb_regnum (uw_regnum);
   unw_word_t bsp, sof, sol, cfm, psr, ip;
-  struct regcache *regcache = arg;
+  struct regcache *regcache = (struct regcache *) arg;
   struct gdbarch *gdbarch = get_regcache_arch (regcache);
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   long new_sof, old_sof;
@@ -2634,12 +2629,12 @@ ia64_access_rse_fpreg (unw_addr_space_t as, unw_regnum_t uw_regnum,
 		       unw_fpreg_t *val, int write, void *arg)
 {
   int regnum = ia64_uw2gdb_regnum (uw_regnum);
-  struct regcache *regcache = arg;
+  struct regcache *regcache = (struct regcache *) arg;
   
   /* We never call any libunwind routines that need to write registers.  */
   gdb_assert (!write);
 
-  regcache_cooked_read (regcache, regnum, (char *) val);
+  regcache_cooked_read (regcache, regnum, (gdb_byte *) val);
 
   return 0;
 }
@@ -2664,9 +2659,9 @@ ia64_access_mem (unw_addr_space_t as,
 
   /* XXX do we need to normalize byte-order here?  */
   if (write)
-    return target_write_memory (addr, (char *) val, sizeof (unw_word_t));
+    return target_write_memory (addr, (gdb_byte *) val, sizeof (unw_word_t));
   else
-    return target_read_memory (addr, (char *) val, sizeof (unw_word_t));
+    return target_read_memory (addr, (gdb_byte *) val, sizeof (unw_word_t));
 }
 
 /* Call low-level function to access the kernel unwind table.  */
@@ -3228,7 +3223,7 @@ ia64_extract_return_value (struct type *type, struct regcache *regcache,
   float_elt_type = is_float_or_hfa_type (type);
   if (float_elt_type != NULL)
     {
-      char from[MAX_REGISTER_SIZE];
+      gdb_byte from[MAX_REGISTER_SIZE];
       int offset = 0;
       int regnum = IA64_FR8_REGNUM;
       int n = TYPE_LENGTH (type) / TYPE_LENGTH (float_elt_type);
@@ -3293,7 +3288,7 @@ ia64_store_return_value (struct type *type, struct regcache *regcache,
   float_elt_type = is_float_or_hfa_type (type);
   if (float_elt_type != NULL)
     {
-      char to[MAX_REGISTER_SIZE];
+      gdb_byte to[MAX_REGISTER_SIZE];
       int offset = 0;
       int regnum = IA64_FR8_REGNUM;
       int n = TYPE_LENGTH (type) / TYPE_LENGTH (float_elt_type);
@@ -3651,11 +3646,12 @@ ia64_convert_from_func_ptr_addr (struct gdbarch *gdbarch, CORE_ADDR addr,
   /* There are also descriptors embedded in vtables.  */
   if (s)
     {
-      struct minimal_symbol *minsym;
+      struct bound_minimal_symbol minsym;
 
       minsym = lookup_minimal_symbol_by_pc (addr);
 
-      if (minsym && is_vtable_name (SYMBOL_LINKAGE_NAME (minsym)))
+      if (minsym.minsym
+	  && is_vtable_name (MSYMBOL_LINKAGE_NAME (minsym.minsym)))
 	return read_memory_unsigned_integer (addr, 8, byte_order);
     }
 
@@ -3723,7 +3719,7 @@ ia64_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
   int nslots, rseslots, memslots, slotnum, nfuncargs;
   int floatreg;
   ULONGEST bsp;
-  CORE_ADDR funcdescaddr, pc, global_pointer;
+  CORE_ADDR funcdescaddr, global_pointer;
   CORE_ADDR func_addr = find_function_addr (function, NULL);
 
   nslots = 0;
@@ -3783,7 +3779,7 @@ ia64_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
           && TYPE_CODE (type) == TYPE_CODE_PTR 
 	  && TYPE_CODE (TYPE_TARGET_TYPE (type)) == TYPE_CODE_FUNC)
 	{
-	  char val_buf[8];
+	  gdb_byte val_buf[8];
 	  ULONGEST faddr = extract_unsigned_integer (value_contents (arg),
 						     8, byte_order);
 	  store_unsigned_integer (val_buf, 8, byte_order,
@@ -3807,7 +3803,7 @@ ia64_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
       argoffset = 0;
       while (len > 0)
 	{
-	  char val_buf[8];
+	  gdb_byte val_buf[8];
 
 	  memset (val_buf, 0, 8);
           if (!ia64_struct_type_p (type) && len < 8)
@@ -3854,11 +3850,11 @@ ia64_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
 	  len = TYPE_LENGTH (type);
 	  while (len > 0 && floatreg < IA64_FR16_REGNUM)
 	    {
-	      char to[MAX_REGISTER_SIZE];
+	      gdb_byte to[MAX_REGISTER_SIZE];
 	      convert_typed_floating (value_contents (arg) + argoffset,
 				      float_elt_type, to,
 				      ia64_ext_type (gdbarch));
-	      regcache_cooked_write (regcache, floatreg, (void *)to);
+	      regcache_cooked_write (regcache, floatreg, to);
 	      floatreg++;
 	      argoffset += TYPE_LENGTH (float_elt_type);
 	      len -= TYPE_LENGTH (float_elt_type);
@@ -3963,7 +3959,7 @@ ia64_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   if (arches != NULL)
     return arches->gdbarch;
 
-  tdep = xzalloc (sizeof (struct gdbarch_tdep));
+  tdep = XCNEW (struct gdbarch_tdep);
   gdbarch = gdbarch_alloc (&info, tdep);
 
   tdep->size_of_register_frame = ia64_size_of_register_frame;

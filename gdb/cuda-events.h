@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -29,6 +29,6 @@ typedef enum {
 
 void cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind);
 void cuda_process_event  (CUDBGEvent *event);
-void cuda_event_post_process (void);
+void cuda_event_post_process (bool reset_bpt);
 
 #endif

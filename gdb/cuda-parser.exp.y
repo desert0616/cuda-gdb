@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2016 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -25,7 +25,7 @@
 #include "cuda-parser.h"
 
 /*Input string */
-struct {
+struct cuda_parser_input_st {
   char     *buffer;  // copy of the string to parse
   uint32_t  size;    // size of the buffer in bytes
   char     *ptr;     // ptr to the next chunk to parse within the string
@@ -217,7 +217,7 @@ new_request (filter_type_t type, request_value_t value, compare_t cmp)
       else
         result.max_requests *= 2;
 
-      result.requests = xrealloc (result.requests, result.max_requests * sizeof (*request));
+      result.requests = (request_t *) xrealloc (result.requests, result.max_requests * sizeof (*request));
     }
 
   request = &result.requests[result.num_requests-1];
@@ -244,7 +244,7 @@ handle_query (filter_type_t type)
 {
   if (handled_filters & type)
     cuda_parser_error ("Duplicate filter type");
-  handled_filters |= type;
+  handled_filters = (filter_type_t) (handled_filters | type);
   value_buffer.cudim3 = (CuDim3) {CUDA_CURRENT, CUDA_CURRENT, CUDA_CURRENT};
   new_request (type, value_buffer, CMP_NONE);
   reset_value_buffer ();
@@ -262,7 +262,7 @@ handle_switch (filter_type_t type)
 {
   if (handled_filters & type)
     cuda_parser_error ("Duplicate filter type");
-  handled_filters |= type;
+  handled_filters = (filter_type_t) (handled_filters | type);
   new_request (type, value_buffer, CMP_NONE);
   reset_value_buffer ();
 }
@@ -272,7 +272,7 @@ handle_filter (filter_type_t type)
 {
   if (handled_filters & type)
     cuda_parser_error ("Duplicate filter type");
-  handled_filters |= type;
+  handled_filters = (filter_type_t) (handled_filters | type);
   new_request (type, value_buffer, CMP_NONE);
   reset_value_buffer ();
 }
@@ -365,9 +365,9 @@ cuda_parser_initialize (const char *input, command_t command,
   /* Initialize the input buffer */
   if (cuda_parser_input.buffer)
     xfree (cuda_parser_input.buffer);
-  cuda_parser_input.buffer = xmalloc (size);
+  cuda_parser_input.buffer = (char *) xmalloc (size);
   cuda_parser_input.size   = size - 1; // do not pass the '\0' character
-  cuda_parser_input.ptr    = memcpy (cuda_parser_input.buffer, input, size);
+  cuda_parser_input.ptr    = (char *) memcpy (cuda_parser_input.buffer, input, size);
 
   /* Initialize the temporary buffer */
   reset_value_buffer ();

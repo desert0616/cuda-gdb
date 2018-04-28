@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2015-2016 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -22,7 +22,7 @@
 #include "regcache.h"
 #include "completer.h"
 #include "readline/readline.h"
-#include "gdb_assert.h"
+#include "common-defs.h"
 
 #include "cuda-api.h"
 #include "cuda-tdep.h"
@@ -40,7 +40,7 @@ void _initialize_cuda_corelow (void);
 struct target_ops cuda_core_ops;
 static CudaCore *cuda_core = NULL;
 
-static void cuda_core_close (int quitting);
+static void cuda_core_close (struct target_ops *ops);
 
 static void cuda_core_close_cleanup (void *ignore);
 
@@ -121,7 +121,7 @@ cuda_core_register_tid (uint32_t tid)
 }
 
 void
-cuda_core_load_api (char *filename)
+cuda_core_load_api (const char *filename)
 {
   CUDBGAPI api;
 
@@ -212,7 +212,7 @@ cuda_find_first_valid_lane (void)
   cuda_iterator itr;
   cuda_coords_t c;
   itr = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, NULL,
-                              CUDA_SELECT_VALID | CUDA_SELECT_SNGL);
+                              (cuda_select_t) (CUDA_SELECT_VALID | CUDA_SELECT_SNGL));
   cuda_iterator_start (itr);
   c  = cuda_iterator_get_current (itr);
   cuda_iterator_destroy (itr);
@@ -225,24 +225,25 @@ cuda_find_first_valid_lane (void)
 }
 
 static void
-cuda_core_open (char *filename, int from_tty)
+cuda_core_open (const char *filename, int from_tty)
 {
   struct inferior *inf;
   struct cleanup *old_chain, *old_chain2;
   volatile struct gdb_exception e;
+  char *expanded_filename;
 
   target_preopen (from_tty);
 
   if (filename == NULL)
     error (_("No core file specified."));
 
-  filename = tilde_expand (filename);
-  old_chain = make_cleanup (xfree, filename);
+  expanded_filename = tilde_expand (filename);
+  old_chain = make_cleanup (xfree, expanded_filename);
   old_chain2 = make_cleanup (cuda_core_close_cleanup, 0 /*ignore*/);
 
   cuda_core_load_api (filename);
 
-  TRY_CATCH (e, RETURN_MASK_ALL)
+  TRY
     {
       /* Push the target */
       push_target (&cuda_core_ops);
@@ -282,28 +283,32 @@ cuda_core_open (char *filename, int from_tty)
 
       /* Now, set up the frame cache, and print the top of stack.  */
       reinit_frame_cache ();
-      print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC);
+      print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC, 1);
     }
-  if (e.reason < 0)
+  CATCH (e, RETURN_MASK_ALL)
     {
-      pop_all_targets_above (process_stratum - 1, 0);
+      if (e.reason < 0)
+	{
+	  pop_all_targets_at_and_above (process_stratum);
 
-      inferior_ptid = null_ptid;
-      discard_all_inferiors ();
+	  inferior_ptid = null_ptid;
+	  discard_all_inferiors ();
 
-      registers_changed ();
-      reinit_frame_cache ();
-      cuda_cleanup ();
+	  registers_changed ();
+	  reinit_frame_cache ();
+	  cuda_cleanup ();
 
-      error (_("Could not open CUDA core file: %s"), e.message);
+	  error (_("Could not open CUDA core file: %s"), e.message);
+	}
     }
+  END_CATCH
 
   discard_cleanups (old_chain2);
   do_cleanups (old_chain);
 }
 
 static void
-cuda_core_close (int quitting)
+cuda_core_close (struct target_ops *ops)
 {
   inferior_ptid = null_ptid;
   discard_all_inferiors ();
@@ -312,7 +317,7 @@ cuda_core_close (int quitting)
 }
 
 static void
-cuda_core_detach (struct target_ops *ops, char *args, int from_tty)
+cuda_core_detach (struct target_ops *ops, const char *args, int from_tty)
 {
   if (args)
     error (_("Too many arguments"));

@@ -1,6 +1,6 @@
 /* GNU/Linux native-dependent code for debugging multiple forks.
 
-   Copyright (C) 2005-2013 Free Software Foundation, Inc.
+   Copyright (C) 2005-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -20,21 +20,19 @@
 #include "defs.h"
 #include "arch-utils.h"
 #include "inferior.h"
+#include "infrun.h"
 #include "regcache.h"
 #include "gdbcmd.h"
 #include "infcall.h"
 #include "objfiles.h"
-#include "gdb_assert.h"
-#include "gdb_string.h"
 #include "linux-fork.h"
 #include "linux-nat.h"
 #include "gdbthread.h"
 #include "source.h"
 
-#include <sys/ptrace.h>
+#include "nat/gdb_ptrace.h"
 #include "gdb_wait.h"
-#include <sys/param.h>
-#include "gdb_dirent.h"
+#include <dirent.h>
 #include <ctype.h>
 
 struct fork_info *fork_list;
@@ -65,6 +63,21 @@ forks_exist_p (void)
   return (fork_list != NULL);
 }
 
+/* Return the last fork in the list.  */
+
+static struct fork_info *
+find_last_fork (void)
+{
+  struct fork_info *last;
+
+  if (fork_list == NULL)
+    return NULL;
+
+  for (last = fork_list; last->next != NULL; last = last->next)
+    ;
+  return last;
+}
+
 /* Add a fork to the internal fork list.  */
 
 struct fork_info *
@@ -72,21 +85,29 @@ add_fork (pid_t pid)
 {
   struct fork_info *fp;
 
-  if (fork_list == NULL && pid != PIDGET (inferior_ptid))
+  if (fork_list == NULL && pid != ptid_get_pid (inferior_ptid))
     {
       /* Special case -- if this is the first fork in the list
 	 (the list is hitherto empty), and if this new fork is
 	 NOT the current inferior_ptid, then add inferior_ptid
 	 first, as a special zeroeth fork id.  */
       highest_fork_num = -1;
-      add_fork (PIDGET (inferior_ptid));	/* safe recursion */
+      add_fork (ptid_get_pid (inferior_ptid));	/* safe recursion */
     }
 
-  fp = XZALLOC (struct fork_info);
+  fp = XCNEW (struct fork_info);
   fp->ptid = ptid_build (pid, pid, 0);
   fp->num = ++highest_fork_num;
-  fp->next = fork_list;
-  fork_list = fp;
+
+  if (fork_list == NULL)
+    fork_list = fp;
+  else
+    {
+      struct fork_info *last = find_last_fork ();
+
+      last->next = fp;
+    }
+
   return fp;
 }
 
@@ -269,7 +290,7 @@ fork_load_infrun_state (struct fork_info *fp)
 static void
 fork_save_infrun_state (struct fork_info *fp, int clobber_regs)
 {
-  char path[MAXPATHLEN];
+  char path[PATH_MAX];
   struct dirent *de;
   DIR *d;
 
@@ -283,7 +304,8 @@ fork_save_infrun_state (struct fork_info *fp, int clobber_regs)
     {
       /* Now save the 'state' (file position) of all open file descriptors.
 	 Unfortunately fork does not take care of that for us...  */
-      snprintf (path, MAXPATHLEN, "/proc/%ld/fd", (long) PIDGET (fp->ptid));
+      snprintf (path, PATH_MAX, "/proc/%ld/fd",
+		(long) ptid_get_pid (fp->ptid));
       if ((d = opendir (path)) != NULL)
 	{
 	  long tmp;
@@ -298,8 +320,7 @@ fork_save_infrun_state (struct fork_info *fp, int clobber_regs)
 		fp->maxfd = tmp;
 	    }
 	  /* Allocate array of file positions.  */
-	  fp->filepos = xrealloc (fp->filepos,
-				  (fp->maxfd + 1) * sizeof (*fp->filepos));
+	  fp->filepos = XRESIZEVEC (off_t, fp->filepos, fp->maxfd + 1);
 
 	  /* Initialize to -1 (invalid).  */
 	  for (tmp = 0; tmp <= fp->maxfd; tmp++)
@@ -334,7 +355,7 @@ linux_fork_killall (void)
 
   for (fp = fork_list; fp; fp = fp->next)
     {
-      pid = PIDGET (fp->ptid);
+      pid = ptid_get_pid (fp->ptid);
       do {
 	/* Use SIGKILL instead of PTRACE_KILL because the former works even
 	   if the thread is running, while the later doesn't.  */
@@ -355,12 +376,13 @@ linux_fork_killall (void)
 void
 linux_fork_mourn_inferior (void)
 {
+  struct fork_info *last;
+  int status;
+
   /* Wait just one more time to collect the inferior's exit status.
      Do not check whether this succeeds though, since we may be
      dealing with a process that we attached to.  Such a process will
      only report its exit status to its original parent.  */
-  int status;
-
   waitpid (ptid_get_pid (inferior_ptid), &status, 0);
 
   /* OK, presumably inferior_ptid is the one who has exited.
@@ -373,7 +395,8 @@ linux_fork_mourn_inferior (void)
      inferior_ptid yet.  */
   gdb_assert (fork_list);
 
-  fork_load_infrun_state (fork_list);
+  last = find_last_fork ();
+  fork_load_infrun_state (last);
   printf_filtered (_("[Switching to %s]\n"),
 		   target_pid_to_str (inferior_ptid));
 
@@ -387,13 +410,13 @@ linux_fork_mourn_inferior (void)
    the first available.  */
 
 void
-linux_fork_detach (char *args, int from_tty)
+linux_fork_detach (const char *args, int from_tty)
 {
   /* OK, inferior_ptid is the one we are detaching from.  We need to
      delete it from the fork_list, and switch to the next available
      fork.  */
 
-  if (ptrace (PTRACE_DETACH, PIDGET (inferior_ptid), 0, 0))
+  if (ptrace (PTRACE_DETACH, ptid_get_pid (inferior_ptid), 0, 0))
     error (_("Unable to detach %s"), target_pid_to_str (inferior_ptid));
 
   delete_fork (inferior_ptid);
@@ -417,7 +440,7 @@ linux_fork_detach (char *args, int from_tty)
 static void
 inferior_call_waitpid_cleanup (void *fp)
 {
-  struct fork_info *oldfp = fp;
+  struct fork_info *oldfp = (struct fork_info *) fp;
 
   if (oldfp)
     {
@@ -455,9 +478,10 @@ inferior_call_waitpid (ptid_t pptid, int pid)
   old_cleanup = make_cleanup (inferior_call_waitpid_cleanup, oldfp);
 
   /* Get the waitpid_fn.  */
-  if (lookup_minimal_symbol ("waitpid", NULL, NULL) != NULL)
+  if (lookup_minimal_symbol ("waitpid", NULL, NULL).minsym != NULL)
     waitpid_fn = find_function_in_inferior ("waitpid", &waitpid_objf);
-  if (!waitpid_fn && lookup_minimal_symbol ("_waitpid", NULL, NULL) != NULL)
+  if (!waitpid_fn
+      && lookup_minimal_symbol ("_waitpid", NULL, NULL).minsym != NULL)
     waitpid_fn = find_function_in_inferior ("_waitpid", &waitpid_objf);
   if (!waitpid_fn)
     goto out;
@@ -498,7 +522,7 @@ delete_checkpoint_command (char *args, int from_tty)
     error (_("\
 Please switch to another checkpoint before deleting the current one"));
 
-  if (ptrace (PTRACE_KILL, PIDGET (ptid), 0, 0))
+  if (ptrace (PTRACE_KILL, ptid_get_pid (ptid), 0, 0))
     error (_("Unable to kill pid %s"), target_pid_to_str (ptid));
 
   fi = find_fork_ptid (ptid);
@@ -517,7 +541,7 @@ Please switch to another checkpoint before deleting the current one"));
   if ((!find_thread_ptid (pptid) && find_fork_ptid (pptid))
       || (find_thread_ptid (pptid) && is_stopped (pptid)))
     {
-      if (inferior_call_waitpid (pptid, PIDGET (ptid)))
+      if (inferior_call_waitpid (pptid, ptid_get_pid (ptid)))
         warning (_("Unable to wait pid %s"), target_pid_to_str (ptid));
     }
 }
@@ -538,7 +562,7 @@ detach_checkpoint_command (char *args, int from_tty)
     error (_("\
 Please switch to another checkpoint before detaching the current one"));
 
-  if (ptrace (PTRACE_DETACH, PIDGET (ptid), 0, 0))
+  if (ptrace (PTRACE_DETACH, ptid_get_pid (ptid), 0, 0))
     error (_("Unable to detach %s"), target_pid_to_str (ptid));
 
   if (from_tty)
@@ -592,11 +616,11 @@ info_checkpoints_command (char *arg, int from_tty)
 	printf_filtered (_(", line %d"), sal.line);
       if (!sal.symtab && !sal.line)
 	{
-	  struct minimal_symbol *msym;
+	  struct bound_minimal_symbol msym;
 
 	  msym = lookup_minimal_symbol_by_pc (pc);
-	  if (msym)
-	    printf_filtered (", <%s>", SYMBOL_LINKAGE_NAME (msym));
+	  if (msym.minsym)
+	    printf_filtered (", <%s>", MSYMBOL_LINKAGE_NAME (msym.minsym));
 	}
 
       putchar_filtered ('\n');
@@ -668,10 +692,10 @@ checkpoint_command (char *args, int from_tty)
   
   /* Make the inferior fork, record its (and gdb's) state.  */
 
-  if (lookup_minimal_symbol ("fork", NULL, NULL) != NULL)
+  if (lookup_minimal_symbol ("fork", NULL, NULL).minsym != NULL)
     fork_fn = find_function_in_inferior ("fork", &fork_objf);
   if (!fork_fn)
-    if (lookup_minimal_symbol ("_fork", NULL, NULL) != NULL)
+    if (lookup_minimal_symbol ("_fork", NULL, NULL).minsym != NULL)
       fork_fn = find_function_in_inferior ("fork", &fork_objf);
   if (!fork_fn)
     error (_("checkpoint: can't find fork function in inferior."));
@@ -681,7 +705,7 @@ checkpoint_command (char *args, int from_tty)
 
   /* Tell linux-nat.c that we're checkpointing this inferior.  */
   old_chain = make_cleanup_restore_integer (&checkpointing_pid);
-  checkpointing_pid = PIDGET (inferior_ptid);
+  checkpointing_pid = ptid_get_pid (inferior_ptid);
 
   ret = call_function_by_hand (fork_fn, 0, &ret);
   do_cleanups (old_chain);
@@ -690,12 +714,15 @@ checkpoint_command (char *args, int from_tty)
 
   retpid = value_as_long (ret);
   get_last_target_status (&last_target_ptid, &last_target_waitstatus);
+
+  fp = find_fork_pid (retpid);
+
   if (from_tty)
     {
       int parent_pid;
 
-      printf_filtered (_("checkpoint: fork returned pid %ld.\n"),
-		       (long) retpid);
+      printf_filtered (_("checkpoint %d: fork returned pid %ld.\n"),
+		       fp != NULL ? fp->num : -1, (long) retpid);
       if (info_verbose)
 	{
 	  parent_pid = ptid_get_lwp (last_target_ptid);
@@ -706,7 +733,6 @@ checkpoint_command (char *args, int from_tty)
 	}
     }
 
-  fp = find_fork_pid (retpid);
   if (!fp)
     error (_("Failed to find new fork"));
   fork_save_infrun_state (fp, 1);
@@ -732,7 +758,7 @@ linux_fork_context (struct fork_info *newfp, int from_tty)
   printf_filtered (_("Switching to %s\n"),
 		   target_pid_to_str (inferior_ptid));
 
-  print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC);
+  print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC, 1);
 }
 
 /* Switch inferior process (checkpoint) context, by checkpoint id.  */

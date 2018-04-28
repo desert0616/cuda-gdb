@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -26,30 +26,30 @@
 context_t      context_new (uint64_t context_id, uint32_t dev_id);
 void           context_delete (context_t);
 
-uint64_t       context_get_id            (context_t this);
-uint32_t       context_get_device_id     (context_t this);
-modules_t      context_get_modules       (context_t this);
-void           context_print             (context_t this);
+uint64_t       context_get_id            (context_t);
+uint32_t       context_get_device_id     (context_t);
+modules_t      context_get_modules       (context_t);
+void           context_print             (context_t);
 
-module_t       context_find_module_by_id (context_t this, uint64_t module_id);
+module_t       context_find_module_by_id (context_t, uint64_t module_id);
 
 /* Contexts */
 contexts_t     contexts_new              (void);
-void           contexts_delete           (contexts_t this);
-void           contexts_print            (contexts_t this);
+void           contexts_delete           (contexts_t);
+void           contexts_print            (contexts_t);
 
-void           contexts_add_context             (contexts_t this, context_t context);
-context_t      contexts_remove_context          (contexts_t this, context_t context);
-void           contexts_stack_context           (contexts_t this, context_t context, uint32_t tid);
-context_t      contexts_unstack_context         (contexts_t this, uint32_t tid);
-context_t      contexts_get_active_context      (contexts_t this, uint32_t tid);
-bool           contexts_is_any_context_present  (contexts_t this);
-bool           contexts_is_active_context       (contexts_t this, context_t context);
+void           contexts_add_context             (contexts_t, context_t context);
+context_t      contexts_remove_context          (contexts_t, context_t context);
+void           contexts_stack_context           (contexts_t, context_t context, uint32_t tid);
+context_t      contexts_unstack_context         (contexts_t, uint32_t tid);
+context_t      contexts_get_active_context      (contexts_t, uint32_t tid);
+bool           contexts_is_any_context_present  (contexts_t);
+bool           contexts_is_active_context       (contexts_t, context_t context);
 
-context_t      contexts_find_context_by_id      (contexts_t this, uint64_t context_id);
-context_t      contexts_find_context_by_address (contexts_t this, CORE_ADDR addr);
+context_t      contexts_find_context_by_id      (contexts_t, uint64_t context_id);
+context_t      contexts_find_context_by_address (contexts_t, CORE_ADDR addr);
 
-uint32_t       contexts_get_list_size           (contexts_t this);
+uint32_t       contexts_get_list_size           (contexts_t);
 
 /* Current Context */
 context_t get_current_context     (void);

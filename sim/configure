@@ -634,7 +634,8 @@ CFLAGS
 LDFLAGS
 LIBS
 CPPFLAGS'
-ac_subdirs_all='arm
+ac_subdirs_all='aarch64
+arm
 avr
 bfin
 cr16
@@ -652,15 +653,16 @@ microblaze
 mips
 mn10300
 moxie
+msp430
 rl78
 rx
 sh64
 sh
 erc32
 ppc
+ft32
 v850
 testsuite
-common
 igen'
 
 # Initialize some variables set by options.
@@ -1279,7 +1281,7 @@ Optional Features:
   --disable-option-checking  ignore unrecognized --enable/--with options
   --disable-FEATURE       do not include FEATURE (same as --enable-FEATURE=no)
   --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
-  --enable-sim
+  --enable-sim            Enable the GNU simulator
 
 Some influential environment variables:
   CC          C compiler command
@@ -3619,20 +3621,24 @@ if test "${enable_sim}" != no; then
 
 
 
-sim_testsuite=no
-sim_common=yes
 sim_igen=no
 sim_arch=
 case "${target}" in
+   aarch64*-*-*)
+
+  sim_arch=aarch64
+
+
+subdirs="$subdirs aarch64"
+
+
+       ;;
    arm*-*-*)
 
   sim_arch=arm
+  subdirs="$subdirs arm"
 
 
-subdirs="$subdirs arm"
-
-
-       sim_testsuite=yes
        ;;
    avr*-*-*)
 
@@ -3647,7 +3653,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs bfin"
 
 
-       sim_testsuite=yes
        ;;
    cr16*-*-*)
 
@@ -3655,7 +3660,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs cr16"
 
 
-       sim_testsuite=yes
        ;;
    cris-*-* | crisv32-*-*)
 
@@ -3663,7 +3667,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs cris"
 
 
-       sim_testsuite=yes
        ;;
    d10v-*-*)
 
@@ -3678,7 +3681,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs frv"
 
 
-       sim_testsuite=yes
        ;;
    h8300*-*-*)
 
@@ -3686,7 +3688,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs h8300"
 
 
-       sim_testsuite=yes
        ;;
    iq2000-*-*)
 
@@ -3694,7 +3695,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs iq2000"
 
 
-       sim_testsuite=yes
        ;;
    lm32-*-*)
 
@@ -3702,7 +3702,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs lm32"
 
 
-       sim_testsuite=yes
        ;;
    m32c-*-*)
 
@@ -3717,7 +3716,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs m32r"
 
 
-       sim_testsuite=yes
        ;;
    m68hc11-*-*|m6811-*-*)
 
@@ -3725,7 +3723,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs m68hc11"
 
 
-       sim_testsuite=yes
        ;;
    mcore-*-*)
 
@@ -3733,7 +3730,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs mcore"
 
 
-       sim_testsuite=yes
        ;;
    microblaze-*-*)
 
@@ -3741,7 +3737,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs microblaze"
 
 
-       sim_testsuite=yes
        ;;
    mips*-*-*)
 
@@ -3749,7 +3744,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs mips"
 
 
-       sim_testsuite=yes
        sim_igen=yes
        ;;
    mn10300*-*-*)
@@ -3766,7 +3760,13 @@ subdirs="$subdirs arm"
   subdirs="$subdirs moxie"
 
 
-       sim_testsuite=yes
+       ;;
+   msp430*-*-*)
+
+  sim_arch=msp430
+  subdirs="$subdirs msp430"
+
+
        ;;
    rl78-*-*)
 
@@ -3788,7 +3788,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs sh64"
 
 
-       sim_testsuite=yes
        ;;
    sh*-*-*)
 
@@ -3796,7 +3795,6 @@ subdirs="$subdirs arm"
   subdirs="$subdirs sh"
 
 
-       sim_testsuite=yes
        ;;
    sparc-*-rtems*|sparc-*-elf*)
 
@@ -3804,12 +3802,18 @@ subdirs="$subdirs arm"
   subdirs="$subdirs erc32"
 
 
-       sim_testsuite=yes
        ;;
    powerpc*-*-*)
 
   sim_arch=ppc
   subdirs="$subdirs ppc"
+
+
+       ;;
+   ft32-*-*)
+
+  sim_arch=ft32
+  subdirs="$subdirs ft32"
 
 
        ;;
@@ -3820,23 +3824,12 @@ subdirs="$subdirs arm"
 
 
        sim_igen=yes
-       sim_testsuite=yes
-       ;;
-   *)
-       # No simulator subdir, so the subdir "common" isn't needed.
-       sim_common=no
        ;;
 esac
 
 
-   if test "$sim_testsuite" = yes; then
-      subdirs="$subdirs testsuite"
+   subdirs="$subdirs testsuite"
 
-   fi
-   if test "$sim_common" = yes; then
-      subdirs="$subdirs common"
-
-   fi
    if test "$sim_igen" = yes; then
       subdirs="$subdirs igen"
 

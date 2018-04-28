@@ -22,7 +22,7 @@
 
 #include "block.h"
 #include "command.h"
-#include "gdb_string.h"
+#include "string.h"
 #include "hashtab.h"
 #include "source.h"
 #include "value.h"
@@ -100,7 +100,7 @@ modname_eq (const struct modtab_entry *lhs, const struct modtab_entry *rhs)
 static struct htab *
 modtab_init (struct objfile *objfile)
 {
-  struct htab *modtab = objfile_data (objfile, f_module_objfile_data_key);
+    struct htab *modtab = (struct htab *) objfile_data (objfile, f_module_objfile_data_key);
   if (!modtab)
     {
 #if defined(USE_MMALLOC)
@@ -129,7 +129,7 @@ f_module_announce (struct objfile *objfile, const char *name)
   struct htab *modtab = modtab_init (objfile);
 
   candidate = (struct modtab_entry *) obstack_alloc (&objfile->objfile_obstack, sizeof (struct modtab_entry));
-  candidate->name = obstack_copy0 (&objfile->objfile_obstack, name, strlen (name));
+  candidate->name = (char *) obstack_copy0 (&objfile->objfile_obstack, name, strlen (name));
   candidate->sym_list = NULL;
 
   slot = (struct modtab_entry **) htab_find_slot (modtab, candidate, INSERT);
@@ -153,13 +153,13 @@ static struct modtab_entry *
 f_module_lookup (struct objfile *objfile, const char *module_name)
 {
   struct modtab_entry search_entry, *found_entry;
-  struct htab *modtab = objfile_data (objfile, f_module_objfile_data_key);
+  struct htab *modtab = (struct htab *) objfile_data (objfile, f_module_objfile_data_key);
   if (!modtab)
     return NULL;
   
   /* const-correctness gone to pot.  */
   search_entry.name = (char *) module_name;
-  found_entry = htab_find (modtab, &search_entry);
+  found_entry = (struct modtab_entry *) htab_find (modtab, &search_entry);
 
   return found_entry;
 }
@@ -200,7 +200,7 @@ f_module_enter (struct objfile *objfile, const char *name)
    the (now) previous Fortran module.  */
 
 void
-f_module_leave ()
+f_module_leave (void)
 {
   if (!open_module)
     {
@@ -287,7 +287,7 @@ modules_info (char *ignore, int from_tty)
 
   ALL_OBJFILES(objfile)
   {
-    struct htab *modtab = objfile_data (objfile, f_module_objfile_data_key);
+      struct htab *modtab = (struct htab *) objfile_data (objfile, f_module_objfile_data_key);
     if (modtab)
       htab_traverse_noresize (modtab, print_module_name, &first);
   }
@@ -307,6 +307,7 @@ print_module_symbols_ex (const struct modtab_entry *module,
   objfile->sf->qf->expand_symtabs_matching (objfile,
 					  file_name_matcher,
 					  module_name_matcher,
+					  NULL,
 					  kind,
 					  NULL);
 
@@ -329,7 +330,7 @@ print_module_symbols_ex (const struct modtab_entry *module,
                        ? "" : SYMBOL_PRINT_NAME (sym)),
                       gdb_stdout, 0);
 
-	  fullname = symtab_to_fullname (sym->symtab);
+	  fullname = symtab_to_fullname (symbol_symtab (sym));
           printf_filtered (";%s;%d;\n",
                            (fullname ?
                             fullname :
@@ -410,7 +411,7 @@ module_symbol_info (char *module_name, enum search_domain kind, int from_tty)
 
       ALL_OBJFILES(objfile)
       {
-	struct htab *modtab = objfile_data (objfile, f_module_objfile_data_key);
+	  struct htab *modtab = (struct htab *) objfile_data (objfile, f_module_objfile_data_key);
 	if (modtab)
 	  {
 	    struct print_module_symbols_data data;

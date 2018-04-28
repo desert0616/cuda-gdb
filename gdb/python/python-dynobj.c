@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2015-2016 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -68,10 +68,18 @@ PyObject **pgdbpyExc_StopIteration = NULL;
 PyObject **pgdbpyExc_SystemError = NULL;
 PyObject **pgdbpyExc_TypeError = NULL;
 PyObject **pgdbpyExc_ValueError = NULL;
+PyObject **pgdbpyExc_NameError = NULL;
 
 PyThreadState **pgdbpy_OSReadlineTState = NULL;
-char * (**pgdbpyOS_ReadlineFunctionPointer) (FILE *, FILE *, char *) = NULL;
 
+char * (**pgdbpyOS_ReadlineFunctionPointer) (FILE *, FILE *,
+#if PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION >= 4
+			const char *) = NULL;
+#else
+			char *) = NULL;
+#endif
+
+PyThreadState **gdbpy_ThreadState_Current = NULL;
 
 /* Imported functions */
 int (*gdbpy_Arg_UnpackTuple) (PyObject *, const char *, Py_ssize_t, Py_ssize_t, ...) = NULL;
@@ -83,6 +91,12 @@ PyObject * (*gdbpy_ObjectCallMethod)(PyObject *o, char *m, char *format, ...) = 
 int (*gdbpy_ArgParseTuple) (PyObject *obj, const char *, ...) = NULL;
 int (*gdbpy_ArgParseTupleAndKeywords) (PyObject *obj, PyObject *, const char *, char **, ...) = NULL;
 PyObject * (*gdbpy_StringFromFormat) (const char *, ...) = NULL;
+PyObject * (*gdbpy_Sequence_Concat) (PyObject *o1, PyObject *o2) = NULL;
+PY_LONG_LONG (*gdbpy_Long_AsLong) (PyObject *) = NULL;
+int (*gdbpy_Dict_SetItem) (PyObject *mp, PyObject *key, PyObject *item) = NULL;
+PyObject * (*gdbpy_Dict_Keys) (PyObject *mp) = NULL;
+void (*gdbpy_Err_SetNone) (PyObject *) = NULL;
+int (*gdbpy_Object_IsInstance) (PyObject *object, PyObject *typeorclass) = NULL;
 
 
 static PyObject * (*gdb_PyBool_FromLong) (long) = NULL;
@@ -189,6 +203,7 @@ static PyObject * (*gdb_PyObject_Call)(PyObject *callable_object, PyObject *args
 static PyObject* (*gdb_PyUnicode_Decode)(const char *s, Py_ssize_t size, const char *encoding, const char *errors) = NULL;
 static PyObject* (*gdb_PyUnicode_AsEncodedString)(register PyObject *unicode, const char *encoding, const char *errors) = NULL;
 static PyObject* (*gdb_PyUnicode_FromEncodedObject)(register PyObject *obj, const char *encoding, const char *errors) = NULL;
+static int *gdb_Py_DontWriteBytecodeFlag = NULL;
 
 
 
@@ -200,9 +215,9 @@ is_python_available (void) {
 #if HAVE_LIBPYTHON2_4
                      "libpython2.4.so.1.0", "libpython2.4.so.1",
 #elif !defined(__APPLE__)
-                     "libpython2.7.so.1", "libpython2.6.so.1.0",
-                     "libpython2.6.so.1", "libpython2.5.so.1.0",
-                     "libpython2.5.so.1",
+                     "libpython2.7.so.1.0", "libpython2.7.so.1",
+                     "libpython2.6.so.1.0", "libpython2.6.so.1",
+                     "libpython2.5.so.1.0", "libpython2.5.so.1",
 #else
                      "libpython2.7.dylib",
                      "Python.framework/Versions/2.7/Python",
@@ -220,163 +235,188 @@ is_python_available (void) {
   if (!libpython_handle)
     return false;
 
-#define RESOLVE_AND_CHECK(varname,symname)            \
-  varname = dlsym (libpython_handle, symname);        \
-  if (!varname)                                       \
-    {                                                 \
-      fprintf (stderr, "Symbol %s could not be found" \
-               " in python library!\n", symname);     \
-      goto err_out;                                   \
+#define RESOLVE_AND_CHECK(varname,type,symname)			\
+  varname = (type) dlsym (libpython_handle, symname);	\
+  if (!varname)							\
+    {								\
+      fprintf (stderr, "Symbol %s could not be found"		\
+	       " in python library!\n", symname);		\
+      goto err_out;						\
     }
-  /* Resolve types and exceptions */
-  RESOLVE_AND_CHECK(gdbpy_None,                    "_Py_NoneStruct");
-  RESOLVE_AND_CHECK(gdbpy_True,                    "_Py_TrueStruct");
-  RESOLVE_AND_CHECK(gdbpy_Zero,                    "_Py_ZeroStruct");
-  RESOLVE_AND_CHECK(gdbpy_FloatType,               "PyFloat_Type");
-  RESOLVE_AND_CHECK(gdbpy_BoolType,                "PyBool_Type");
-  RESOLVE_AND_CHECK(gdbpy_IntType,                 "PyInt_Type");
-  RESOLVE_AND_CHECK(gdbpy_LongType,                "PyLong_Type");
-  RESOLVE_AND_CHECK(gdbpy_StringType,              "PyString_Type");
-  RESOLVE_AND_CHECK(gdbpy_ListType,                "PyList_Type");
-  RESOLVE_AND_CHECK(gdbpy_TupleType,               "PyTuple_Type");
-  RESOLVE_AND_CHECK(gdbpy_UnicodeType,             "PyUnicode_Type");
-  RESOLVE_AND_CHECK(gdbpy_NotImplemented,          "_Py_NotImplementedStruct");
 
-  RESOLVE_AND_CHECK(pgdbpyExc_AttributeError,      "PyExc_AttributeError");
-  RESOLVE_AND_CHECK(pgdbpyExc_IOError,             "PyExc_IOError");
-  RESOLVE_AND_CHECK(pgdbpyExc_KeyError,            "PyExc_KeyError");
-  RESOLVE_AND_CHECK(pgdbpyExc_KeyboardInterrupt,   "PyExc_KeyboardInterrupt");
-  RESOLVE_AND_CHECK(pgdbpyExc_MemoryError,         "PyExc_MemoryError");
-  RESOLVE_AND_CHECK(pgdbpyExc_NotImplementedError, "PyExc_NotImplementedError");
-  RESOLVE_AND_CHECK(pgdbpyExc_OverflowError,       "PyExc_OverflowError");
-  RESOLVE_AND_CHECK(pgdbpyExc_RuntimeError,        "PyExc_RuntimeError");
-  RESOLVE_AND_CHECK(pgdbpyExc_StopIteration,       "PyExc_StopIteration");
-  RESOLVE_AND_CHECK(pgdbpyExc_SystemError,         "PyExc_SystemError");
-  RESOLVE_AND_CHECK(pgdbpyExc_TypeError,           "PyExc_TypeError");
-  RESOLVE_AND_CHECK(pgdbpyExc_ValueError,          "PyExc_ValueError");
-  RESOLVE_AND_CHECK(pgdbpy_OSReadlineTState,           "_PyOS_ReadlineTState");
-  RESOLVE_AND_CHECK(pgdbpyOS_ReadlineFunctionPointer, "PyOS_ReadlineFunctionPointer");
+  /* Resolve types and exceptions */
+  RESOLVE_AND_CHECK(gdbpy_None, PyObject *, "_Py_NoneStruct");
+  RESOLVE_AND_CHECK(gdbpy_True, PyObject *, "_Py_TrueStruct");
+  RESOLVE_AND_CHECK(gdbpy_Zero, PyObject *, "_Py_ZeroStruct");
+
+  RESOLVE_AND_CHECK(gdbpy_FloatType, PyTypeObject *, "PyFloat_Type");
+  RESOLVE_AND_CHECK(gdbpy_BoolType, PyTypeObject *, "PyBool_Type");
+  RESOLVE_AND_CHECK(gdbpy_IntType, PyTypeObject *, "PyInt_Type");
+  RESOLVE_AND_CHECK(gdbpy_LongType, PyTypeObject *, "PyLong_Type");
+  RESOLVE_AND_CHECK(gdbpy_StringType, PyTypeObject *, "PyString_Type");
+  RESOLVE_AND_CHECK(gdbpy_ListType, PyTypeObject *, "PyList_Type");
+  RESOLVE_AND_CHECK(gdbpy_TupleType, PyTypeObject *, "PyTuple_Type");
+  RESOLVE_AND_CHECK(gdbpy_UnicodeType, PyTypeObject *, "PyUnicode_Type");
+  RESOLVE_AND_CHECK(gdbpy_NotImplemented, PyObject *, "_Py_NotImplementedStruct");
+  RESOLVE_AND_CHECK(gdbpy_ThreadState_Current, PyThreadState **, "_PyThreadState_Current");
+
+  RESOLVE_AND_CHECK(pgdbpyExc_AttributeError, PyObject **, "PyExc_AttributeError");
+  RESOLVE_AND_CHECK(pgdbpyExc_IOError, PyObject **, "PyExc_IOError");
+  RESOLVE_AND_CHECK(pgdbpyExc_KeyError, PyObject **, "PyExc_KeyError");
+  RESOLVE_AND_CHECK(pgdbpyExc_KeyboardInterrupt, PyObject **, "PyExc_KeyboardInterrupt");
+  RESOLVE_AND_CHECK(pgdbpyExc_MemoryError, PyObject **, "PyExc_MemoryError");
+  RESOLVE_AND_CHECK(pgdbpyExc_NotImplementedError, PyObject **, "PyExc_NotImplementedError");
+  RESOLVE_AND_CHECK(pgdbpyExc_OverflowError, PyObject **, "PyExc_OverflowError");
+  RESOLVE_AND_CHECK(pgdbpyExc_RuntimeError, PyObject **, "PyExc_RuntimeError");
+  RESOLVE_AND_CHECK(pgdbpyExc_StopIteration, PyObject **, "PyExc_StopIteration");
+  RESOLVE_AND_CHECK(pgdbpyExc_SystemError, PyObject **, "PyExc_SystemError");
+  RESOLVE_AND_CHECK(pgdbpyExc_TypeError, PyObject **, "PyExc_TypeError");
+  RESOLVE_AND_CHECK(pgdbpyExc_ValueError, PyObject **, "PyExc_ValueError");
+  RESOLVE_AND_CHECK(pgdbpy_OSReadlineTState, PyThreadState **, "_PyOS_ReadlineTState");
+
+#if PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION >= 4
+     RESOLVE_AND_CHECK(pgdbpyOS_ReadlineFunctionPointer, char * (**) (FILE *, FILE *, const char *), "PyOS_ReadlineFunctionPointer");
+#else
+     RESOLVE_AND_CHECK(pgdbpyOS_ReadlineFunctionPointer, char * (**) (FILE *, FILE *, char *), "PyOS_ReadlineFunctionPointer");
+#endif
+
+  RESOLVE_AND_CHECK(pgdbpyExc_NameError, PyObject **, "PyExc_NameError");
 
   /* Resolve variadic functions */
-  RESOLVE_AND_CHECK(gdbpy_Arg_UnpackTuple,           "PyArg_UnpackTuple");
-  RESOLVE_AND_CHECK(gdbpy_ErrFormat,                 "PyErr_Format");
-  RESOLVE_AND_CHECK(gdbpy_BuildValue,                STRINGIFY(Py_BuildValue));
-  RESOLVE_AND_CHECK(gdbpy_ObjectCallFunctionObjArgs, "PyObject_CallFunctionObjArgs");
-  RESOLVE_AND_CHECK(gdbpy_ObjectCallMethodObjArgs,   "PyObject_CallMethodObjArgs");
-  RESOLVE_AND_CHECK(gdbpy_ObjectCallMethod,          STRINGIFY(PyObject_CallMethod));
-  RESOLVE_AND_CHECK(gdbpy_ArgParseTuple,             STRINGIFY(PyArg_ParseTuple));
-  RESOLVE_AND_CHECK(gdbpy_ArgParseTupleAndKeywords,  STRINGIFY(PyArg_ParseTupleAndKeywords));
-  RESOLVE_AND_CHECK(gdbpy_StringFromFormat,          "PyString_FromFormat");
+  RESOLVE_AND_CHECK(gdbpy_Arg_UnpackTuple, int (*)(PyObject *, const char *, Py_ssize_t, Py_ssize_t, ...), "PyArg_UnpackTuple");
+  RESOLVE_AND_CHECK(gdbpy_ErrFormat, PyObject * (*) (PyObject *, const char *, ...), "PyErr_Format");
+  RESOLVE_AND_CHECK(gdbpy_BuildValue, PyObject * (*) (const char *, ...), STRINGIFY(Py_BuildValue));
+  RESOLVE_AND_CHECK(gdbpy_ObjectCallFunctionObjArgs, PyObject * (*) (PyObject *,...), "PyObject_CallFunctionObjArgs");
+  RESOLVE_AND_CHECK(gdbpy_ObjectCallMethodObjArgs, PyObject * (*) (PyObject *, PyObject *,...), "PyObject_CallMethodObjArgs");
+  RESOLVE_AND_CHECK(gdbpy_ObjectCallMethod, PyObject * (*) (PyObject *o, char *m, char *format, ...), STRINGIFY(PyObject_CallMethod));
+  RESOLVE_AND_CHECK(gdbpy_ArgParseTuple, int (*) (PyObject *obj, const char *, ...), STRINGIFY(PyArg_ParseTuple));
+  RESOLVE_AND_CHECK(gdbpy_ArgParseTupleAndKeywords, int (*) (PyObject *obj, PyObject *, const char *, char **, ...), STRINGIFY(PyArg_ParseTupleAndKeywords));
+  RESOLVE_AND_CHECK(gdbpy_StringFromFormat, PyObject * (*)  (const char *, ...), "PyString_FromFormat");
+
+#define RESOLVE(varname,type,symname)				\
+  varname = (type) dlsym (libpython_handle, symname);
+
+  /* Resolve functions */
+  RESOLVE(gdbpy_Dict_SetItem, int (*) (PyObject *mp, PyObject *key, PyObject *item), "PyDict_SetItem");
+  RESOLVE(gdbpy_Dict_Keys, PyObject * (*) (PyObject *mp), "PyDict_Keys");
+  RESOLVE(gdbpy_Err_SetNone, void (*) (PyObject *), "PyErr_SetNone");
+  RESOLVE(gdbpy_Long_AsLong, PY_LONG_LONG (*) (PyObject *), "PyLong_AsLong");
+  RESOLVE(gdbpy_Object_IsInstance, int (*) (PyObject *object, PyObject *typeorclass), "PyObject_IsInstance");
+  RESOLVE(gdbpy_Sequence_Concat, PyObject * (*) (PyObject *o1, PyObject *o2), "PySequence_Concat");
 
   /* Resolve indirectly called functions */
-  gdb_PyBool_FromLong = dlsym (libpython_handle, "PyBool_FromLong");
-  gdb_PyBuffer_FromReadWriteObject = dlsym (libpython_handle, "PyBuffer_FromReadWriteObject");
-  gdb_PyCallable_Check = dlsym (libpython_handle, "PyCallable_Check");
-  gdb_PyDict_New = dlsym (libpython_handle, "PyDict_New");
-  gdb_PyDict_SetItemString = dlsym (libpython_handle, "PyDict_SetItemString");
-  gdb_PyErr_Clear = dlsym (libpython_handle, "PyErr_Clear");
-  gdb_PyErr_ExceptionMatches = dlsym (libpython_handle, "PyErr_ExceptionMatches");
-  gdb_PyErr_Fetch = dlsym (libpython_handle, "PyErr_Fetch");
-  gdb_PyErr_GivenExceptionMatches = dlsym (libpython_handle, "PyErr_GivenExceptionMatch");
-  gdb_PyErr_Occurred = dlsym (libpython_handle, "PyErr_Occurred");
-  gdb_PyErr_Print = dlsym (libpython_handle, "PyErr_Print");
-  gdb_PyErr_Restore = dlsym (libpython_handle, "PyErr_Restore");
-  gdb_PyErr_SetFromErrno = dlsym (libpython_handle, "PyErr_SetFromErrno");
-  gdb_PyErr_SetInterrupt = dlsym (libpython_handle, "PyErr_SetInterrupt");
-  gdb_PyErr_SetObject = dlsym (libpython_handle, "PyErr_SetObject");
-  gdb_PyErr_SetString = dlsym (libpython_handle, "PyErr_SetString");
-  gdb_PyErr_NewException = dlsym (libpython_handle, "PyErr_NewException");
-  gdb_PyEval_InitThreads = dlsym (libpython_handle, "PyEval_InitThreads");
-  gdb_PyEval_ReleaseLock = dlsym (libpython_handle, "PyEval_ReleaseLock");
-  gdb_PyEval_RestoreThread = dlsym (libpython_handle, "PyEval_RestoreThread");
-  gdb_PyEval_SaveThread = dlsym (libpython_handle, "PyEval_SaveThread");
-  gdb_PyFloat_AsDouble = dlsym (libpython_handle, "PyFloat_AsDouble");
-  gdb_PyFloat_FromDouble = dlsym (libpython_handle, "PyFloat_FromDouble");
-  gdb_PyGILState_Ensure = dlsym (libpython_handle, "PyGILState_Ensure");
-  gdb_PyGILState_Release = dlsym (libpython_handle, "PyGILState_Release");
-  gdb_PyImport_AddModule = dlsym (libpython_handle, "PyImport_AddModule");
-  gdb_PyImport_ImportModule = dlsym (libpython_handle, "PyImport_ImportModule");
-  gdb_PyInt_AsLong = dlsym (libpython_handle, "PyInt_AsLong");
-  gdb_PyInt_FromLong = dlsym (libpython_handle, "PyInt_FromLong");
-  gdb_PyInt_GetMax = dlsym (libpython_handle, "PyInt_GetMax");
-  gdb_PyIter_Next = dlsym (libpython_handle, "PyIter_Next");
-  gdb_PyList_Append = dlsym (libpython_handle, "PyList_Append");
-  gdb_PyList_AsTuple = dlsym (libpython_handle, "PyList_AsTuple");
-  gdb_PyList_GetItem = dlsym (libpython_handle, "PyList_GetItem");
-  gdb_PyList_Insert = dlsym (libpython_handle, "PyList_Insert");
-  gdb_PyList_New = dlsym (libpython_handle, "PyList_New");
-  gdb_PyList_Size = dlsym (libpython_handle, "PyList_Size");
-  gdb_PyLong_AsLongLong = dlsym (libpython_handle, "PyLong_AsLongLong");
-  gdb_PyLong_AsUnsignedLongLong = dlsym (libpython_handle, "PyLong_AsUnsignedLongLong");
-  gdb_PyLong_FromLong = dlsym (libpython_handle, "PyLong_FromLong");
-  gdb_PyLong_FromLongLong = dlsym (libpython_handle, "PyLong_FromLongLong");
-  gdb_PyLong_FromUnsignedLong = dlsym (libpython_handle, "PyLong_FromUnsignedLong");
-  gdb_PyLong_FromUnsignedLongLong = dlsym (libpython_handle, "PyLong_FromUnsignedLongLong");
-  gdb_PyMem_Malloc = dlsym (libpython_handle, "PyMem_Malloc");
-  gdb_PyModule_AddIntConstant = dlsym (libpython_handle, "PyModule_AddIntConstant");
-  gdb_PyModule_AddObject = dlsym (libpython_handle, "PyModule_AddObject");
-  gdb_PyModule_AddStringConstant = dlsym (libpython_handle, "PyModule_AddStringConstant");
-  gdb_PyModule_GetDict = dlsym (libpython_handle, "PyModule_GetDict");
-  gdb_PyNumber_Long = dlsym (libpython_handle, "PyNumber_Long");
-  gdb_PyOS_InterruptOccurred = dlsym (libpython_handle, "PyOS_InterruptOccurred");
-  gdb_PyObject_AsReadBuffer = dlsym (libpython_handle, "PyObject_AsReadBuffer");
-  gdb_PyObject_CheckReadBuffer = dlsym (libpython_handle, "PyObject_CheckReadBuffer");
-  gdb_PyObject_GenericGetAttr = dlsym (libpython_handle, "PyObject_GenericGetAttr");
-  gdb_PyObject_GenericSetAttr = dlsym (libpython_handle, "PyObject_GenericSetAttr");
-  gdb_PyObject_GetAttr = dlsym (libpython_handle, "PyObject_GetAttr");
-  gdb_PyObject_GetAttrString = dlsym (libpython_handle, "PyObject_GetAttrString");
-  gdb_PyObject_GetIter = dlsym (libpython_handle, "PyObject_GetIter");
-  gdb_PyObject_HasAttr = dlsym (libpython_handle, "PyObject_HasAttr");
-  gdb_PyObject_HasAttrString = dlsym (libpython_handle, "PyObject_HasAttrString");
-  gdb_PyObject_IsTrue = dlsym (libpython_handle, "PyObject_IsTrue");
-  gdb_PyObject_RichCompareBool = dlsym (libpython_handle, "PyObject_RichCompareBool");
-  gdb_PyObject_SetAttrString = dlsym (libpython_handle, "PyObject_SetAttrString");
-  gdb_PyObject_Str = dlsym (libpython_handle, "PyObject_Str");
-  gdb_PyRun_InteractiveLoopFlags = dlsym (libpython_handle, "PyRun_InteractiveLoopFlags");
-  gdb_PyRun_StringFlags = dlsym (libpython_handle, "PyRun_StringFlags");
-  gdb_PyRun_SimpleFileExFlags = dlsym (libpython_handle, "PyRun_SimpleFileExFlags");
-  gdb_PyRun_SimpleStringFlags = dlsym (libpython_handle, "PyRun_SimpleStringFlags");
-  gdb_PySequence_Check = dlsym (libpython_handle, "PySequence_Check");
-  gdb_PySequence_DelItem = dlsym (libpython_handle, "PySequence_DelItem");
-  gdb_PySequence_GetItem = dlsym (libpython_handle, "PySequence_GetItem");
-  gdb_PySequence_Index = dlsym (libpython_handle, "PySequence_Index");
-  gdb_PySequence_List = dlsym (libpython_handle, "PySequence_List");
-  gdb_PySequence_Size = dlsym (libpython_handle, "PySequence_Size");
-  gdb_PyString_AsString = dlsym (libpython_handle, "PyString_AsString");
-  gdb_PyString_Decode = dlsym (libpython_handle, "PyString_Decode");
-  gdb_PyString_FromString = dlsym (libpython_handle, "PyString_FromString");
-  gdb_PyString_Size = dlsym (libpython_handle, "PyString_Size");
-  gdb_PySys_GetObject = dlsym (libpython_handle, "PySys_GetObject");
-  gdb_PySys_SetPath = dlsym (libpython_handle, "PySys_SetPath");
-  gdb_PyThreadState_Get = dlsym (libpython_handle, "PyThreadState_Get");
-  gdb_PyThreadState_Swap = dlsym (libpython_handle, "PyThreadState_Swap");
-  gdb_PyTuple_GetItem = dlsym (libpython_handle, "PyTuple_GetItem");
-  gdb_PyTuple_New = dlsym (libpython_handle, "PyTuple_New");
-  gdb_PyTuple_SetItem = dlsym (libpython_handle, "PyTuple_SetItem");
-  gdb_PyTuple_Size = dlsym (libpython_handle, "PyTuple_Size");
-  gdb_PyType_GenericNew = dlsym (libpython_handle, "PyType_GenericNew");
-  gdb_PyType_IsSubtype = dlsym (libpython_handle, "PyType_IsSubtype");
-  gdb_PyType_Ready = dlsym (libpython_handle, "PyType_Ready");
-  gdb_Py_Finalize = dlsym (libpython_handle, "Py_Finalize");
-  gdb_Py_FlushLine = dlsym (libpython_handle, "Py_FlushLine");
-  gdb_Py_Initialize = dlsym (libpython_handle, "Py_Initialize");
-  gdb_Py_InitModule4 = dlsym (libpython_handle, "Py_InitModule4");
-  gdb_Py_InitModule4_64 = dlsym (libpython_handle, "Py_InitModule4_64");
-  gdb_PyObject_Call = dlsym (libpython_handle, "PyObject_Call");
-  gdb_PyObject_CallObject = dlsym (libpython_handle, "PyObject_CallObject");
-  gdb_Py_SetProgramName = dlsym (libpython_handle, "Py_SetProgramName");
-  gdb__PyObject_New = dlsym (libpython_handle, "_PyObject_New");
-  gdb_PyCode_New = dlsym (libpython_handle, "PyCode_New");
-  gdb_PyFrame_New = dlsym (libpython_handle, "PyFrame_New");
+
+  RESOLVE(gdb_PyBool_FromLong, PyObject * (*) (long), "PyBool_FromLong");
+  RESOLVE(gdb_PyBuffer_FromReadWriteObject, PyObject * (*) (PyObject *base, Py_ssize_t offset, Py_ssize_t size), "PyBuffer_FromReadWriteObject");
+  RESOLVE(gdb_PyCallable_Check, int (*) (PyObject *o), "PyCallable_Check");
+  RESOLVE(gdb_PyDict_New, PyObject * (*) (void), "PyDict_New");
+  RESOLVE(gdb_PyDict_SetItemString, int (*) (PyObject *dp, const char *key, PyObject *item), "PyDict_SetItemString");
+  RESOLVE(gdb_PyErr_Clear, void (*) (void), "PyErr_Clear");
+  RESOLVE(gdb_PyErr_ExceptionMatches, int (*) (PyObject *), "PyErr_ExceptionMatches");
+  RESOLVE(gdb_PyErr_Fetch, void (*) (PyObject **, PyObject **, PyObject **), "PyErr_Fetch");
+  RESOLVE(gdb_PyErr_GivenExceptionMatches, int (*) (PyObject *, PyObject *), "PyErr_GivenExceptionMatch");
+  RESOLVE(gdb_PyErr_Occurred, PyObject * (*) (void), "PyErr_Occurred");
+  RESOLVE(gdb_PyErr_Print, void (*) (void), "PyErr_Print");
+  RESOLVE(gdb_PyErr_Restore, void (*) (PyObject *, PyObject *, PyObject *), "PyErr_Restore");
+  RESOLVE(gdb_PyErr_SetFromErrno, PyObject * (*) (PyObject *), "PyErr_SetFromErrno");
+  RESOLVE(gdb_PyErr_SetInterrupt, void (*) (void), "PyErr_SetInterrupt");
+  RESOLVE(gdb_PyErr_SetObject, void (*) (PyObject *, PyObject *), "PyErr_SetObject");
+  RESOLVE(gdb_PyErr_SetString, void (*) (PyObject *, const char *), "PyErr_SetString");
+  RESOLVE(gdb_PyErr_NewException, PyObject * (*) (char *name, PyObject *base, PyObject *dict), "PyErr_NewException");
+  RESOLVE(gdb_PyEval_InitThreads, void (*) (void), "PyEval_InitThreads");
+  RESOLVE(gdb_PyEval_ReleaseLock, void (*) (void), "PyEval_ReleaseLock");
+  RESOLVE(gdb_PyEval_RestoreThread, void (*) (PyThreadState *), "PyEval_RestoreThread");
+  RESOLVE(gdb_PyEval_SaveThread, PyThreadState * (*) (void), "PyEval_SaveThread");
+  RESOLVE(gdb_PyFloat_AsDouble, double (*) (PyObject *), "PyFloat_AsDouble");
+  RESOLVE(gdb_PyFloat_FromDouble, PyObject * (*) (double), "PyFloat_FromDouble");
+  RESOLVE(gdb_PyGILState_Ensure, PyGILState_STATE (*) (void), "PyGILState_Ensure");
+  RESOLVE(gdb_PyGILState_Release, void (*) (PyGILState_STATE), "PyGILState_Release");
+  RESOLVE(gdb_PyImport_AddModule, PyObject * (*) (const char *), "PyImport_AddModule");
+  RESOLVE(gdb_PyImport_ImportModule, PyObject * (*) (const char *), "PyImport_ImportModule");
+  RESOLVE(gdb_PyInt_AsLong, long (*) (PyObject *), "PyInt_AsLong");
+  RESOLVE(gdb_PyInt_FromLong, PyObject * (*) (long), "PyInt_FromLong");
+  RESOLVE(gdb_PyInt_GetMax, long (*) (void), "PyInt_GetMax");
+  RESOLVE(gdb_PyIter_Next, PyObject * (*) (PyObject *), "PyIter_Next");
+  RESOLVE(gdb_PyList_Append, int (*) (PyObject *, PyObject *), "PyList_Append");
+  RESOLVE(gdb_PyList_AsTuple, PyObject * (*) (PyObject *), "PyList_AsTuple");
+  RESOLVE(gdb_PyList_GetItem, PyObject * (*) (PyObject *, Py_ssize_t), "PyList_GetItem");
+  RESOLVE(gdb_PyList_Insert, int (*) (PyObject *, Py_ssize_t, PyObject *), "PyList_Insert");
+  RESOLVE(gdb_PyList_New, PyObject * (*) (Py_ssize_t size), "PyList_New");
+  RESOLVE(gdb_PyList_Size, Py_ssize_t (*) (PyObject *), "PyList_Size");
+  RESOLVE(gdb_PyLong_AsLongLong, PY_LONG_LONG (*) (PyObject *), "PyLong_AsLongLong");
+  RESOLVE(gdb_PyLong_AsUnsignedLongLong, unsigned PY_LONG_LONG (*) (PyObject *), "PyLong_AsUnsignedLongLong");
+  RESOLVE(gdb_PyLong_FromLong, PyObject * (*) (long), "PyLong_FromLong");
+  RESOLVE(gdb_PyLong_FromLongLong, PyObject * (*) (PY_LONG_LONG), "PyLong_FromLongLong");
+  RESOLVE(gdb_PyLong_FromUnsignedLong, PyObject * (*) (unsigned long), "PyLong_FromUnsignedLong");
+  RESOLVE(gdb_PyLong_FromUnsignedLongLong, PyObject * (*) (unsigned PY_LONG_LONG), "PyLong_FromUnsignedLongLong");
+  RESOLVE(gdb_PyMem_Malloc, void * (*) (size_t), "PyMem_Malloc");
+  RESOLVE(gdb_PyModule_AddIntConstant, int (*) (PyObject *, const char *, long), "PyModule_AddIntConstant");
+  RESOLVE(gdb_PyModule_AddObject, int (*) (PyObject *, const char *, PyObject *), "PyModule_AddObject");
+  RESOLVE(gdb_PyModule_AddStringConstant, int (*) (PyObject *, const char *, const char *), "PyModule_AddStringConstant");
+  RESOLVE(gdb_PyModule_GetDict, PyObject * (*) (PyObject *), "PyModule_GetDict");
+  RESOLVE(gdb_PyNumber_Long, PyObject * (*) (PyObject *), "PyNumber_Long");
+  RESOLVE(gdb_PyOS_InterruptOccurred, int (*) (void), "PyOS_InterruptOccurred");
+  RESOLVE(gdb_PyObject_AsReadBuffer, int (*) (PyObject *obj, const void **, Py_ssize_t *), "PyObject_AsReadBuffer");
+  RESOLVE(gdb_PyObject_CheckReadBuffer, int (*) (PyObject *), "PyObject_CheckReadBuffer");
+  RESOLVE(gdb_PyObject_GenericGetAttr, PyObject * (*) (PyObject *, PyObject *), "PyObject_GenericGetAttr");
+  RESOLVE(gdb_PyObject_GenericSetAttr, int (*) (PyObject *arg1, PyObject *arg2, PyObject *arg3), "PyObject_GenericSetAttr");
+  RESOLVE(gdb_PyObject_GetAttr, PyObject * (*) (PyObject *, PyObject *), "PyObject_GetAttr");
+  RESOLVE(gdb_PyObject_GetAttrString, PyObject * (*) (PyObject *, const char *), "PyObject_GetAttrString");
+  RESOLVE(gdb_PyObject_GetIter, PyObject * (*) (PyObject *), "PyObject_GetIter");
+  RESOLVE(gdb_PyObject_HasAttr, int (*) (PyObject *, PyObject *), "PyObject_HasAttr");
+  RESOLVE(gdb_PyObject_HasAttrString,  int (*) (PyObject *, const char *), "PyObject_HasAttrString");
+  RESOLVE(gdb_PyObject_IsTrue, int (*) (PyObject *), "PyObject_IsTrue");
+  RESOLVE(gdb_PyObject_RichCompareBool, int (*) (PyObject *, PyObject *, int), "PyObject_RichCompareBool");
+  RESOLVE(gdb_PyObject_SetAttrString, int (*) (PyObject *, const char *, PyObject *), "PyObject_SetAttrString");
+  RESOLVE(gdb_PyObject_Str, PyObject * (*) (PyObject *), "PyObject_Str");
+  RESOLVE(gdb_PyRun_InteractiveLoopFlags, int (*) (FILE *, const char *, PyCompilerFlags *), "PyRun_InteractiveLoopFlags");
+  RESOLVE(gdb_PyRun_StringFlags, PyObject * (*) (const char *, int, PyObject *, PyObject *, PyCompilerFlags *), "PyRun_StringFlags");
+  RESOLVE(gdb_PyRun_SimpleFileExFlags, int (*) (FILE *, const char *, int, PyCompilerFlags *), "PyRun_SimpleFileExFlags");
+  RESOLVE(gdb_PyRun_SimpleStringFlags, int (*) (const char *, PyCompilerFlags *), "PyRun_SimpleStringFlags");
+  RESOLVE(gdb_PySequence_Check, int (*) (PyObject *), "PySequence_Check");
+  RESOLVE(gdb_PySequence_DelItem, int (*) (PyObject *o, Py_ssize_t i), "PySequence_DelItem");
+  RESOLVE(gdb_PySequence_GetItem, PyObject * (*) (PyObject *o, Py_ssize_t i), "PySequence_GetItem");
+  RESOLVE(gdb_PySequence_Index, Py_ssize_t (*) (PyObject *o, PyObject *value), "PySequence_Index");
+  RESOLVE(gdb_PySequence_List, PyObject * (*) (PyObject *o), "PySequence_List");
+  RESOLVE(gdb_PySequence_Size, Py_ssize_t (*) (PyObject *o), "PySequence_Size");
+  RESOLVE(gdb_PyString_AsString, char * (*) (PyObject *o), "PyString_AsString");
+  RESOLVE(gdb_PyString_Decode, PyObject * (*) (const char *, Py_ssize_t, const char *, const char *), "PyString_Decode");
+  RESOLVE(gdb_PyString_FromString, PyObject * (*) (const char *), "PyString_FromString");
+  RESOLVE(gdb_PyString_Size, Py_ssize_t (*) (PyObject *), "PyString_Size");
+  RESOLVE(gdb_PySys_GetObject, PyObject * (*) (char *), "PySys_GetObject");
+  RESOLVE(gdb_PySys_SetPath, void (*) (char *), "PySys_SetPath");
+  RESOLVE(gdb_PyThreadState_Get, PyThreadState * (*) (void), "PyThreadState_Get");
+  RESOLVE(gdb_PyThreadState_Swap, PyThreadState * (*) (PyThreadState *), "PyThreadState_Swap");
+  RESOLVE(gdb_PyTuple_GetItem, PyObject * (*) (PyObject *, Py_ssize_t), "PyTuple_GetItem");
+  RESOLVE(gdb_PyTuple_New, PyObject * (*) (Py_ssize_t), "PyTuple_New");
+  RESOLVE(gdb_PyTuple_SetItem, int (*)  (PyObject *, Py_ssize_t, PyObject *), "PyTuple_SetItem");
+  RESOLVE(gdb_PyTuple_Size, Py_ssize_t (*) (PyObject *), "PyTuple_Size");
+  RESOLVE(gdb_PyType_GenericNew, PyObject * (*) (PyTypeObject *, PyObject *, PyObject *), "PyType_GenericNew");
+  RESOLVE(gdb_PyType_IsSubtype, int (*) (PyTypeObject *, PyTypeObject *), "PyType_IsSubtype");
+  RESOLVE(gdb_PyType_Ready, int (*) (PyTypeObject *), "PyType_Ready");
+  RESOLVE(gdb_Py_Finalize, void (*) (void), "Py_Finalize");
+  RESOLVE(gdb_Py_FlushLine, int (*) (void), "Py_FlushLine");
+  RESOLVE(gdb_Py_Initialize, void (*) (void), "Py_Initialize");
+  RESOLVE(gdb_Py_InitModule4, PyObject * (*) (const char *, PyMethodDef *, const char *, PyObject *, int), "Py_InitModule4");
+  RESOLVE(gdb_Py_InitModule4_64, PyObject * (*) (const char *, PyMethodDef *, const char *, PyObject *, int), "Py_InitModule4_64");
+  RESOLVE(gdb_PyObject_Call, PyObject * (*) (PyObject *callable_object, PyObject *args, PyObject *kw), "PyObject_Call");
+  RESOLVE(gdb_PyObject_CallObject, PyObject * (*) (PyObject *callable_object, PyObject *args), "PyObject_CallObject");
+  RESOLVE(gdb_Py_SetProgramName, void (*) (char *), "Py_SetProgramName");
+  RESOLVE(gdb__PyObject_New, PyObject * (*) (PyTypeObject *), "_PyObject_New");
+  RESOLVE(gdb_PyCode_New, PyCodeObject * (*) (int, int, int, int,
+					      PyObject *, PyObject *, PyObject *, PyObject *,
+					      PyObject *, PyObject *, PyObject *, PyObject *, int, PyObject *), "PyCode_New");
+  RESOLVE(gdb_PyFrame_New, PyFrameObject * (*) (PyThreadState *, PyCodeObject *, PyObject *, PyObject *), "PyFrame_New");
 #ifdef __APPLE__
-  gdb_PyUnicode_Decode = dlsym (libpython_handle, "PyUnicodeUCS2_Decode");
-  gdb_PyUnicode_AsEncodedString = dlsym (libpython_handle, "PyUnicodeUCS2_AsEncodedString");
-  gdb_PyUnicode_FromEncodedObject = dlsym (libpython_handle, "PyUnicodeUCS2_FromEncodedObject");
+  RESOLVE(gdb_PyUnicode_Decode, PyObject * (*) (const char *s, Py_ssize_t size, const char *encoding, const char *errors), "PyUnicodeUCS2_Decode");
+  RESOLVE(gdb_PyUnicode_AsEncodedString, PyObject * (*) (register PyObject *unicode, const char *encoding, const char *errors), "PyUnicodeUCS2_AsEncodedString");
+  RESOLVE(gdb_PyUnicode_FromEncodedObject, PyObject * (*) (register PyObject *obj, const char *encoding, const char *errors), "PyUnicodeUCS2_FromEncodedObject");
 #else
-  gdb_PyUnicode_Decode = dlsym (libpython_handle, "PyUnicodeUCS4_Decode");
-  gdb_PyUnicode_AsEncodedString = dlsym (libpython_handle, "PyUnicodeUCS4_AsEncodedString");
-  gdb_PyUnicode_FromEncodedObject = dlsym (libpython_handle, "PyUnicodeUCS4_FromEncodedObject");
+  RESOLVE(gdb_PyUnicode_Decode, PyObject * (*) (const char *s, Py_ssize_t size, const char *encoding, const char *errors), "PyUnicodeUCS4_Decode");
+  RESOLVE(gdb_PyUnicode_AsEncodedString, PyObject * (*) (register PyObject *unicode, const char *encoding, const char *errors), "PyUnicodeUCS4_AsEncodedString");
+  RESOLVE(gdb_PyUnicode_FromEncodedObject, PyObject * (*) (register PyObject *obj, const char *encoding, const char *errors), "PyUnicodeUCS4_FromEncodedObject");
 #endif
+  RESOLVE(gdb_Py_DontWriteBytecodeFlag, int *, "Py_DontWriteBytecodeFlag");
   return true;
 err_out:
   dlclose (libpython_handle);
@@ -567,7 +607,6 @@ PYWRAPPER_ARG2(int, PyType_IsSubtype, PyTypeObject *, PyTypeObject *)
 PYWRAPPER_ARG1(int, PyType_Ready, PyTypeObject *)
 PYWRAPPERVOID(Py_Finalize)
 PYWRAPPER(int, Py_FlushLine)
-PYWRAPPERVOID(Py_Initialize)
 PYWRAPPERVOID_ARG1(Py_SetProgramName, char *)
 PYWRAPPER_ARG1(PyObject *, _PyObject_New, PyTypeObject *)
 PYWRAPPER_ARG2(PyObject *, PyObject_CallObject, PyObject *, PyObject *)
@@ -582,6 +621,20 @@ PYWRAPPER_ARG4 (PyObject *, PyUnicode_Decode, const char *, Py_ssize_t, const ch
 PYWRAPPER_ARG3 (PyObject *, PyUnicode_FromEncodedObject, register PyObject *, const char *, const char *)
 PYWRAPPER_ARG3 (PyObject *,PyUnicode_AsEncodedString, register PyObject *, const char *, const char *)
 PYWRAPPER_ARG4(PyFrameObject *, PyFrame_New, PyThreadState *,PyCodeObject *, PyObject *, PyObject *)
+
+void
+Py_Initialize(void)
+{
+  if (!is_python_available () || gdb_Py_Initialize == NULL)
+    {
+        warning ("%s: called while Python is not available!", __FUNCTION__);
+      return;
+    }
+  if (gdb_Py_DontWriteBytecodeFlag != NULL)
+    *gdb_Py_DontWriteBytecodeFlag = 1;
+  gdb_Py_Initialize();
+}
+
 
 PyCodeObject *
 PyCode_New(int a, int b, int c, int d,

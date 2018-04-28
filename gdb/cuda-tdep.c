@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -15,17 +15,19 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "defs.h"
 #include <time.h>
 #include <sys/stat.h>
 #include <ctype.h>
+#if !defined(__QNX__)
 #include <sys/syscall.h>
+#endif
 #include <pthread.h>
 #include <signal.h>
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(__QNX__)
 #include <execinfo.h>
 #endif
 
-#include "defs.h"
 #include "arch-utils.h"
 #include "command.h"
 #include "dummy-frame.h"
@@ -63,8 +65,10 @@
 #include "breakpoint.h"
 #include "reggroups.h"
 
-#include "gdb_assert.h"
-#include "gdb_string.h"
+#include "common-defs.h"
+#include "string.h"
+
+#include "elf-bfd.h"
 
 #include "cuda-asm.h"
 #include "cuda-autostep.h"
@@ -112,9 +116,9 @@ int
 cuda_gdb_get_tid (ptid_t ptid)
 {
   if (cuda_platform_supports_tid ())
-    return TIDGET (ptid);
+    return ptid_get_tid (ptid);
   else
-    return PIDGET (ptid);
+    return ptid_get_pid (ptid);
 }
 
 
@@ -294,25 +298,26 @@ cuda_find_function_name_from_pc (CORE_ADDR pc, bool demangle)
   const char *name = NULL;
   struct symbol *kernel = NULL;
   enum language lang = language_unknown;
-  struct minimal_symbol *msymbol = lookup_minimal_symbol_by_pc (pc);
+  struct bound_minimal_symbol msymbol = lookup_minimal_symbol_by_pc (pc);
 
   /* find the mangled name */
   kernel = find_pc_function (pc);
-  if (kernel && msymbol != NULL &&
-      SYMBOL_VALUE_ADDRESS (msymbol) > BLOCK_START (SYMBOL_BLOCK_VALUE (kernel)))
+  if (kernel && msymbol.minsym != NULL &&
+      MSYMBOL_VALUE_ADDRESS (msymbol.objfile, msymbol.minsym)
+      > BLOCK_START (SYMBOL_BLOCK_VALUE (kernel)))
     {
-      name = SYMBOL_LINKAGE_NAME (msymbol);
-      lang = SYMBOL_LANGUAGE (msymbol);
+      name = MSYMBOL_LINKAGE_NAME (msymbol.minsym);
+      lang = MSYMBOL_LANGUAGE (msymbol.minsym);
     }
   else if (kernel)
     {
       name = SYMBOL_CUDA_NAME (kernel);
       lang = SYMBOL_LANGUAGE (kernel);
     }
-  else if (msymbol != NULL)
+  else if (msymbol.minsym != NULL)
     {
-      name = SYMBOL_LINKAGE_NAME (msymbol);
-      lang = SYMBOL_LANGUAGE (msymbol);
+      name = MSYMBOL_LINKAGE_NAME (msymbol.minsym);
+      lang = MSYMBOL_LANGUAGE (msymbol.minsym);
     }
 
   /* Return early, if name is not found */
@@ -391,7 +396,7 @@ cuda_breakpoint_hit_p (cuda_clock_t clock)
   bool breakpoint_hit = false;
 
   itr = cuda_iterator_create (CUDA_ITERATOR_TYPE_LANES, &filter,
-                               CUDA_SELECT_VALID | CUDA_SELECT_BKPT);
+			      (cuda_select_t) (CUDA_SELECT_VALID | CUDA_SELECT_BKPT));
 
   for (cuda_iterator_start (itr);
        !cuda_iterator_end (itr);
@@ -573,21 +578,16 @@ cuda_get_physical_register (char *reg_name)
 }
 
 /*
- * Convert a CUDA DWARF register into a physical register index
- * Also return whether mapping live range was extrapolated
+ * Check whether the gdb architecture data structure knows of this register;
+ * e.g., it is "Recognized by gdbarch."  If not, then it's probably a cuda
+ * register and return -1.
  */
-int
-cuda_reg_to_regnum_ex (struct gdbarch *gdbarch, reg_t reg, bool *extrapolated)
+static int
+cuda_decode_if_recognized(struct gdbarch *gdbarch, reg_t reg)
 {
-  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
-  int max_regs = gdbarch_num_regs (gdbarch) + gdbarch_num_pseudo_regs (gdbarch);
-  int32_t regno, decoded_reg;
-  uint32_t num_regs;
-  char reg_name[8+1];
-  regmap_t regmap;
-
-  if (extrapolated)
-    *extrapolated = false;
+  int32_t decoded_reg;
+  const int max_regs = gdbarch_num_regs (gdbarch) +
+                       gdbarch_num_pseudo_regs (gdbarch);
 
   /* The register is already decoded and reg_t is unsigned value */
   if (reg <= max_regs)
@@ -597,12 +597,46 @@ cuda_reg_to_regnum_ex (struct gdbarch *gdbarch, reg_t reg, bool *extrapolated)
   if (!cuda_decode_physical_register (reg, &decoded_reg))
     return decoded_reg;
 
-  /* Unrecognized register. */
+  /* Unrecognized register (probably cuda) */
+  return -1;
+}
+
+/*
+ * Return the regmap after decoding the register into a string
+ */
+static regmap_t
+cuda_reg_string_to_regmap(struct gdbarch *gdbarch, reg_t reg)
+{
+  char reg_name[sizeof(ULONGEST)+1];
+
   if (cuda_get_dwarf_register_string (reg, reg_name, sizeof (reg_name)))
-    return -1;
+    return NULL;
+
+  return cuda_get_physical_register (reg_name);
+}
+
+/*
+ * Convert a CUDA DWARF register into a physical register index
+ * Also return whether mapping live range was extrapolated
+ */
+int
+cuda_reg_to_regnum_ex (struct gdbarch *gdbarch, reg_t reg, bool *extrapolated)
+{
+  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
+  int32_t regno;
+  uint32_t num_regs;
+  regmap_t regmap;
+
+  if (extrapolated)
+    *extrapolated = false;
+
+  /* Check if the register is already decoded or encoded with reg class */
+  regno = cuda_decode_if_recognized(gdbarch, reg);
+  if (regno != -1)
+    return regno;
 
   /* At this point, we know that the register is encoded as PTX register string */
-  regmap = cuda_get_physical_register (reg_name);
+  regmap = cuda_reg_string_to_regmap (gdbarch, reg);
   if (!regmap)
     return -1;
 
@@ -629,6 +663,50 @@ cuda_reg_to_regnum_ex (struct gdbarch *gdbarch, reg_t reg, bool *extrapolated)
 
   /* If no physical register was found or the register mapping is not useable,
      returns an invalid regnum to indicate it has been optimized out. */
+  return -1;
+}
+
+/* Return the extrapolated gdb regnum.  This should only be called if no other
+ * regnum can be found.
+ *
+ * This assumes that the extrapolated value is the second in the register
+ * mapping.  
+ *
+ * The user should be aware that extrapolated values are not 100% accurate.  The
+ * help message associated to "set cuda  value_extrapolation" mentions this.
+ */
+int
+cuda_reg_to_regnum_extrapolated (struct gdbarch *gdbarch, reg_t reg)
+{
+  int regno;
+  regmap_t regmap;
+  bool extrapolated;
+
+  if (!gdbarch)
+    return -1;
+ 
+  /* If this is a register that we recognize, use that */ 
+  regno = cuda_decode_if_recognized(gdbarch, reg);
+  if (regno != -1)
+    return regno;
+
+  /* Unrecognized, so turn the register into string and query with that */
+  regmap = cuda_reg_string_to_regmap (gdbarch, reg);
+  if (!regmap)
+    return -1;
+
+  /* We only deal with extrapolated values in this function */
+  if (!regmap_is_extrapolated (regmap))
+    return -1;
+  
+  /* Locate the assumed extrapolated value */
+  if (regmap_get_num_entries (regmap) == 2 &&
+      regmap_get_class(regmap, 1) == REG_CLASS_REG_FULL)
+    {
+      return (int)regmap_get_register (regmap, 1);
+    }
+
+  /* This will be treated as an "optimized out" register */
   return -1;
 }
 
@@ -812,7 +890,7 @@ cuda_is_device_code_address (CORE_ADDR addr)
           /* Skip sections that do not have code */
           if (!(section->flags & SEC_CODE))
             continue;
-          if (section->vma > addr || section->vma + section->size < addr)
+          if (section->vma > addr || section->vma + section->size <= addr)
             continue;
           return true;
         }
@@ -838,10 +916,11 @@ cuda_is_device_code_address (CORE_ADDR addr)
 bool
 cuda_is_bfd_cuda (bfd *obfd)
 {
+  /* elf_header is a single element array in elf_obj_tdata,
+     i.e. it can't be null if elf_obj_data is not null */
   return (obfd &&
-          obfd->tdata.elf_obj_data &&
-          obfd->tdata.elf_obj_data->elf_header &&
-          obfd->tdata.elf_obj_data->elf_header->e_machine == EM_CUDA);
+          elf_tdata(obfd) &&
+          elf_tdata(obfd)->elf_header[0].e_machine == EM_CUDA);
 }
 
 
@@ -873,7 +952,7 @@ cuda_get_bfd_abi_version (bfd *obfd, unsigned int *abi_version)
                                "Further debugging might not be reliable.");
               target_terminal_ours ();
               if (!nquery ("Are you sure you want to continue? "))
-                  fatal ("CUDA ELF Image contains unknown ABI version");
+                  throw_quit ("CUDA ELF Image contains unknown ABI version");
               target_terminal_inferior ();
             }
           *abi_version = abiv;
@@ -934,7 +1013,7 @@ cuda_breakpoint_address_match (struct gdbarch *gdbarch,
 CORE_ADDR
 cuda_get_symbol_address (char *name)
 {
-  struct minimal_symbol *sym = lookup_minimal_symbol (name, NULL, NULL);
+  struct bound_minimal_symbol msym = lookup_minimal_symbol (name, NULL, NULL);
 
 /* CUDA - Mac OS X specific */
 #ifdef target_check_is_objfile_loaded
@@ -943,22 +1022,23 @@ cuda_get_symbol_address (char *name)
   /* CUDA - MAC OS X specific
      We need to check that the object file is actually loaded into
      memory, rather than accessing a cached set of symbols. */
-  if (sym && sym->ginfo.bfd_section && sym->ginfo.bfd_section->owner)
+  if (msym.minsym && msym.minsym->ginfo.bfd_section
+      && msym.minsym->mginfo.bfd_section->owner)
     {
-      objfile = find_objfile_by_name (sym->ginfo.bfd_section->owner->filename, 1); /* 1 = exact match */
+      objfile = find_objfile_by_name (msym.minsym->mginfo.bfd_section->owner->filename, 1); /* 1 = exact match */
       if (objfile && target_check_is_objfile_loaded (objfile))
-        return SYMBOL_VALUE_ADDRESS (sym);
+        return MSYMBOL_VALUE_ADDRESS (objfile, msym.minsym);
     }
 #else
-  if (sym)
-    return SYMBOL_VALUE_ADDRESS (sym);
+  if (msym.minsym)
+    return MSYMBOL_VALUE_ADDRESS (msym.objfile, msym.minsym);
 #endif
 
   return 0;
 }
 
 uint64_t
-cuda_get_last_driver_api_error_code ()
+cuda_get_last_driver_api_error_code (void)
 {
   CORE_ADDR error_code_addr;
   uint64_t res;
@@ -970,12 +1050,12 @@ cuda_get_last_driver_api_error_code ()
       error (_("Cannot retrieve the last driver API error code.\n"));
     }
 
-  target_read_memory (error_code_addr, (char *)&res, sizeof (uint64_t));
+  target_read_memory (error_code_addr, (gdb_byte *) &res, sizeof (uint64_t));
   return res;
 }
 
 static uint64_t
-cuda_get_last_driver_api_error_func_name_size ()
+cuda_get_last_driver_api_error_func_name_size (void)
 {
   CORE_ADDR error_func_name_size_addr;
   uint64_t res;
@@ -988,7 +1068,7 @@ cuda_get_last_driver_api_error_func_name_size ()
       error (_("Cannot retrieve the last driver API error function name size.\n"));
     }
 
-  target_read_memory (error_func_name_size_addr, (char *)&res, sizeof (uint64_t));
+  target_read_memory (error_func_name_size_addr, (gdb_byte *) &res, sizeof (uint64_t));
   return res;
 }
 
@@ -1022,8 +1102,8 @@ cuda_get_last_driver_api_error_func_name (char **name)
       error (_("Cannot retrieve the last driver API error function name addr.\n"));
     }
 
-  target_read_memory (error_func_name_core_addr, (char *)&error_func_name_addr, sizeof (uint64_t));
-  target_read_memory (error_func_name_addr, func_name, size);
+  target_read_memory (error_func_name_core_addr, (gdb_byte *) &error_func_name_addr, sizeof (uint64_t));
+  target_read_memory (error_func_name_addr, (gdb_byte *) func_name, size);
   if (!func_name[0])
     {
       /* This should never happen. If we hit the breakpoint we should have the symbol */
@@ -1033,7 +1113,7 @@ cuda_get_last_driver_api_error_func_name (char **name)
 }
 
 uint64_t
-cuda_get_last_driver_internal_error_code ()
+cuda_get_last_driver_internal_error_code (void)
 {
   CORE_ADDR error_code_addr;
   uint64_t res;
@@ -1045,7 +1125,7 @@ cuda_get_last_driver_internal_error_code ()
       error (_("Cannot retrieve the last driver internal error code.\n"));
     }
 
-  target_read_memory (error_code_addr, (char *)&res, sizeof (uint64_t));
+  target_read_memory (error_code_addr, (gdb_byte *) &res, sizeof (uint64_t));
   return res;
 }
 
@@ -1054,7 +1134,7 @@ cuda_signal_handler (int signo)
 {
   void *buffer[100];
   int n;
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(__QNX__)
   psignal (signo, "Error: received unexpected signal");
 
   n = backtrace (buffer, sizeof buffer);
@@ -1078,10 +1158,11 @@ cuda_signals_initialize (void)
 }
 
 void
-cuda_cleanup ()
+cuda_cleanup (void)
 {
   cuda_trace ("cuda_cleanup");
 
+  registers_changed ();
   set_current_context (NULL);
   cuda_auto_breakpoints_cleanup_breakpoints ();
   cuda_system_cleanup_breakpoints ();
@@ -1249,10 +1330,10 @@ cuda_initialize_target (void)
       error (_("CUDA application cannot be debugged. The CUDA driver is not compatible."));
     }
 
-  target_write_memory (gdbPidAddr             , (char*)&pid, sizeof (pid));
+  target_write_memory (gdbPidAddr             , (gdb_byte *) &pid, sizeof (pid));
   cuda_write_bool     (rpcFlagAddr            , true);
-  target_write_memory (apiClientRevAddr       , (char*)&apiClientRev, sizeof(apiClientRev));
-  target_write_memory (sessionIdAddr          , (char*)&sessionId, sizeof(sessionId));
+  target_write_memory (apiClientRevAddr       , (gdb_byte *)&apiClientRev, sizeof(apiClientRev));
+  target_write_memory (sessionIdAddr          , (gdb_byte *)&sessionId, sizeof(sessionId));
   cuda_write_bool     (memcheckAddr           , cuda_options_memcheck ());
   cuda_write_bool     (launchblockingAddr     , cuda_options_launch_blocking ());
   cuda_write_bool     (preemptionAddr         , cuda_options_software_preemption ());
@@ -1282,7 +1363,7 @@ cuda_inferior_update_suspended_devices_mask (void)
   if (!suspendedDevicesMaskAddr)
     error (_("Failed to get suspended devices mask."));
 
-  target_write_memory (suspendedDevicesMaskAddr, (char*)&suspendedDevicesMask,
+  target_write_memory (suspendedDevicesMaskAddr, (gdb_byte *)&suspendedDevicesMask,
                        sizeof(suspendedDevicesMask));
 }
 
@@ -1427,9 +1508,11 @@ cuda_elf_make_msymbol_special (asymbol *sym, struct minimal_symbol *msym)
   /* break_on_launch */
   if (((elf_symbol_type *) sym)->internal_elf_sym.st_other == STO_CUDA_ENTRY)
     {
-      kernel_entry_point_t new_entry = { SYMBOL_VALUE_ADDRESS(msym),
+      kernel_entry_point_t new_entry = { MSYMBOL_VALUE_RAW_ADDRESS(msym),
                                          cuda_current_elf_image };
       VEC_safe_push (kernel_entry_point_t, cuda_kernel_entry_points, &new_entry);
+
+      SET_MSYMBOL_VALUE_ADDRESS (msym, MSYMBOL_VALUE_RAW_ADDRESS (msym));
     }
 }
 
@@ -1602,15 +1685,19 @@ bailout:
       read_stack (address, buf, len);
       return;
     }
-  TRY_CATCH (e, RETURN_MASK_ALL)
+  TRY
     {
       read_memory (address, buf, len);
     }
-  if (e.reason == 0) return;
-  if (!cuda_managed_address_p (address))
-    throw_exception (e);
-  cuda_api_read_global_memory ((uint64_t)address, buf, len);
-  cuda_set_host_address_resident_on_gpu (true);
+  CATCH (e, RETURN_MASK_ALL)
+    {
+      if (!cuda_managed_address_p (address))
+	throw_exception (e);
+
+      cuda_api_read_global_memory ((uint64_t)address, buf, len);
+      cuda_set_host_address_resident_on_gpu (true);
+    }
+  END_CATCH
 }
 
 /* FIXME: This is to preserve the symmetry of cuda_read/write_memory_partial. */
@@ -1706,15 +1793,19 @@ cuda_write_memory (CORE_ADDR address, const gdb_byte *buf, struct type *type)
     return;
 
   /* Default: write the host memory as usual */
-  TRY_CATCH (e, RETURN_MASK_ALL)
+  TRY
     {
       write_memory (address, buf, len);
     }
-  if (e.reason == 0) return;
-  /* CUDA - managed memory */
-  if (!cuda_managed_address_p (address))
-    throw_exception (e);
-  cuda_api_write_global_memory ((uint64_t)address, buf, len);
+  CATCH (e, RETURN_MASK_ALL)
+    {
+      /* CUDA - managed memory */
+      if (!cuda_managed_address_p (address))
+	throw_exception (e);
+
+      cuda_api_write_global_memory ((uint64_t)address, buf, len);
+    }
+  END_CATCH
 }
 
 /* Single-Stepping
@@ -1747,10 +1838,20 @@ static struct {
   uint32_t dev_id;
   uint32_t sm_id;
   uint32_t wp_id;
+  uint32_t before_lane_mask;
+  uint64_t before_pc;
   uint64_t grid_id;
   bool     grid_id_valid;
-  uint64_t warp_mask;
+  cuda_api_warpmask warp_mask;
 } cuda_sstep_info;
+
+static int cuda_sstep_nsteps = 1;
+
+void
+cuda_sstep_set_nsteps (int nsteps)
+{
+  cuda_sstep_nsteps = nsteps;
+}
 
 bool
 cuda_sstep_is_active (void)
@@ -1786,11 +1887,36 @@ cuda_sstep_wp_id (void)
   return cuda_sstep_info.wp_id;
 }
 
+bool
+cuda_sstep_lane_stepped (uint32_t ln_id)
+{
+  gdb_assert (cuda_sstep_info.active);
+  return (cuda_sstep_info.before_lane_mask >> ln_id) & 1;
+}
+
+uint32_t
+cuda_sstep_get_lowest_lane_stepped (void)
+{
+  uint32_t ln_id;
+  gdb_assert (cuda_sstep_info.active);
+  for (ln_id = 0; ln_id < device_get_num_lanes (cuda_sstep_info.dev_id); ++ln_id)
+    if ((cuda_sstep_info.before_lane_mask >> ln_id) & 1)
+      break;
+  return ln_id;
+}
+
 uint64_t
+cuda_sstep_get_last_pc (void)
+{
+  gdb_assert (cuda_sstep_info.active);
+  return cuda_sstep_info.before_pc;
+}
+
+cuda_api_warpmask*
 cuda_sstep_wp_mask (void)
 {
   gdb_assert (cuda_sstep_info.active);
-  return cuda_sstep_info.warp_mask;
+  return &cuda_sstep_info.warp_mask;
 }
 
 uint64_t
@@ -1810,45 +1936,93 @@ cuda_sstep_set_ptid (ptid_t ptid)
 static bool
 cuda_control_flow_instruction (const char *inst, bool skip_subroutines)
 {
+  const char *substr = NULL;
   if (!inst) return true;
-  if (strstr(inst, "SSY")!=0) return true;
-  if (strstr(inst, "BAR.SYNC")!=0) return true;
-  if (strstr(inst, "BAR.RED")!=0) return true;
-  if (strstr(inst, "BRA")!=0) return true;
-  if (strstr(inst, "BRK")!=0) return true;
-  if (strstr(inst, "NOP.S")!=0) return true;
-  if (strstr(inst, "SYNC")!=0) return true;
-  if (strstr(inst, "EXIT")!=0) return true;
-  if (strstr(inst, "RET")!=0) return true;
-  if (strstr(inst, "JMP")!=0) return true;
-  if (strstr(inst, "JCAL")!=0 && !skip_subroutines) return true;
-  if (strstr(inst, "CAL")!=0 && !skip_subroutines) return true;
+  if (strstr(inst, "SSY") != 0) return true;
+  if (strstr(inst, "BAR.SYNC") != 0) return true;
+  if (strstr(inst, "BAR.RED") != 0) return true;
+  if (strstr(inst, "MEMBAR") != 0) return true;
+  if (strstr(inst, "BRA") != 0) return true;
+  if (strstr(inst, "BRX") != 0) return true;
+  if (strstr(inst, "BRK") != 0) return true;
+  if (strstr(inst, "SYNC") != 0) return true;
+  if (strstr(inst, "EXIT") != 0) return true;
+  if (strstr(inst, "RET") != 0) return true;
+  if (strstr(inst, "JMP") != 0) return true;
+  if (strstr(inst, "JMX") != 0) return true;
+  if (strstr(inst, "YIELD ") != 0) return true;
+  if (strstr(inst, "CAL") != 0 && !skip_subroutines) return true;
+  /* All *.S instructions are control flow instructions */
+  if ((substr = strstr(inst, ".S")) != 0)
+      if (substr[3] == ' ' || substr[3] == 0) return true;
 
   return false;
 }
+
+uint64_t
+cuda_find_next_control_flow_instruction (uint64_t pc,
+                                         uint64_t range_end_pc, /* Exclusive */
+                                         bool skip_subroutines,
+                                         uint32_t *inst_size)
+{
+  uint64_t end_pc, adj_pc;
+  const char *inst = NULL;
+  kernel_t kernel = cuda_current_kernel ();
+
+  end_pc = pc;
+
+  /* Iterate over instructions until the end of the step/next line range.
+   * Break if instruction that can potentially alter program counter has been encountered. */
+  while (end_pc <= range_end_pc)
+    {
+      inst = kernel_disassemble (kernel, end_pc, inst_size);
+
+      cuda_trace_domain (CUDA_TRACE_BREAKPOINT, "%s: pc=0x%llx inst %.*s",
+                         __func__, (long long) end_pc, 20, inst);
+
+      if (cuda_control_flow_instruction (inst, skip_subroutines))
+        break;
+
+      end_pc += *inst_size;
+    }
+
+  /* The above loop might increment end_pc beyond step_range_end.
+     In that case, adjust it to the step_range_end. */
+  if (end_pc > range_end_pc)
+    end_pc = range_end_pc;
+
+  /* Adjust the end_pc to the exact instruction address */
+  adj_pc = gdbarch_adjust_breakpoint_address (cuda_get_gdbarch(), end_pc);
+  end_pc = adj_pc > range_end_pc
+         ? range_end_pc - *inst_size /* end_pc was pointing at SHINT and was
+                                        adjusted beyond range_end_pc - reset
+                                        to just before SHINT */
+         : adj_pc;
+
+  cuda_trace_domain (CUDA_TRACE_BREAKPOINT,
+                     "%s: next control point after %llx (up to %llx) is at %llx (inst %.*s)",
+                     __func__, (long long)pc, (long long)range_end_pc, (long long)end_pc,
+                     (inst == NULL || strlen(inst)> 20) ? 20 : (int)strlen(inst), inst);
+
+  return end_pc; /* end_pc is very close to range_end_pc if no control flow instruction was found */
+}
+
 static bool
 cuda_sstep_fast (ptid_t ptid)
 {
   uint32_t dev_id, sm_id, wp_id, i;
   struct thread_info *tp = inferior_thread();
-  kernel_t kernel = cuda_current_kernel ();
   struct address_space *aspace = NULL;
-  const char *inst;
-  uint32_t inst_size;
-  uint64_t active_pc, pc, end_pc, adj_pc;
+  uint64_t active_pc, pc, end_pc;
   bool skip_subroutines, rc;
+  uint32_t inst_size;
 
   if (!cuda_options_single_stepping_optimizations_enabled ())
     return false;
 
   /* No accelerated single stepping when we accuracy is expected */
-  if (cuda_get_autostep_stepping ())
-    {
-      cuda_trace_domain (CUDA_TRACE_BREAKPOINT,
-                         "Single stepping optimizations were disabled"
-                         " due to autostep accuracy requirements");
-      return false;
-    }
+  if (cuda_get_autostep_pending ())
+    return false;
 
   if (!tp)
     return false;
@@ -1858,51 +2032,24 @@ cuda_sstep_fast (ptid_t ptid)
   if (tp->control.step_range_end <= 1 && tp->control.step_range_start <= 1)
     return false;
 
-  skip_subroutines = tp->control.step_over_calls == STEP_OVER_ALL;
-
   cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
-  end_pc = pc = get_frame_pc (get_current_frame ());
+  pc = get_frame_pc (get_current_frame ());
 
-  /* Iterate over instructions until the end of the step/next line range */
-  /* Break if instruction that can potentially alter program counter has been encountered  */
-  do {
-    inst = kernel_disassemble (kernel, end_pc, &inst_size);
-    cuda_trace_domain (CUDA_TRACE_BREAKPOINT, "%s: pc=0x%llx inst %.*s",
-                       __func__, (long long) end_pc, 20, inst);
-    if (cuda_control_flow_instruction(inst, skip_subroutines)) break;
-    end_pc += inst_size;
-  } while (end_pc < tp->control.step_range_end);
-
- /* The above loop might increment end_pc beyond step_range_end.
-     In that case, adjust it to the step_range_end. */
-  if (end_pc > tp->control.step_range_end)
-    end_pc = tp->control.step_range_end;
+  skip_subroutines = tp->control.step_over_calls == STEP_OVER_ALL;
+  end_pc = cuda_find_next_control_flow_instruction (pc, tp->control.step_range_end, skip_subroutines, &inst_size);
 
   /* Do not attempt to accelerate if stepping over less than 3 instructions */
-  if (end_pc <= pc || end_pc - pc < 3*inst_size) {
-    cuda_trace_domain  (CUDA_TRACE_BREAKPOINT,
-         "%s: Advantage is not big enough: pc=0x%llx end_pc=0x%llx inst_size = %u",
-         __func__, (long long)pc, (long long)end_pc, (unsigned)inst_size);
-    return false;
-  }
-
-  /* Adjust the address of breakpoint instruction is planted at*/
-  adj_pc = gdbarch_adjust_breakpoint_address (cuda_get_gdbarch(), end_pc);
-  end_pc = adj_pc > tp->control.step_range_end ? tp->control.step_range_end - inst_size : adj_pc ;
-
-  /* Check again, if window is big enough */
-  if (end_pc <= pc || end_pc - pc < 3*inst_size) {
-    cuda_trace_domain  (CUDA_TRACE_BREAKPOINT,
-         "%s: Advantage is not big enough: pc=0x%llx end_pc=0x%llx inst_size = %u",
-         __func__, (long long)pc, (long long)end_pc, (unsigned)inst_size);
-    return false;
-  }
-
+  if (end_pc <= pc || end_pc - pc < 3 * inst_size)
+    {
+      cuda_trace_domain(CUDA_TRACE_BREAKPOINT,
+                        "%s: advantage is not big enough: pc=0x%llx end_pc=0x%llx inst_size = %u",
+                        __func__, (long long)pc, (long long)end_pc, (unsigned)inst_size);
+      return false;
+    }
 
   cuda_trace_domain (CUDA_TRACE_BREAKPOINT,
-       "%s: trying to step from %llx to %llx (inst %.*s)",
-       __func__, (long long)pc, (long long)end_pc,
-       (inst == NULL || strlen(inst)> 20) ? 20 : (int)strlen(inst), inst);
+                     "%s: trying to step from %llx to %llx",
+                     __func__, (long long)pc, (long long)end_pc);
 
   /* If breakpoint is set at the current (or current active) PC - temporarily unset it*/
   aspace = target_thread_address_space (ptid);
@@ -1915,7 +2062,7 @@ cuda_sstep_fast (ptid_t ptid)
     cuda_api_unset_breakpoint (dev_id, active_pc);
 
   /* Resume warp(s) until one of the lanes reaches end_pc */
-  rc = warps_resume_until (dev_id, sm_id, cuda_sstep_info.warp_mask, end_pc);
+  rc = warps_resume_until (dev_id, sm_id, &cuda_sstep_info.warp_mask, end_pc);
 
   /* Reset the breakpoint if warps_resume_until call failed */
   if (!rc && breakpoint_here_p (aspace, pc))
@@ -1927,29 +2074,50 @@ cuda_sstep_fast (ptid_t ptid)
   return rc;
 }
 
+static bool
+cuda_sstep_do_step (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,
+                    uint32_t nsteps, cuda_api_warpmask *single_stepped_warp_mask)
+{
+  bool rc;
+
+  rc = warp_single_step (dev_id, sm_id, wp_id, nsteps, single_stepped_warp_mask);
+  if (rc || nsteps < 2)
+    return rc;
+
+  /* Fallback mode: if nsteps failed try single step */
+  rc = warp_single_step (dev_id, sm_id, wp_id, 1, single_stepped_warp_mask);
+  return rc;
+}
+
 /**
  * cuda_sstep_execute(ptid_t) returns true if single-stepping was successful.
  * If false is returned, it is callee responsibility to cleanup CUDA sstep state.
- * (usually done by calling cuda_sstep_reset(). )
+ * (usually done by calling cuda_sstep_reset())
  */
 bool
 cuda_sstep_execute (ptid_t ptid)
 {
-  uint32_t dev_id, sm_id, wp_id, wp;
-  uint64_t grid_id, warp_mask, stepped_warp_mask;
+  uint32_t dev_id, sm_id, wp_id, wp, wp_max;
+  uint64_t grid_id;
+  cuda_api_warpmask warp_mask, stepped_warp_mask;
   bool     sstep_other_warps;
   bool     grid_id_changed;
   bool     rc = true;
+  int      nsteps;
 
   gdb_assert (!cuda_sstep_info.active);
   gdb_assert (cuda_focus_is_device ());
+
+  /* Save nsteps locally and reset to default 1 */
+  nsteps = cuda_sstep_nsteps;
+  cuda_sstep_set_nsteps (1);
 
   cuda_coords_get_current_physical (&dev_id, &sm_id, &wp_id, NULL);
   grid_id           = warp_get_grid_id (dev_id, sm_id, wp_id);
   grid_id_changed   = cuda_sstep_info.grid_id_valid &&
                       cuda_sstep_info.grid_id != grid_id;
-  sstep_other_warps = cuda_sstep_info.warp_mask != 0ULL;
-  stepped_warp_mask = 0ULL;
+  sstep_other_warps = cuda_api_has_bit(&cuda_sstep_info.warp_mask);
+  cuda_api_clear_mask(&stepped_warp_mask);
 
   /* Remember the single-step parameters to trick GDB */
   cuda_sstep_info.active         = true;
@@ -1959,22 +2127,30 @@ cuda_sstep_execute (ptid_t ptid)
   cuda_sstep_info.wp_id          = wp_id;
   cuda_sstep_info.grid_id        = grid_id;
   cuda_sstep_info.grid_id_valid  = true;
+  cuda_sstep_info.before_pc      = warp_get_active_virtual_pc (dev_id, sm_id, wp_id);
+  cuda_sstep_info.before_lane_mask = warp_get_active_lanes_mask (dev_id, sm_id, wp_id);
 
   /* Do not try to single step if grid-id changed */
   if (grid_id_changed)
     {
         cuda_trace("device %u sm %u: switched to new grid %llx while single-stepping!\n",
                    dev_id, sm_id, (unsigned long long)grid_id);
-        cuda_sstep_info.warp_mask = (1ULL << wp_id);
+        cuda_api_clear_mask(&cuda_sstep_info.warp_mask);
+        cuda_api_set_bit(&cuda_sstep_info.warp_mask, wp_id, 1);
         return true;
     }
 
   if (!sstep_other_warps)
-    cuda_sstep_info.warp_mask = (1ULL << wp_id);
+  {
+    cuda_api_clear_mask(&cuda_sstep_info.warp_mask);
+    cuda_api_set_bit(&cuda_sstep_info.warp_mask, wp_id, 1);
+  }
 
-  cuda_trace ("device %u sm %u: single-stepping warp mask 0x%llx\n",
-              dev_id, sm_id, (unsigned long long)cuda_sstep_info.warp_mask);
-  gdb_assert (cuda_sstep_info.warp_mask & (1ULL << wp_id));
+  cuda_trace ("device %u sm %u: single-stepping warp mask %"WARP_MASK_FORMAT"\n",
+              dev_id, sm_id, cuda_api_mask_string(&cuda_sstep_info.warp_mask));
+  gdb_assert (cuda_api_get_bit(&cuda_sstep_info.warp_mask, wp_id));
+
+  wp_max = device_get_num_warps (dev_id);
 
   if (cuda_options_software_preemption ())
     {
@@ -1987,31 +2163,37 @@ cuda_sstep_execute (ptid_t ptid)
          all warps instead of using this mask -- see
          warp_single_step) */
       if (!cuda_sstep_fast (ptid))
-        rc = warp_single_step (dev_id, sm_id, wp_id, &warp_mask);
+        rc = cuda_sstep_do_step (dev_id, sm_id, wp_id, nsteps, &warp_mask);
     }
   else if (!cuda_sstep_fast (ptid))
     {
       /* Single-step all the warps in the warp mask. */
-      for (wp = 0; wp < CUDBG_MAX_WARPS; ++wp)
-        if (cuda_sstep_info.warp_mask & (1ULL << wp) &&
+      for (wp = 0; wp < wp_max; ++wp)
+        if (cuda_api_get_bit(&cuda_sstep_info.warp_mask, wp) &&
             warp_is_valid (dev_id, sm_id, wp))
           {
-            rc = warp_single_step (dev_id, sm_id, wp, &warp_mask);
-            if (!rc) break;
-            stepped_warp_mask |= warp_mask;
+            rc = cuda_sstep_do_step (dev_id, sm_id, wp, nsteps, &warp_mask);
+            if (!rc)
+              break;
+
+            cuda_api_or_mask(&stepped_warp_mask, &stepped_warp_mask, &warp_mask);
+
+            if (cuda_api_has_multiple_bits(&warp_mask)) {
+              /* warp_mask will have multiple bits set in case there was a
+                 barrier instruction. In such case skip iterating through the
+                 remaining valid warps as they are already synchronized */
+              break;
+            }
           }
     }
 
   /* Update the warp mask. It may have grown. */
-  cuda_sstep_info.warp_mask = stepped_warp_mask;
-
+  cuda_api_cp_mask(&cuda_sstep_info.warp_mask, &stepped_warp_mask);
 
   /* If any warps are marked invalid, but are in the warp_mask
      clear them. This can happen if we stepped a warp over an exit */
-  for (wp = 0; wp < CUDBG_MAX_WARPS; ++wp)
-    if (cuda_sstep_info.warp_mask & (1ULL << wp) &&
-        !warp_is_valid (dev_id, sm_id, wp))
-      cuda_sstep_info.warp_mask &= ~(1ULL << wp);
+  cuda_api_and_mask(&cuda_sstep_info.warp_mask,
+    &cuda_sstep_info.warp_mask, sm_get_valid_warps_mask(dev_id, sm_id));
 
   return rc;
 }
@@ -2019,10 +2201,9 @@ cuda_sstep_execute (ptid_t ptid)
 void
 cuda_sstep_initialize (bool stepping)
 {
+  cuda_api_clear_mask(&cuda_sstep_info.warp_mask);
   if (stepping && cuda_focus_is_device ())
-    cuda_sstep_info.warp_mask = (1ULL << cuda_current_warp ());
-  else
-    cuda_sstep_info.warp_mask = 0ULL;
+    cuda_api_set_bit(&cuda_sstep_info.warp_mask, cuda_current_warp(), 1);
   cuda_sstep_info.grid_id_valid = false;
 }
 
@@ -2037,7 +2218,7 @@ cuda_sstep_reset (bool sstep)
     single step execute to update the warp mask after performing the step. */
   if (!sstep && cuda_focus_is_device () && cuda_sstep_is_active ())
     {
-      cuda_sstep_info.warp_mask = 0ULL;
+      cuda_api_clear_mask(&cuda_sstep_info.warp_mask);
       cuda_sstep_info.grid_id_valid = false;
     }
 
@@ -2161,9 +2342,10 @@ cuda_adjust_regnum (struct gdbarch *gdbarch, int regnum, int eh_frame_p)
   if (!cuda_focus_is_device ())
     return regnum;
 
-  cuda_decode_physical_register (regnum, &adjusted_regnum);
+  if (!cuda_decode_physical_register (regnum, &adjusted_regnum))
+    return adjusted_regnum;
 
-  return adjusted_regnum;
+  return 0;
 }
 
 static CORE_ADDR
@@ -2261,10 +2443,11 @@ cuda_find_pc_from_address_string (struct objfile *objfile,
   CORE_ADDR addr = 0;
   bool found = false;
   struct block *b;
-  struct blockvector *bv;
+  const struct blockvector *bv;
   struct symtab *s = NULL;
   struct symtab *symtab_scope = NULL;
-  struct minimal_symbol *msymbol = NULL;
+  struct bound_minimal_symbol bmsym;
+  struct minimal_symbol *msym = NULL;
   const char *sym_name = NULL;
   char *tmp_func_name = NULL;
   struct gdbarch *gdbarch = get_current_arch ();
@@ -2273,6 +2456,7 @@ cuda_find_pc_from_address_string (struct objfile *objfile,
   struct cleanup *cleanup_chain = NULL;
   char * demangled = NULL;
   bool is_lineno = false;
+  struct compunit_symtab *cu;
 
   gdb_assert (objfile);
   gdb_assert (func_name);
@@ -2306,7 +2490,8 @@ cuda_find_pc_from_address_string (struct objfile *objfile,
   if ((tmp_func_name = strrchr (func_name, ':')))
     {
       unsigned long len = (unsigned long)tmp_func_name - (unsigned long)func_name;
-      ALL_OBJFILE_SYMTABS (objfile, s)
+
+      ALL_OBJFILE_FILETABS (objfile, cu, s)
           if ( s->filename && strncmp(s->filename, func_name, len) == 0)
             {
               symtab_scope = s;
@@ -2321,8 +2506,10 @@ cuda_find_pc_from_address_string (struct objfile *objfile,
   /* We need to find the fully-qualified symbol name that func_name
      corresponds to (if any).  This will handle mangled symbol names,
      which is what will be used to lookup a CUDA device code symbol. */
-  if ((msymbol = lookup_minimal_symbol (func_name, NULL, objfile)))
-    sym_name = msymbol->ginfo.name;
+  bmsym = lookup_minimal_symbol (func_name, NULL, objfile);
+
+  if (bmsym.minsym != NULL)
+    sym_name = MSYMBOL_LINKAGE_NAME (bmsym.minsym);
   else if ((demangled = language_demangle (lang, func_name, dmgl_options)))
     {
       sym_name = demangled;
@@ -2333,7 +2520,7 @@ cuda_find_pc_from_address_string (struct objfile *objfile,
 
   /* Look for functions - assigned from DWARF, this path will only
      find information for debug compilations. */
-  ALL_OBJFILE_SYMTABS (objfile, s)
+  ALL_OBJFILE_FILETABS (objfile, cu, s)
     {
       int i;
 
@@ -2352,7 +2539,7 @@ cuda_find_pc_from_address_string (struct objfile *objfile,
             }
         }
 
-      bv = BLOCKVECTOR (s);
+      bv = SYMTAB_BLOCKVECTOR (s);
       for (i = 0; i < BLOCKVECTOR_NBLOCKS (bv); i++)
         {
           b = BLOCKVECTOR_BLOCK (bv, i);
@@ -2377,12 +2564,12 @@ cuda_find_pc_from_address_string (struct objfile *objfile,
      compilation, so look at the msymtab. */
   if (!found)
     {
-      ALL_OBJFILE_MSYMBOLS (objfile, msymbol)
+      ALL_OBJFILE_MSYMBOLS (objfile, msym)
         {
-          if (!strcmp (sym_name, msymbol->ginfo.name))
+          if (!strcmp (sym_name, MSYMBOL_LINKAGE_NAME (msym)))
             {
               found = true;
-              addr = msymbol->ginfo.value.address;
+              addr = MSYMBOL_VALUE_ADDRESS (objfile, msym);
             }
         }
     }
@@ -2525,6 +2712,15 @@ cuda_adjust_breakpoint_address (struct gdbarch *gdbarch, CORE_ADDR bpaddr)
   return (CORE_ADDR)adjusted_addr;
 }
 
+/* This function is suitable for architectures that don't
+   extend/override the standard siginfo structure.  */
+
+static struct type *
+cuda_linux_get_siginfo_type (struct gdbarch *gdbarch)
+{
+  return linux_get_siginfo_type_with_fields (gdbarch, 0);
+}
+
 static struct gdbarch *
 cuda_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 {
@@ -2537,7 +2733,7 @@ cuda_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
     return arches->gdbarch;
 
   /* Allocate space for the new architecture.  */
-  tdep = XCALLOC (1, struct gdbarch_tdep);
+  tdep = XCNEW (struct gdbarch_tdep);
   gdbarch = gdbarch_alloc (&info, tdep);
 
   /* Set extra CUDA architecture specific information */
@@ -2638,7 +2834,6 @@ cuda_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   set_gdbarch_dummy_id (gdbarch, NULL);
   set_gdbarch_push_dummy_call (gdbarch, NULL);
 
-  set_gdbarch_regset_from_core_section (gdbarch, NULL);
   set_gdbarch_skip_permanent_breakpoint (gdbarch, NULL);
   set_gdbarch_fast_tracepoint_valid_at (gdbarch, NULL);
   set_gdbarch_decr_pc_after_break (gdbarch, 0);
@@ -2654,7 +2849,7 @@ cuda_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   set_gdbarch_has_global_breakpoints (gdbarch, 1);
 
   /* We hijack the linux siginfo type for the CUDA target on both Mac & Linux */
-  set_gdbarch_get_siginfo_type (gdbarch, linux_get_siginfo_type);
+  set_gdbarch_get_siginfo_type (gdbarch, cuda_linux_get_siginfo_type);
 
   return gdbarch;
 }
@@ -2774,5 +2969,5 @@ cuda_update_report_driver_api_error_flags (void)
   if (!addr)
     return;
 
-   target_write_memory (addr, (char *)&flags, sizeof(flags));
+   target_write_memory (addr, (gdb_byte *)&flags, sizeof(flags));
 }

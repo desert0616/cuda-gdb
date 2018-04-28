@@ -77,7 +77,7 @@ SOURCES = \
   dcngettext.c \
   dngettext.c \
   ngettext.c \
-  plural.y \
+  plural.c \
   plural-exp.c \
   localcharset.c \
   relocatable.c \

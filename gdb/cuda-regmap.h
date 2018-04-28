@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -25,7 +25,7 @@
 #include "cuda-defs.h"
 
 #define REGMAP_MAX_ENTRIES 32
-#define REGMAP_MAX_LOCATION_INDEX 2
+#define REGMAP_MAX_LOCATION_INDEX 3
 regmap_t      regmap_get_search_result  (void);
 const char *  regmap_get_func_name      (regmap_t regmap);
 const char *  regmap_get_reg_name       (regmap_t regmap);

@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -38,6 +38,8 @@
 #include "cuda-convvars.h"
 #include "libcudbgipc.h"
 
+#include "top.h"
+
 static struct target_ops *host_target_ops = NULL;
 static struct target_ops  host_remote_target_ops;
 static struct target_ops  host_extended_remote_target_ops;
@@ -69,7 +71,19 @@ cuda_do_resume (struct target_ops *ops, ptid_t ptid,
   if (sstep)
     {
       if (cuda_sstep_execute (inferior_ptid))
-        return;
+	{
+	  /* The following is needed because, even though we are dealing with
+	     a remote target, device single-stepping doesn't call into
+	     remote_wait.  Thus, it doesn't set the appropriate state for the
+	     async handler.
+
+	     Therefore we fake the fact that there is a remote event waiting
+	     in the queue so the event handler can call the proper hooks that
+	     ultimately will call target_wait (and thus cuda_remote_wait) so
+	     we can report the device single-stepping event back.  */
+	  remote_report_event (1);
+	  return;
+	}
       /* If single stepping failed, plant a temporary breakpoint
          at the previous frame and resume the device */
       cuda_sstep_reset (false);
@@ -93,7 +107,7 @@ cuda_do_resume (struct target_ops *ops, ptid_t ptid,
 int remote_query_attached (int pid);
 
 static void
-cuda_initialize_remote_target ()
+cuda_initialize_remote_target (void)
 {
   CUDBGResult get_debugger_api_res;
   CUDBGResult set_callback_api_res;
@@ -143,7 +157,7 @@ cuda_initialize_remote_target ()
 }
 
 static void
-cuda_remote_open (char *name, int from_tty)
+cuda_remote_open (const char *name, int from_tty)
 {
   host_target_ops = &host_remote_target_ops;
   host_target_ops->to_open (name, from_tty);
@@ -152,7 +166,7 @@ cuda_remote_open (char *name, int from_tty)
 }
 
 static void
-cuda_extended_remote_open (char *name, int from_tty)
+cuda_extended_remote_open (const char *name, int from_tty)
 {
   host_target_ops = &host_extended_remote_target_ops;
   host_target_ops->to_open (name, from_tty);
@@ -161,11 +175,11 @@ cuda_extended_remote_open (char *name, int from_tty)
 }
 
 static void
-cuda_remote_close (int quitting)
+cuda_remote_close (struct target_ops *ops)
 {
   gdb_assert (host_target_ops);
 
-  host_target_ops->to_close (quitting);
+  host_target_ops->to_close (ops);
 }
 
 static void
@@ -272,6 +286,7 @@ cuda_remote_resume (struct target_ops *ops,
   cuda_do_resume (ops, ptid, sstep, host_want_sstep, ts);
 
   cuda_clock_increment ();
+
   cuda_trace ("cuda_resume: done");
 }
 
@@ -297,7 +312,7 @@ cuda_remote_wait (struct target_ops *ops,
   if (cuda_exception_is_valid (cuda_exception))
     {
       ws->kind = TARGET_WAITKIND_SIGNALLED;
-      ws->value.sig = cuda_exception_get_value (cuda_exception);
+      ws->value.sig = (enum gdb_signal) cuda_exception_get_value (cuda_exception);
       cuda_exception_reset (cuda_exception);
       cuda_trace ("cuda_wait: exception found");
       return inferior_ptid;
@@ -312,7 +327,6 @@ cuda_remote_wait (struct target_ops *ops,
          quit_flag is set by gdb handle_sigint() signal handler */
       if (cuda_remote_check_pending_sigint () || check_quit_flag())
         {
-          clear_quit_flag();
           ws->kind = TARGET_WAITKIND_STOPPED;
           ws->value.sig = GDB_SIGNAL_INT;
           cuda_set_signo (GDB_SIGNAL_INT);
@@ -365,6 +379,13 @@ cuda_remote_wait (struct target_ops *ops,
     cuda_trace ("cuda_wait: host_wait\n");
     cuda_coords_invalidate_current ();
     r = host_target_ops->to_wait (ops, ptid, ws, target_options);
+
+    /* GDB reads events asynchronously without blocking. The remote may have
+       taken too long to reply and GDB did not get any events back.  Check if
+       this is the case and just return.  */
+    if (ws->kind == TARGET_WAITKIND_IGNORE
+	|| ws->kind == TARGET_WAITKIND_NO_RESUMED)
+      return r;
   }
 
   /* Immediately detect if the inferior is exiting.
@@ -420,7 +441,7 @@ cuda_remote_wait (struct target_ops *ops,
       cuda_coords_set_current (&c);
       cuda_exception_print_message (cuda_exception);
       ws->kind = TARGET_WAITKIND_STOPPED;
-      ws->value.sig = cuda_exception_get_value (cuda_exception);
+      ws->value.sig = (enum gdb_signal) cuda_exception_get_value (cuda_exception);
       cuda_set_signo (cuda_exception_get_value (cuda_exception));
     }
   else if (cuda_sstep_is_active ())
@@ -599,7 +620,8 @@ cuda_remote_store_registers (struct target_ops *ops,
 }
 
 static int
-cuda_remote_insert_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_tgt)
+cuda_remote_insert_breakpoint (struct target_ops *ops, struct gdbarch *gdbarch,
+			       struct bp_target_info *bp_tgt)
 {
   uint32_t dev;
   bool inserted;
@@ -609,19 +631,26 @@ cuda_remote_insert_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *b
               gdbarch_bfd_arch_info (gdbarch)->arch == bfd_arch_aarch64);
 
   if (!bp_tgt->owner || !bp_tgt->owner->cuda_breakpoint)
-    return host_target_ops->to_insert_breakpoint (gdbarch, bp_tgt);
+    return host_target_ops->to_insert_breakpoint (ops, gdbarch, bp_tgt);
 
   /* Insert the breakpoint on whatever device accepts it (valid address). */
   inserted = false;
   for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
     {
-      inserted |= cuda_api_set_breakpoint (dev, bp_tgt->placed_address);
+      inserted |= cuda_api_set_breakpoint (dev, bp_tgt->reqstd_address);
     }
+
+  /* Make sure we save the address where the actual breakpoint was placed.  */
+  if (inserted)
+    bp_tgt->placed_address = bp_tgt->reqstd_address;
+
   return !inserted;
 }
 
 static int
-cuda_remote_remove_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_tgt)
+cuda_remote_remove_breakpoint (struct target_ops *ops, struct gdbarch *gdbarch,
+			       struct bp_target_info *bp_tgt,
+			       enum remove_bp_reason reason)
 {
   uint32_t dev;
   CORE_ADDR cuda_addr;
@@ -632,7 +661,7 @@ cuda_remote_remove_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *b
               gdbarch_bfd_arch_info (gdbarch)->arch == bfd_arch_aarch64);
 
   if (!bp_tgt->owner || !bp_tgt->owner->cuda_breakpoint)
-    return host_target_ops->to_remove_breakpoint (gdbarch, bp_tgt);
+    return host_target_ops->to_remove_breakpoint (ops, gdbarch, bp_tgt, reason);
 
   /* Removed the breakpoint on whatever device accepts it (valid address). */
   removed = false;
@@ -648,10 +677,11 @@ cuda_remote_remove_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *b
    only the si_signo matters. We do not save the siginfo object. Instead we
    save only the signo. Therefore any read/write to any other field of the
    siginfo object will have no effect or will return 0. */
-static LONGEST
+static enum target_xfer_status
 cuda_remote_xfer_siginfo (struct target_ops *ops, enum target_object object,
                           const char *annex, gdb_byte *readbuf,
-                          const gdb_byte *writebuf, ULONGEST offset, LONGEST len)
+                          const gdb_byte *writebuf, ULONGEST offset,
+			  LONGEST len, ULONGEST *xfered_len)
 {
   /* the size of siginfo is not consistent between ptrace and other parts of
      GDB. On 32-bit Linux machines, the layout might be 64 bits. It does not
@@ -666,10 +696,10 @@ cuda_remote_xfer_siginfo (struct target_ops *ops, enum target_object object,
   gdb_assert (readbuf || writebuf);
 
   if (!cuda_focus_is_device ())
-    return -1;
+    return TARGET_XFER_E_IO ;
 
   if (offset >= sizeof (buf))
-    return -1;
+    return TARGET_XFER_E_IO;
 
   if (offset + len > sizeof (buf))
     len = sizeof (buf) - offset;
@@ -687,25 +717,27 @@ cuda_remote_xfer_siginfo (struct target_ops *ops, enum target_object object,
       cuda_set_signo (siginfo->si_signo);
     }
 
-  return len;
+  *xfered_len = len;
+  return TARGET_XFER_OK;
 }
 
-static LONGEST
+static enum target_xfer_status
 cuda_remote_xfer_partial (struct target_ops *ops,
                           enum target_object object, const char *annex,
                           gdb_byte *readbuf, const gdb_byte *writebuf,
-                          ULONGEST offset, LONGEST len)
+                          ULONGEST offset, ULONGEST len, ULONGEST *xfered_len)
 {
-  LONGEST nbytes = 0;
+  enum target_xfer_status status = TARGET_XFER_E_IO;
   uint32_t dev, sm, wp, ln;
 
   gdb_assert (host_target_ops);
   /* If focus set on device, call the host routines directly */
   if (!cuda_focus_is_device ())
     {
-      nbytes = host_target_ops->to_xfer_partial (ops, object, annex, readbuf,
-                                                writebuf, offset, len);
-      return nbytes;
+      status = host_target_ops->to_xfer_partial (ops, object, annex, readbuf,
+                                                 writebuf, offset, len,
+						 xfered_len);
+      return status;
     }
 
   switch (object)
@@ -717,7 +749,7 @@ cuda_remote_xfer_partial (struct target_ops *ops,
 
       if ((readbuf  && cuda_api_read_pinned_memory  (offset, readbuf, len)) ||
           (writebuf && cuda_api_write_pinned_memory (offset, writebuf, len)))
-        nbytes = len;
+        *xfered_len = len;
 
       break;
 
@@ -728,28 +760,30 @@ cuda_remote_xfer_partial (struct target_ops *ops,
       if (readbuf)
         {
           cuda_api_read_local_memory (dev, sm, wp, ln, offset, readbuf, len);
-          nbytes = len;
+          *xfered_len = len;
         }
       else if (writebuf)
         {
           cuda_api_write_local_memory (dev, sm, wp, ln, offset, writebuf, len);
-          nbytes = len;
+          *xfered_len = len;
         }
       break;
 
     /* When stopping on the device, build a simple siginfo object */
     case TARGET_OBJECT_SIGNAL_INFO:
 
-      nbytes = cuda_remote_xfer_siginfo (ops, object, annex, readbuf, writebuf,
-                                      offset, len);
+      status = cuda_remote_xfer_siginfo (ops, object, annex, readbuf,
+					      writebuf, offset, len,
+					      xfered_len);
       break;
   }
 
-  if (nbytes < len)
-    nbytes = host_target_ops->to_xfer_partial (ops, object, annex, readbuf,
-                                              writebuf, offset, len);
+  if (*xfered_len < len)
+    status = host_target_ops->to_xfer_partial (ops, object, annex, readbuf,
+                                               writebuf, offset, len,
+					       xfered_len);
 
-  return nbytes;
+  return status;
 }
 
 static struct gdbarch *
@@ -762,12 +796,12 @@ cuda_remote_thread_architecture (struct target_ops *ops, ptid_t ptid)
 }
 
 static void
-cuda_remote_prepare_to_store (struct regcache *regcache)
+cuda_remote_prepare_to_store (struct target_ops *ops, struct regcache *regcache)
 {
   gdb_assert (host_target_ops);
   if (get_regcache_arch (regcache) == cuda_get_gdbarch ())
     return;
-  host_target_ops->to_prepare_to_store (regcache);
+  host_target_ops->to_prepare_to_store (ops, regcache);
 }
 
 void
@@ -809,7 +843,7 @@ cuda_remote_attach (void)
   if (!debugFlagAddr || !sessionIdAddr)
     return;
   
-  target_read_memory (sessionIdAddr, (char*)&sessionId, sizeof(sessionId));
+  target_read_memory (sessionIdAddr, (gdb_byte *)&sessionId, sizeof(sessionId));
   if (!sessionId)
     return;
 
@@ -849,10 +883,25 @@ cuda_remote_attach (void)
   target_read_memory (attachDataAvailableFlagAddr, &attachDataAvailable, 1);
 
   if (attachDataAvailable)
-    /* Resume the inferior to collect more data. CUDA_ATTACH_STATE_COMPLETE and
-       CUDBG_IPC_FLAG_NAME will be set once this completes. */
-    /*Was: continue_command (0, 0);*/
-    continue_1 (false);
+    {
+      int  cnt;
+      /* Resume the inferior to collect more data. CUDA_ATTACH_STATE_COMPLETE and
+	 CUDBG_IPC_FLAG_NAME will be set once this completes. */
+
+      for (cnt=0;
+	   cnt < 1000
+           && cuda_api_get_attach_state () == CUDA_ATTACH_STATE_IN_PROGRESS;
+           cnt++)
+	  {
+	      prepare_execution_command (&current_target, true);
+	      continue_1 (false);
+	      wait_for_inferior ();
+	      normal_stop ();
+	  }
+
+      /* All threads are stopped at this point.  */
+      set_running (minus_one_ptid, 0);
+    }
   else
     {
       /* Enable debugger callbacks from the CUDA driver */
@@ -864,7 +913,7 @@ cuda_remote_attach (void)
 }
 
 static void
-cuda_remote_detach(struct target_ops *ops, char *args, int from_tty)
+cuda_remote_detach(struct target_ops *ops, const char *args, int from_tty)
 {
   gdb_assert (host_target_ops);
 

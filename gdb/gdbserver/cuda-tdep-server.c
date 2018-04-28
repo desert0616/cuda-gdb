@@ -15,6 +15,7 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "cuda-tdep-server.h"
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ptrace.h>
@@ -23,11 +24,15 @@
 #endif
 #include <sys/wait.h>
 #include <sys/syscall.h>
-#include <unistd.h>
-#include "cuda-tdep-server.h"
 #include "../cuda-notifications.h"
+#include <unistd.h>
 
 /*----------------------------------------- Globals ---------------------------------------*/
+CUDBGResult api_initialize_res;
+CUDBGResult api_finalize_res;
+CUDBGResult get_debugger_api_res;
+CUDBGResult set_callback_api_res;
+
 struct cuda_sym cuda_symbol_list[] =
 {
   CUDA_SYM(CUDBG_IPC_FLAG_NAME),
@@ -222,7 +227,7 @@ cuda_trace (char *fmt, ...)
     return;
 
   va_start (ap, fmt);
-  msg = xmalloc (sizeof (*msg));
+  msg = (struct cuda_trace_msg *) xmalloc (sizeof (*msg));
   if (!cuda_first_trace_msg)
     cuda_first_trace_msg = msg;
   else
@@ -234,7 +239,7 @@ cuda_trace (char *fmt, ...)
 }
 
 void
-cuda_cleanup_trace_messages ()
+cuda_cleanup_trace_messages (void)
 {
   struct cuda_trace_msg *msg;
   if (!cuda_first_trace_msg)
@@ -249,43 +254,43 @@ cuda_cleanup_trace_messages ()
 }
 
 bool
-cuda_options_memcheck ()
+cuda_options_memcheck (void)
 {
   return cuda_memcheck;
 }
 
 bool
-cuda_options_launch_blocking ()
+cuda_options_launch_blocking (void)
 {
   return cuda_launch_blocking;
 }
 
 bool
-cuda_options_software_preemption ()
+cuda_options_software_preemption (void)
 {
   return cuda_software_preemption;
 }
 
 bool
-cuda_options_debug_general ()
+cuda_options_debug_general (void)
 {
   return cuda_debug_general;
 }
 
 bool
-cuda_options_debug_libcudbg ()
+cuda_options_debug_libcudbg (void)
 {
   return cuda_debug_libcudbg;
 }
 
 bool
-cuda_options_debug_notifications ()
+cuda_options_debug_notifications (void)
 {
   return cuda_debug_notifications;
 }
 
 bool
-cuda_options_notify_youngest ()
+cuda_options_notify_youngest (void)
 {
   return cuda_notify_youngest;
 }
@@ -297,7 +302,7 @@ cuda_options_stop_signal (void)
 }
 
 void
-cuda_cleanup ()
+cuda_cleanup (void)
 {
   int i;
   cuda_trace ("cuda_cleanup");
@@ -315,7 +320,7 @@ cuda_cleanup ()
 }
 
 int
-cuda_get_symbol_cache_size ()
+cuda_get_symbol_cache_size (void)
 {
   return sizeof (cuda_symbol_list) / sizeof (cuda_symbol_list[0]);
 }
@@ -339,7 +344,7 @@ cuda_inferior_in_debug_mode (void)
 }
 
 int
-cuda_get_debugger_api ()
+cuda_get_debugger_api (void)
 {
   gdb_assert (!cudbgAPI);
 
@@ -354,7 +359,7 @@ cuda_get_debugger_api ()
 /* Initialize the CUDA debugger API and collect the static data about
    the devices. Once per application run. */
 static void
-cuda_initialize ()
+cuda_initialize (void)
 {
   if (cuda_initialized)
     return;
@@ -370,7 +375,7 @@ cuda_initialize ()
 /* Tell the target application that it is being
    CUDA-debugged. Inferior must have been launched first. */
 bool
-cuda_initialize_target ()
+cuda_initialize_target (void)
 {
   const unsigned char zero = 0;
   const unsigned char one = 1;

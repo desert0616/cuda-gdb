@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -56,7 +56,8 @@
 #endif
 #include "inf-child.h"
 #include "cuda-linux-nat.h"
-
+#include "top.h"
+#include "event-top.h"
 
 #define CUDA_NUM_CUDART_FRAME_ENTRIES 3
 
@@ -69,16 +70,18 @@ static struct {
    routines instead. */
 static struct target_ops host_target_ops;
 
-static void cuda_nat_detach (struct target_ops *ops, char *args, int from_tty);
+static void cuda_nat_detach (struct target_ops *ops, const char *args,
+			     int from_tty);
 
 /* The whole Linux siginfo structure is presented to the user, but, internally,
    only the si_signo matters. We do not save the siginfo object. Instead we
    save only the signo. Therefore any read/write to any other field of the
    siginfo object will have no effect or will return 0. */
-static LONGEST
+static enum target_xfer_status
 cuda_nat_xfer_siginfo (struct target_ops *ops, enum target_object object,
                        const char *annex, gdb_byte *readbuf,
-                       const gdb_byte *writebuf, ULONGEST offset, LONGEST len)
+                       const gdb_byte *writebuf, ULONGEST offset, LONGEST len,
+		       ULONGEST *xfered_len)
 {
   /* the size of siginfo is not consistent between ptrace and other parts of
      GDB. On 32-bit Linux machines, the layout might be 64 bits. It does not
@@ -92,10 +95,10 @@ cuda_nat_xfer_siginfo (struct target_ops *ops, enum target_object object,
   gdb_assert (readbuf || writebuf);
 
   if (!cuda_focus_is_device ())
-    return -1;
+    return TARGET_XFER_E_IO;
 
   if (offset >= sizeof (buf))
-    return -1;
+    return TARGET_XFER_E_IO;
 
   if (offset + len > sizeof (buf))
     len = sizeof (buf) - offset;
@@ -113,17 +116,19 @@ cuda_nat_xfer_siginfo (struct target_ops *ops, enum target_object object,
       cuda_set_signo (siginfo->si_signo);
     }
 
-  return len;
+  *xfered_len = len;
+  return TARGET_XFER_OK;
 }
 
-static LONGEST
+static enum target_xfer_status
 cuda_nat_xfer_partial (struct target_ops *ops,
                        enum target_object object, const char *annex,
                        gdb_byte *readbuf, const gdb_byte *writebuf,
-                       ULONGEST offset, LONGEST len)
+                       ULONGEST offset, ULONGEST len, ULONGEST *xfered_len)
 {
-  LONGEST nbytes = 0;
+  enum target_xfer_status status = TARGET_XFER_E_IO;
   uint32_t dev, sm, wp, ln;
+  *xfered_len = 0;
 
   /* Either readbuf or writebuf must be a valid pointer */
   gdb_assert (readbuf != NULL || writebuf != NULL);
@@ -131,27 +136,28 @@ cuda_nat_xfer_partial (struct target_ops *ops,
   /* If focus is not set on device, call the host routines directly */
   if (!cuda_focus_is_device ())
     {
-      nbytes = host_target_ops.to_xfer_partial (ops, object, annex, readbuf,
-                                                writebuf, offset, len);
+      status = host_target_ops.to_xfer_partial (ops, object, annex, readbuf,
+                                                writebuf, offset, len,
+						xfered_len);
 #ifdef __arm__
       /*
        * FIXME - Temporary workaround for mmap()/ptrace() issue.
        * If xfer partial targets object other than memory and error is hit,
        * return right away to let cuda-gdb return the right error.
        */
-       if (nbytes <= 0 && object != TARGET_OBJECT_MEMORY)
-         return nbytes;
+       if (*xfered_len <= 0 && object != TARGET_OBJECT_MEMORY)
+         return TARGET_XFER_OK;
 
        /*
-       * If the host memory xfer operation fails (i.e. nbytes is 0),
+       * If the host memory xfer operation fails (i.e. *xfered_len is 0),
        * fallthrough to see if the CUDA Debug API can access
        * the specified address.
        * This can happen with ordinary mmap'd allocations.
        */
-      if (nbytes > 0)
-        return nbytes;
+      if (*xfered_len > 0)
+	return status;
 #else
-      return nbytes;
+      return status;
 #endif
     }
 
@@ -162,39 +168,55 @@ cuda_nat_xfer_partial (struct target_ops *ops,
        system memory that was allocated by the inferior through the CUDA API */
     case TARGET_OBJECT_MEMORY:
 
-      nbytes = host_target_ops.to_xfer_partial (ops, object, annex, readbuf,
-                                                writebuf, offset, len);
-      if (nbytes)
-        return nbytes;
+      status = host_target_ops.to_xfer_partial (ops, object, annex, readbuf,
+                                                writebuf, offset, len,
+						xfered_len);
+      if (*xfered_len)
+        return TARGET_XFER_OK;
 
-      if ( readbuf ?
-            cuda_api_read_pinned_memory  (offset, readbuf, len) :
-            cuda_api_write_pinned_memory (offset, writebuf, len) )
-        return len;
+      if (readbuf ? cuda_api_read_pinned_memory  (offset, readbuf, len) :
+		    cuda_api_write_pinned_memory (offset, writebuf, len))
+	{
+	  *xfered_len = len;
+	  return TARGET_XFER_OK;
+	}
 
-      return -EINVAL;
+      /* If all else failed, try to read memory from the device.  */
+      if (cuda_coords_get_current_physical (&dev, &sm, &wp, &ln))
+        return TARGET_XFER_E_IO;
+
+      if (readbuf)
+        cuda_api_read_local_memory (dev, sm, wp, ln, offset, readbuf, len);
+      else
+        cuda_api_write_local_memory (dev, sm, wp, ln, offset, writebuf, len);
+
+      *xfered_len = len;
+      return TARGET_XFER_OK;
 
     /* The stack lives in local memory for ABI compilations. */
     case TARGET_OBJECT_STACK_MEMORY:
 
       if (cuda_coords_get_current_physical (&dev, &sm, &wp, &ln))
-        return -EINVAL;
+        return TARGET_XFER_E_IO;
       if (readbuf)
         cuda_api_read_local_memory (dev, sm, wp, ln, offset, readbuf, len);
       else
         cuda_api_write_local_memory (dev, sm, wp, ln, offset, writebuf, len);
-      return len;
+
+      *xfered_len = len;
+      return status;
 
     /* When stopping on the device, build a simple siginfo object */
     case TARGET_OBJECT_SIGNAL_INFO:
 
       return cuda_nat_xfer_siginfo (ops, object, annex, readbuf, writebuf,
-                                    offset, len);
+                                    offset, len, xfered_len);
   }
 
   /* Fallback to host routines for other types of memory objects */
   return host_target_ops.to_xfer_partial (ops, object, annex, readbuf,
-                                          writebuf, offset, len);
+                                          writebuf, offset, len,
+					  xfered_len);
 }
 
 static void
@@ -303,7 +325,7 @@ cuda_check_pending_sigint (pid_t pid)
    return 0;
 }
 
-struct {
+struct cuda_sigtrap_info_st {
   bool saved;
   uint32_t print;
   uint32_t stop;
@@ -415,7 +437,7 @@ cuda_do_resume (struct target_ops *ops, ptid_t ptid,
           if (rc)
             error (_("Failed to get current logical coordinates on GPU!"));
           /* Invalidate current coordinates as well as device cache */
-          device_invalidate ( cuda_current_device ());
+          device_invalidate (cuda_current_device ());
           cuda_coords_invalidate_current ();
 
           rc = cuda_coords_set_current_logical (kernel_id, grid_id, block_idx, thread_idx);
@@ -451,6 +473,13 @@ cuda_nat_resume (struct target_ops *ops, ptid_t ptid, int sstep, enum gdb_signal
 
   cuda_trace ("cuda_resume: sstep=%d", sstep);
   cuda_host_want_singlestep = 0;
+
+  if (!cuda_options_device_resume_on_cpu_dynamic_function_call () &&
+      inferior_thread ()->control.in_infcall)
+    {
+      host_target_ops.to_resume (ops, ptid, 0, ts);
+      return;
+    }
 
   /* In cuda-gdb we have two types of device exceptions :
      Recoverable : CUDA_EXCEPTION_WARP_ASSERT
@@ -558,10 +587,14 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
 
   cuda_trace ("cuda_wait");
 
+  if (!cuda_options_device_resume_on_cpu_dynamic_function_call () &&
+      inferior_thread ()->control.in_infcall)
+    return host_target_ops.to_wait (ops, ptid, ws, target_options);
+
   if (cuda_exception_is_valid (cuda_exception))
     {
       ws->kind = TARGET_WAITKIND_SIGNALLED;
-      ws->value.sig = cuda_exception_get_value (cuda_exception);
+      ws->value.sig = (enum gdb_signal) cuda_exception_get_value (cuda_exception);
       cuda_exception_reset (cuda_exception);
       cuda_trace ("cuda_wait: exception found");
       return inferior_ptid;
@@ -578,9 +611,8 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
          check for a pending SIGINT here.
          if quit_flag is set then C-c was pressed in gdb session
          but signal was yet not forwarded to debugged process */
-      if (cuda_check_pending_sigint (PIDGET (r)) || check_quit_flag() )
+      if (cuda_check_pending_sigint (ptid_get_pid (r)) || check_quit_flag() )
         {
-          clear_quit_flag();
           ws->kind = TARGET_WAITKIND_STOPPED;
           ws->value.sig = GDB_SIGNAL_INT;
           cuda_set_signo (GDB_SIGNAL_INT);
@@ -631,6 +663,20 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
       cuda_trace ("cuda_wait: host_wait\n");
       cuda_coords_invalidate_current ();
       r = host_target_ops.to_wait (ops, ptid, ws, target_options);
+
+      /* GDB reads events asynchronously without blocking. The target may have
+	 taken too long to reply and GDB did not get any events back.  Check if
+	 this is the case and just return.  */
+      if (ws->kind == TARGET_WAITKIND_IGNORE
+	  || ws->kind == TARGET_WAITKIND_NO_RESUMED)
+	return r;
+
+      if (ws->kind == TARGET_WAITKIND_STOPPED &&
+	  ws->value.sig == GDB_SIGNAL_0)
+	{
+	  /* GDB is trying to stop this thread.  Let it do it.  */
+	  return r;
+	}
     }
 
   /* Immediately detect if the inferior is exiting.
@@ -691,7 +737,7 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
       cuda_coords_set_current (&c);
       cuda_exception_print_message (cuda_exception);
       ws->kind = TARGET_WAITKIND_STOPPED;
-      ws->value.sig = cuda_exception_get_value (cuda_exception);
+      ws->value.sig = (enum gdb_signal) cuda_exception_get_value (cuda_exception);
       cuda_set_signo (cuda_exception_get_value (cuda_exception));
     }
   else if (cuda_sstep_is_active ())
@@ -743,7 +789,6 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
     {
       /* cuda-gdb received sigint, probably Nsight tries to stop the app. */
       cuda_trace ("cuda_wait: stopped because SIGINT was received by debugger.");
-      clear_quit_flag ();
       ws->kind = TARGET_WAITKIND_STOPPED;
       ws->value.sig = GDB_SIGNAL_INT;
       cuda_set_signo (GDB_SIGNAL_INT);
@@ -879,7 +924,8 @@ cuda_nat_store_registers (struct target_ops *ops,
 }
 
 static int
-cuda_nat_insert_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_tgt)
+cuda_nat_insert_breakpoint (struct target_ops *ops, struct gdbarch *gdbarch,
+			    struct bp_target_info *bp_tgt)
 {
   uint32_t dev;
   bool inserted;
@@ -889,19 +935,25 @@ cuda_nat_insert_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_t
               gdbarch_bfd_arch_info (gdbarch)->arch == bfd_arch_aarch64);
 
   if (!bp_tgt->owner || !bp_tgt->owner->cuda_breakpoint)
-    return host_target_ops.to_insert_breakpoint (gdbarch, bp_tgt);
+    return host_target_ops.to_insert_breakpoint (ops, gdbarch, bp_tgt);
 
   /* Insert the breakpoint on whatever device accepts it (valid address). */
   inserted = false;
   for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
     {
-      inserted |= cuda_api_set_breakpoint (dev, bp_tgt->placed_address);
+      inserted |= cuda_api_set_breakpoint (dev, bp_tgt->reqstd_address);
     }
+
+  /* Make sure we save the address where the actual breakpoint was placed.  */
+  if (inserted)
+    bp_tgt->placed_address = bp_tgt->reqstd_address;
+
   return !inserted;
 }
 
 static int
-cuda_nat_remove_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_tgt)
+cuda_nat_remove_breakpoint (struct target_ops *ops, struct gdbarch *gdbarch,
+			    struct bp_target_info *bp_tgt, enum remove_bp_reason reason)
 {
   uint32_t dev;
   CORE_ADDR cuda_addr;
@@ -912,7 +964,7 @@ cuda_nat_remove_breakpoint (struct gdbarch *gdbarch, struct bp_target_info *bp_t
               gdbarch_bfd_arch_info (gdbarch)->arch == bfd_arch_aarch64);
 
   if (!bp_tgt->owner || !bp_tgt->owner->cuda_breakpoint)
-    return host_target_ops.to_remove_breakpoint (gdbarch, bp_tgt);
+    return host_target_ops.to_remove_breakpoint (ops, gdbarch, bp_tgt, reason);
 
   /* Removed the breakpoint on whatever device accepts it (valid address). */
   removed = false;
@@ -1218,8 +1270,6 @@ _initialize_cuda_nat (void)
   cuda_debugging_enabled = true;
 }
 
-
-
 void
 cuda_nat_attach (void)
 {
@@ -1315,11 +1365,20 @@ cuda_nat_attach (void)
       cleanup = cuda_gdb_bypass_signals ();
       /* Resume the inferior to collect more data. CUDA_ATTACH_STATE_COMPLETE and
          CUDBG_IPC_FLAG_NAME will be set once this completes. */
-      for (cnt=0; cnt < 10 &&
-                  cuda_api_get_attach_state () == CUDA_ATTACH_STATE_IN_PROGRESS;
-                  cnt++)
-        /* Was: continue_command (0, 0); */
-        continue_1 (false);
+      for (cnt=0;
+	   cnt < 1000
+           && cuda_api_get_attach_state () == CUDA_ATTACH_STATE_IN_PROGRESS;
+           cnt++)
+	  {
+	      prepare_execution_command (&current_target, true);
+	      continue_1 (false);
+	      wait_for_inferior ();
+	      normal_stop ();
+	  }
+
+      /* No threads are running at this point.  */
+      set_running (minus_one_ptid, 0);
+
       do_cleanups (cleanup);
       if (cuda_api_get_attach_state () != CUDA_ATTACH_STATE_APP_READY &&
           cuda_api_get_attach_state () != CUDA_ATTACH_STATE_COMPLETE)
@@ -1339,13 +1398,12 @@ cuda_nat_attach (void)
   for (dev = 0; dev < cuda_system_get_num_devices (); ++dev)
     device_suspend (dev);
 
-
+  /* The inferior just got signaled, we're not expecting any other stop */
+  current_inferior ()->control.stop_soon = NO_STOP_QUIETLY;
 }
-
 
 void cuda_do_detach(bool remote)
 {
-
   struct cmd_list_element *alias = NULL;
   struct cmd_list_element *prefix_cmd = NULL;
   struct cmd_list_element *cmd = NULL;
@@ -1407,14 +1465,27 @@ void cuda_do_detach(bool remote)
      cleanup finishes. */
   if (resumeAppOnDetach)
     {
+      int cnt;
+
       /* Clear all breakpoints */
       delete_command (NULL, 0);
       cuda_system_cleanup_breakpoints ();
       cuda_options_disable_break_on_launch ();
 
       /* Now resume the app and wait for CUDA_ATTACH_STATE_DETACH_COMPLETE event. */
-      /* Was: continue_command (0, 0); */
-      continue_1 (false);
+      for (cnt=0;
+	   cnt < 100
+           && cuda_api_get_attach_state () != CUDA_ATTACH_STATE_DETACH_COMPLETE;
+           cnt++)
+	  {
+	      prepare_execution_command (&current_target, true);
+	      continue_1 (false);
+	      wait_for_inferior ();
+	      normal_stop ();
+	  }
+
+      /* No threads are running at this point.  */
+      set_running (minus_one_ptid, 0);
     }
   else
     cuda_api_set_attach_state (CUDA_ATTACH_STATE_DETACH_COMPLETE);
@@ -1428,7 +1499,7 @@ void cuda_do_detach(bool remote)
 }
 
 static void
-cuda_nat_detach (struct target_ops *ops, char *args, int from_tty)
+cuda_nat_detach (struct target_ops *ops, const char *args, int from_tty)
 {
   /* If the Debug API is not initialized,
    * treat the inferior as a host-only process */
@@ -1462,7 +1533,8 @@ cuda_init_field (struct field *fp, const char *name, const int offs, struct type
 static struct type *
 cuda_alloc_dim3_type (struct objfile *objfile)
 {
-  struct type *uint32_type = builtin_type (objfile->gdbarch)->builtin_unsigned_int;
+  struct gdbarch *gdbarch = get_objfile_arch (objfile); 
+  struct type *uint32_type = builtin_type (gdbarch)->builtin_unsigned_int;
   struct type *dim3 = NULL;
 
   dim3 = alloc_type (objfile);
@@ -1488,19 +1560,20 @@ cuda_create_symbol (struct objfile *objfile, const char *name, CORE_ADDR addr, s
 {
   struct symbol *sym = NULL;
   struct gdbarch *gdbarch = get_objfile_arch (objfile);
-  struct blockvector *bv = BLOCKVECTOR (objfile->symtabs);
+  const struct blockvector *bv = COMPUNIT_BLOCKVECTOR (objfile->compunit_symtabs);
 
-  sym = OBSTACK_ZALLOC (&objfile->objfile_obstack, struct symbol);
+  /* Allocate a new symbol in OBJFILE's obstack.  */
+  sym = allocate_symbol (objfile);
 
-  SYMBOL_SET_LANGUAGE (sym, language_c);
+  SYMBOL_SET_LANGUAGE (sym, language_c, &objfile->per_bfd->storage_obstack);
   SYMBOL_SET_NAMES (sym, name, strlen (name), 0, objfile);
   SYMBOL_TYPE (sym) = type;
   SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
-  SYMBOL_CLASS (sym) = LOC_STATIC;
+  SYMBOL_ACLASS_INDEX (sym) = LOC_STATIC;
   SYMBOL_VALUE_ADDRESS (sym) = addr;
 
   /* Register symbol as global symbol with symtab */
-  SYMBOL_SYMTAB (sym) = objfile->symtabs;
+  symbol_set_symtab (sym, COMPUNIT_FILETABS (objfile->compunit_symtabs));
   add_symbol_to_list (sym, &global_symbols);
   dict_add_symbol (BLOCK_DICT (BLOCKVECTOR_BLOCK (bv, GLOBAL_BLOCK)), sym);
 
@@ -1513,7 +1586,7 @@ cuda_create_symbol (struct objfile *objfile, const char *name, CORE_ADDR addr, s
 static void
 cuda_alloc_blockvector (struct symtab *symtab)
 {
-  struct obstack *obstack = &symtab->objfile->objfile_obstack;
+  struct obstack *obstack = &(SYMTAB_OBJFILE (symtab)->objfile_obstack);
   struct blockvector *bv;
   struct block *bl;
 
@@ -1524,15 +1597,15 @@ cuda_alloc_blockvector (struct symtab *symtab)
   bl = allocate_global_block (obstack);
   BLOCK_DICT (bl) = dict_create_hashed_expandable ();
   BLOCKVECTOR_BLOCK (bv, GLOBAL_BLOCK) = bl;
-  set_block_symtab (bl, symtab);
+  set_block_compunit_symtab (bl, SYMTAB_COMPUNIT (symtab));
 
   /* Allocate static block*/
   bl = allocate_global_block (obstack);
   BLOCK_DICT (bl) = dict_create_hashed_expandable ();
   BLOCKVECTOR_BLOCK (bv, STATIC_BLOCK) = bl;
-  set_block_symtab (bl, symtab);
+  set_block_compunit_symtab (bl, SYMTAB_COMPUNIT (symtab));
 
-  BLOCKVECTOR (symtab) = bv;
+  SYMTAB_BLOCKVECTOR (symtab) = bv;
 }
 
 /* Allocate virtual objfile and construct the following symbols inside it:
@@ -1550,17 +1623,32 @@ cuda_create_builtins_objfile (void)
   struct type *dim3_type = NULL;
   struct symtab *symtab = NULL;
   struct blockvector *bv = NULL;
+  struct cleanup *cleanups = NULL;
 
-  objfile = allocate_objfile (NULL, OBJF_SHARED);
-  objfile->gdbarch = cuda_get_gdbarch ();
+  /* Initialized things since we are going to start assembling a new
+     objfile and reading symbols.  */
+  buildsym_init ();
+
+  /* Set the cleanup chain so we get things properly set after we're done
+     assembling the symbol table.  */
+  cleanups = make_cleanup (really_free_pendings, NULL);
+
+  /* This is not a real objfile.  Mark it as so by passing
+     OBJF_NOT_FILENAME.  */
+  objfile = allocate_objfile (NULL, NULL, OBJF_SHARED | OBJF_NOT_FILENAME);
+  objfile->per_bfd->gdbarch = cuda_get_gdbarch ();
 
   /* Get/allocate types */
-  int32_type = builtin_type (objfile->gdbarch)->builtin_int32;
+  int32_type = builtin_type (get_objfile_arch (objfile))->builtin_int32;
   dim3_type = cuda_alloc_dim3_type (objfile);
 
-  symtab = allocate_symtab ("<cuda-builtins>", objfile);
+  /* Now that the objfile structure has been allocated, we need to allocate all
+     the required data structures for symbols.  */
+  objfile->compunit_symtabs = allocate_compunit_symtab (objfile, "<cuda-builtins>");
+
+  symtab = allocate_symtab (objfile->compunit_symtabs, "<cuda-builtins>");
+
   symtab->language = language_c;
-  symtab->primary = 1;
 
   cuda_alloc_blockvector (symtab);
 
@@ -1570,6 +1658,7 @@ cuda_create_builtins_objfile (void)
   cuda_create_symbol (objfile, "gridDim", CUDBG_GRIDDIM_OFFSET, dim3_type);
   cuda_create_symbol (objfile, "warpSize", CUDBG_WARPSIZE_OFFSET, int32_type);
 
+  do_cleanups (cleanups);
+
   return objfile;
 }
-

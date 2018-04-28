@@ -22,7 +22,7 @@
 
 extern void cuda_core_fetch_registers (struct target_ops *ops, struct regcache *regcache, int regno);
 extern void cuda_core_register_tid (uint32_t tid);
-extern void cuda_core_load_api (char *filename);
+extern void cuda_core_load_api (const char *filename);
 extern void cuda_core_free (void);
 extern void cuda_core_initialize_events_exceptions (void);
 

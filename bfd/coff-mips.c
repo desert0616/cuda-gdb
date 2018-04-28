@@ -1,7 +1,5 @@
 /* BFD back-end for MIPS Extended-Coff files.
-   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999,
-   2000, 2001, 2002, 2003, 2004, 2005, 2007, 2008, 2009, 2011, 2012
-   Free Software Foundation, Inc.
+   Copyright (C) 1990-2016 Free Software Foundation, Inc.
    Original version by Per Bothner.
    Full support added by Ian Lance Taylor, ian@cygnus.com.
 
@@ -942,11 +940,10 @@ mips_relocate_section (bfd *output_bfd,
 	{
 	  if (gp_undefined)
 	    {
-	      if (! ((*info->callbacks->reloc_dangerous)
-		     (info, _("GP relative relocation used when GP not defined"),
-		      input_bfd, input_section,
-		      int_rel.r_vaddr - input_section->vma)))
-		return FALSE;
+	      (*info->callbacks->reloc_dangerous)
+		(info, _("GP relative relocation used when GP not defined"),
+		 input_bfd, input_section,
+		 int_rel.r_vaddr - input_section->vma);
 	      /* Only give the error once per link.  */
 	      gp = 4;
 	      _bfd_set_gp_value (output_bfd, gp);
@@ -962,7 +959,7 @@ mips_relocate_section (bfd *output_bfd,
 		 and the GP value of OUTPUT_BFD (which is in GP).  */
 	      addend = ecoff_data (input_bfd)->gp - gp;
 	    }
-	  else if (! info->relocatable
+	  else if (! bfd_link_relocatable (info)
 		   || h->root.type == bfd_link_hash_defined
 		   || h->root.type == bfd_link_hash_defweak)
 	    {
@@ -988,7 +985,7 @@ mips_relocate_section (bfd *output_bfd,
 	    }
 	}
 
-      if (info->relocatable)
+      if (bfd_link_relocatable (info))
 	{
 	  /* We are generating relocatable output, and must convert
 	     the existing reloc.  */
@@ -1077,11 +1074,9 @@ mips_relocate_section (bfd *output_bfd,
 		  if (int_rel.r_symndx == -1)
 		    {
 		      /* This symbol is not being written out.  */
-		      if (! ((*info->callbacks->unattached_reloc)
-			     (info, h->root.root.string, input_bfd,
-			      input_section,
-			      int_rel.r_vaddr - input_section->vma)))
-			return FALSE;
+		      (*info->callbacks->unattached_reloc)
+			(info, h->root.root.string, input_bfd, input_section,
+			 int_rel.r_vaddr - input_section->vma);
 		      int_rel.r_symndx = 0;
 		    }
 		  relocation = 0;
@@ -1153,11 +1148,9 @@ mips_relocate_section (bfd *output_bfd,
 		}
 	      else
 		{
-		  if (! ((*info->callbacks->undefined_symbol)
-			 (info, h->root.root.string, input_bfd,
-			  input_section,
-			  int_rel.r_vaddr - input_section->vma, TRUE)))
-		    return FALSE;
+		  (*info->callbacks->undefined_symbol)
+		    (info, h->root.root.string, input_bfd, input_section,
+		     int_rel.r_vaddr - input_section->vma, TRUE);
 		  relocation = 0;
 		}
 	    }
@@ -1225,11 +1218,10 @@ mips_relocate_section (bfd *output_bfd,
 		  name = NULL;
 		else
 		  name = bfd_section_name (input_bfd, s);
-		if (! ((*info->callbacks->reloc_overflow)
-		       (info, (h ? &h->root : NULL), name, howto->name,
-			(bfd_vma) 0, input_bfd, input_section,
-			int_rel.r_vaddr - input_section->vma)))
-		  return FALSE;
+		(*info->callbacks->reloc_overflow)
+		  (info, (h ? &h->root : NULL), name, howto->name,
+		   (bfd_vma) 0, input_bfd, input_section,
+		   int_rel.r_vaddr - input_section->vma);
 	      }
 	      break;
 	    }
@@ -1256,7 +1248,7 @@ static const struct ecoff_backend_data mips_ecoff_backend_data =
     mips_ecoff_swap_filehdr_out, mips_ecoff_swap_aouthdr_out,
     mips_ecoff_swap_scnhdr_out,
     FILHSZ, AOUTSZ, SCNHSZ, 0, 0, 0, 0, FILNMLEN, TRUE,
-    ECOFF_NO_LONG_SECTION_NAMES, 4, FALSE, 2,
+    ECOFF_NO_LONG_SECTION_NAMES, 4, FALSE, 2, 32768,
     mips_ecoff_swap_filehdr_in, mips_ecoff_swap_aouthdr_in,
     mips_ecoff_swap_scnhdr_in, NULL,
     mips_ecoff_bad_format_hook, _bfd_ecoff_set_arch_mach_hook,
@@ -1365,9 +1357,9 @@ static const struct ecoff_backend_data mips_ecoff_backend_data =
   _bfd_coff_section_already_linked
 #define _bfd_ecoff_bfd_define_common_symbol bfd_generic_define_common_symbol
 
-extern const bfd_target ecoff_big_vec;
+extern const bfd_target mips_ecoff_be_vec;
 
-const bfd_target ecoff_little_vec =
+const bfd_target mips_ecoff_le_vec =
 {
   "ecoff-littlemips",		/* name */
   bfd_target_ecoff_flavour,
@@ -1407,12 +1399,12 @@ const bfd_target ecoff_little_vec =
      BFD_JUMP_TABLE_LINK (_bfd_ecoff),
      BFD_JUMP_TABLE_DYNAMIC (_bfd_nodynamic),
 
-  & ecoff_big_vec,
+  & mips_ecoff_be_vec,
 
   & mips_ecoff_backend_data
 };
 
-const bfd_target ecoff_big_vec =
+const bfd_target mips_ecoff_be_vec =
 {
   "ecoff-bigmips",		/* name */
   bfd_target_ecoff_flavour,
@@ -1451,12 +1443,12 @@ const bfd_target ecoff_big_vec =
      BFD_JUMP_TABLE_LINK (_bfd_ecoff),
      BFD_JUMP_TABLE_DYNAMIC (_bfd_nodynamic),
 
-  & ecoff_little_vec,
+  & mips_ecoff_le_vec,
 
   & mips_ecoff_backend_data
 };
 
-const bfd_target ecoff_biglittle_vec =
+const bfd_target mips_ecoff_bele_vec =
 {
   "ecoff-biglittlemips",		/* name */
   bfd_target_ecoff_flavour,

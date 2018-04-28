@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -31,7 +31,7 @@ struct kernel_st;
 struct module_st;
 struct modules_st;
 struct cuda_iterator_t;
-struct cuda_exception_t;
+struct cuda_exception_st;
 struct regmap_st;
 struct cuda_exception_st;
 

@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -75,8 +75,13 @@ cuda_event_create_context (uint32_t dev_id, uint64_t context_id, uint32_t tid)
                        (unsigned long long)context_id, dev_id);
 
 #ifdef __APPLE__
+  /* Warn user that CUDA debugging on OS X is deprecated */
+  if ( !cuda_remote &&
+       target_can_run(&current_target))
+  warning (_("Local CUDA debugging for Mac OS X is deprecated!"));
+
   if ( cuda_remote ||
-       current_target.to_resume == NULL ||
+       !target_can_run(&current_target) ||
        !cuda_options_gpu_busy_check () ||
        !cuda_darwin_cuda_device_used_for_graphics (dev_id))
     return;
@@ -314,18 +319,21 @@ cuda_event_timeout (void)
 }
 
 void
-cuda_event_post_process (void)
+cuda_event_post_process (bool reset_bpt)
 {
 
   /* Launch (kernel ready) events may require additional
      breakpoint handling (via remove/insert). */
-  cuda_remove_breakpoints ();
-  cuda_insert_breakpoints ();
+  if (reset_bpt) {
+      cuda_remove_breakpoints ();
+      cuda_insert_breakpoints ();
+  }
 }
 
 void
 cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind)
 {
+  bool reset_bpt = false;
   gdb_assert (event);
 
   /* Step 1:  Consume all events (synchronous and asynchronous).
@@ -333,11 +341,14 @@ cuda_process_events (CUDBGEvent *event, cuda_event_kind_t kind)
      that will force a state collection across the device. */
   for (; event->kind != CUDBG_EVENT_INVALID;
        (kind == CUDA_EVENT_SYNC) ? cuda_api_get_next_sync_event (event) :
-                                   cuda_api_get_next_async_event (event))
+                                   cuda_api_get_next_async_event (event)) {
     cuda_process_event (event);
+    if (event->kind == CUDBG_EVENT_KERNEL_READY)
+        reset_bpt = true;
+  }
 
   /* Step 2:  Post-process events after they've all been consumed. */
-  cuda_event_post_process ();
+  cuda_event_post_process (reset_bpt);
 }
 
 void

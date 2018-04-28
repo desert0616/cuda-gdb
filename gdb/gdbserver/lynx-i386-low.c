@@ -1,4 +1,4 @@
-/* Copyright (C) 2010-2013 Free Software Foundation, Inc.
+/* Copyright (C) 2010-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -17,8 +17,6 @@
 
 #include "server.h"
 #include "lynx-low.h"
-
-#include <stdint.h>
 #include <limits.h>
 #include <sys/ptrace.h>
 
@@ -122,6 +120,7 @@ enum lynx_i386_gdb_regnum
 
 /* Defined in auto-generated file i386.c.  */
 extern void init_registers_i386 (void);
+extern const struct target_desc *tdesc_i386;
 
 /* The fill_function for the general-purpose register set.  */
 
@@ -297,6 +296,7 @@ static void
 lynx_i386_arch_setup (void)
 {
   init_registers_i386 ();
+  lynx_tdesc = tdesc_i386;
 }
 
 /* Description of all the x86-lynx register sets.  */

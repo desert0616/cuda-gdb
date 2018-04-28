@@ -1,6 +1,6 @@
 /* Abstraction of GNU v2 abi.
 
-   Copyright (C) 2001-2013 Free Software Foundation, Inc.
+   Copyright (C) 2001-2016 Free Software Foundation, Inc.
 
    Contributed by Daniel Berlin <dberlin@redhat.com>
 
@@ -20,7 +20,6 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "defs.h"
-#include "gdb_string.h"
 #include "symtab.h"
 #include "gdbtypes.h"
 #include "value.h"
@@ -28,8 +27,6 @@
 #include "gdb-demangle.h"
 #include "cp-abi.h"
 #include "cp-support.h"
-#include "exceptions.h"
-
 #include <ctype.h>
 
 struct cp_abi_ops gnu_v2_abi_ops;
@@ -40,10 +37,10 @@ static enum dtor_kinds
 gnuv2_is_destructor_name (const char *name)
 {
   if ((name[0] == '_' && is_cplus_marker (name[1]) && name[2] == '_')
-      || strncmp (name, "__dt__", 6) == 0)
+      || startswith (name, "__dt__"))
     return complete_object_dtor;
   else
-    return 0;
+    return (enum dtor_kinds) 0;
 }
 
 static enum ctor_kinds
@@ -51,10 +48,10 @@ gnuv2_is_constructor_name (const char *name)
 {
   if ((name[0] == '_' && name[1] == '_'
        && (isdigit (name[2]) || strchr ("Qt", name[2])))
-      || strncmp (name, "__ct__", 6) == 0)
+      || startswith (name, "__ct__"))
     return complete_object_ctor;
   else
-    return 0;
+    return (enum ctor_kinds) 0;
 }
 
 static int
@@ -71,7 +68,7 @@ gnuv2_is_vtable_name (const char *name)
 static int
 gnuv2_is_operator_name (const char *name)
 {
-  return strncmp (name, "operator", 8) == 0;
+  return startswith (name, "operator");
 }
 
 
@@ -186,12 +183,12 @@ gnuv2_virtual_fn_field (struct value **arg1p, struct fn_field * f, int j,
 
 
 static struct type *
-gnuv2_value_rtti_type (struct value *v, int *full, int *top, int *using_enc)
+gnuv2_value_rtti_type (struct value *v, int *full, LONGEST *top, int *using_enc)
 {
   struct type *known_type;
   struct type *rtti_type;
   CORE_ADDR vtbl;
-  struct minimal_symbol *minsym;
+  struct bound_minimal_symbol minsym;
   char *demangled_name, *p;
   const char *linkage_name;
   struct type *btype;
@@ -207,9 +204,9 @@ gnuv2_value_rtti_type (struct value *v, int *full, int *top, int *using_enc)
 
   /* Get declared type.  */
   known_type = value_type (v);
-  CHECK_TYPEDEF (known_type);
+  known_type = check_typedef (known_type);
   /* RTTI works only or class objects.  */
-  if (TYPE_CODE (known_type) != TYPE_CODE_CLASS)
+  if (TYPE_CODE (known_type) != TYPE_CODE_STRUCT)
     return NULL;
 
   /* Plan on this changing in the future as i get around to setting
@@ -228,7 +225,7 @@ gnuv2_value_rtti_type (struct value *v, int *full, int *top, int *using_enc)
   /* Make sure our basetype and known type match, otherwise, cast
      so we can get at the vtable properly.  */
   btype = known_type_vptr_basetype;
-  CHECK_TYPEDEF (btype);
+  btype = check_typedef (btype);
   if (btype != known_type )
     {
       v = value_cast (btype, v);
@@ -245,13 +242,13 @@ gnuv2_value_rtti_type (struct value *v, int *full, int *top, int *using_enc)
 
   /* Try to find a symbol that is the vtable.  */
   minsym=lookup_minimal_symbol_by_pc(vtbl);
-  if (minsym==NULL
-      || (linkage_name=SYMBOL_LINKAGE_NAME (minsym))==NULL
+  if (minsym.minsym==NULL
+      || (linkage_name=MSYMBOL_LINKAGE_NAME (minsym.minsym))==NULL
       || !is_vtable_name (linkage_name))
     return NULL;
 
   /* If we just skip the prefix, we get screwed by namespaces.  */
-  demangled_name=cplus_demangle(linkage_name,DMGL_PARAMS|DMGL_ANSI);
+  demangled_name=gdb_demangle(linkage_name,DMGL_PARAMS|DMGL_ANSI);
   p = strchr (demangled_name, ' ');
   if (p)
     *p = '\0';
@@ -343,7 +340,7 @@ vb_match (struct type *type, int index, struct type *basetype)
 
 static int
 gnuv2_baseclass_offset (struct type *type, int index,
-			const bfd_byte *valaddr, int embedded_offset,
+			const bfd_byte *valaddr, LONGEST embedded_offset,
 			CORE_ADDR address, const struct value *val)
 {
   struct type *basetype = TYPE_BASECLASS (type, index);
@@ -361,7 +358,7 @@ gnuv2_baseclass_offset (struct type *type, int index,
 	  if (vb_match (type, i, basetype))
 	    {
 	      struct type *field_type;
-	      int field_offset;
+	      LONGEST field_offset;
 	      int field_length;
 	      CORE_ADDR addr;
 

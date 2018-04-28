@@ -22,10 +22,9 @@
 #define GDBSERVER
 #endif
 
-#include "../cuda-utils.h"
-
-#include "cudadebugger.h"
 #include "server.h"
+#include "../cuda-utils.h"
+#include "cudadebugger.h"
 
 #define CUDA_SYM(SYM)   \
   {             \
@@ -38,10 +37,10 @@
 extern bool cuda_debugging_enabled;
 extern bool cuda_initialized;
 extern bool all_cuda_symbols_looked_up;
-CUDBGResult api_initialize_res;
-CUDBGResult api_finalize_res;
-CUDBGResult get_debugger_api_res;
-CUDBGResult set_callback_api_res;
+extern CUDBGResult api_initialize_res;
+extern CUDBGResult api_finalize_res;
+extern CUDBGResult get_debugger_api_res;
+extern CUDBGResult set_callback_api_res;
 
 extern bool cuda_launch_blocking;
 extern bool cuda_memcheck;

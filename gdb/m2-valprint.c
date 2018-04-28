@@ -1,6 +1,6 @@
 /* Support for printing Modula 2 values for GDB, the GNU debugger.
 
-   Copyright (C) 1986-2013 Free Software Foundation, Inc.
+   Copyright (C) 1986-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -81,7 +81,7 @@ m2_print_long_set (struct type *type, const gdb_byte *valaddr,
   struct type *target;
   int bitval;
 
-  CHECK_TYPEDEF (type);
+  type = check_typedef (type);
 
   fprintf_filtered (stream, "{");
   len = TYPE_NFIELDS (type);
@@ -162,13 +162,11 @@ m2_print_unbounded_array (struct type *type, const gdb_byte *valaddr,
 			  struct ui_file *stream, int recurse,
 			  const struct value_print_options *options)
 {
-  struct type *content_type;
   CORE_ADDR addr;
   LONGEST len;
   struct value *val;
 
-  CHECK_TYPEDEF (type);
-  content_type = TYPE_TARGET_TYPE (TYPE_FIELD_TYPE (type, 0));
+  type = check_typedef (type);
 
   addr = unpack_pointer (TYPE_FIELD_TYPE (type, 0),
 			 (TYPE_FIELD_BITPOS (type, 0) / 8) +
@@ -268,11 +266,11 @@ m2_print_array_contents (struct type *type, const gdb_byte *valaddr,
 			 const struct value_print_options *options,
 			 int len)
 {
-  CHECK_TYPEDEF (type);
+  type = check_typedef (type);
 
   if (TYPE_LENGTH (type) > 0)
     {
-      if (options->prettyprint_arrays)
+      if (options->prettyformat_arrays)
 	print_spaces_filtered (2 + 2 * recurse, stream);
       /* For an array of chars, print with string syntax.  */
       if (TYPE_LENGTH (type) == 1 &&
@@ -301,7 +299,9 @@ static const struct generic_val_print_decorations m2_decorations =
   " * I",
   "TRUE",
   "FALSE",
-  "void"
+  "void",
+  "{",
+  "}"
 };
 
 /* See val_print for a description of the various parameters of this
@@ -314,12 +314,11 @@ m2_val_print (struct type *type, const gdb_byte *valaddr, int embedded_offset,
 	      const struct value_print_options *options)
 {
   struct gdbarch *gdbarch = get_type_arch (type);
-  unsigned int i = 0;	/* Number of characters printed.  */
   unsigned len;
   struct type *elttype;
   CORE_ADDR addr;
 
-  CHECK_TYPEDEF (type);
+  type = check_typedef (type);
   switch (TYPE_CODE (type))
     {
     case TYPE_CODE_ARRAY:
@@ -327,7 +326,7 @@ m2_val_print (struct type *type, const gdb_byte *valaddr, int embedded_offset,
 	{
 	  elttype = check_typedef (TYPE_TARGET_TYPE (type));
 	  len = TYPE_LENGTH (type) / TYPE_LENGTH (elttype);
-	  if (options->prettyprint_arrays)
+	  if (options->prettyformat_arrays)
 	    print_spaces_filtered (2 + 2 * recurse, stream);
 	  /* For an array of chars, print with string syntax.  */
 	  if (TYPE_LENGTH (elttype) == 1 &&
@@ -353,7 +352,6 @@ m2_val_print (struct type *type, const gdb_byte *valaddr, int embedded_offset,
 	      LA_PRINT_STRING (stream, TYPE_TARGET_TYPE (type),
 			       valaddr + embedded_offset, len, NULL,
 			       0, options);
-	      i = len;
 	    }
 	  else
 	    {
@@ -406,7 +404,7 @@ m2_val_print (struct type *type, const gdb_byte *valaddr, int embedded_offset,
 
     case TYPE_CODE_SET:
       elttype = TYPE_INDEX_TYPE (type);
-      CHECK_TYPEDEF (elttype);
+      elttype = check_typedef (elttype);
       if (TYPE_STUB (elttype))
 	{
 	  fprintf_filtered (stream, _("<incomplete type>"));
@@ -475,7 +473,7 @@ m2_val_print (struct type *type, const gdb_byte *valaddr, int embedded_offset,
 			address, stream, recurse, original_value, options);
 	  break;
 	}
-      /* FIXME: create_range_type does not set the unsigned bit in a
+      /* FIXME: create_static_range_type does not set the unsigned bit in a
          range type (I think it probably should copy it from the target
          type), so we won't print values which are too large to
          fit in a signed integer correctly.  */

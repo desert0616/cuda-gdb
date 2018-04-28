@@ -1,6 +1,6 @@
 /* Target-dependent code for the Toshiba MeP for GDB, the GNU debugger.
 
-   Copyright (C) 2001-2013 Free Software Foundation, Inc.
+   Copyright (C) 2001-2016 Free Software Foundation, Inc.
 
    Contributed by Red Hat, Inc.
 
@@ -27,7 +27,6 @@
 #include "gdbtypes.h"
 #include "gdbcmd.h"
 #include "gdbcore.h"
-#include "gdb_string.h"
 #include "value.h"
 #include "inferior.h"
 #include "dis-asm.h"
@@ -47,8 +46,6 @@
 #include "prologue-value.h"
 #include "cgen/bitset.h"
 #include "infcall.h"
-
-#include "gdb_assert.h"
 
 /* Get the user's customized MeP coprocessor register names from
    libopcodes.  */
@@ -787,7 +784,9 @@ static int
 mep_debug_reg_to_regnum (struct gdbarch *gdbarch, int debug_reg)
 {
   /* The debug info uses the raw register numbers.  */
-  return mep_raw_to_pseudo[debug_reg];
+  if (debug_reg >= 0 && debug_reg < ARRAY_SIZE (mep_raw_to_pseudo))
+    return mep_raw_to_pseudo[debug_reg];
+  return -1;
 }
 
 
@@ -851,7 +850,7 @@ current_me_module (void)
       ULONGEST regval;
       regcache_cooked_read_unsigned (get_current_regcache (),
 				     MEP_MODULE_REGNUM, &regval);
-      return regval;
+      return (CONFIG_ATTR) regval;
     }
   else
     return gdbarch_tdep (target_gdbarch ())->me_module;
@@ -1125,18 +1124,11 @@ mep_read_pc (struct regcache *regcache)
   return pc;
 }
 
-static void
-mep_write_pc (struct regcache *regcache, CORE_ADDR pc)
-{
-  regcache_cooked_write_unsigned (regcache, MEP_PC_REGNUM, pc);
-}
-
-
 static enum register_status
 mep_pseudo_cr32_read (struct gdbarch *gdbarch,
                       struct regcache *regcache,
                       int cookednum,
-                      void *buf)
+                      gdb_byte *buf)
 {
   enum register_status status;
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
@@ -1162,7 +1154,7 @@ static enum register_status
 mep_pseudo_cr64_read (struct gdbarch *gdbarch,
                       struct regcache *regcache,
                       int cookednum,
-                      void *buf)
+                      gdb_byte *buf)
 {
   return regcache_raw_read (regcache, mep_pseudo_to_raw[cookednum], buf);
 }
@@ -1192,7 +1184,7 @@ static void
 mep_pseudo_csr_write (struct gdbarch *gdbarch,
                       struct regcache *regcache,
                       int cookednum,
-                      const void *buf)
+                      const gdb_byte *buf)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   int size = register_size (gdbarch, cookednum);
@@ -1223,7 +1215,7 @@ static void
 mep_pseudo_cr32_write (struct gdbarch *gdbarch,
                        struct regcache *regcache,
                        int cookednum,
-                       const void *buf)
+                       const gdb_byte *buf)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   /* Expand the 32-bit value into a 64-bit value, and write that to
@@ -1244,7 +1236,7 @@ static void
 mep_pseudo_cr64_write (struct gdbarch *gdbarch,
                      struct regcache *regcache,
                      int cookednum,
-                     const void *buf)
+                     const gdb_byte *buf)
 {
   regcache_raw_write (regcache, mep_pseudo_to_raw[cookednum], buf);
 }
@@ -1424,7 +1416,7 @@ mep_pc_in_vliw_section (CORE_ADDR pc)
    anyway.  */
 
 static CORE_ADDR 
-mep_get_insn (struct gdbarch *gdbarch, CORE_ADDR pc, long *insn)
+mep_get_insn (struct gdbarch *gdbarch, CORE_ADDR pc, unsigned long *insn)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   int pc_in_vliw_section;
@@ -1960,10 +1952,11 @@ mep_analyze_frame_prologue (struct frame_info *this_frame,
         stop_addr = func_start;
 
       mep_analyze_prologue (get_frame_arch (this_frame),
-			    func_start, stop_addr, *this_prologue_cache);
+			    func_start, stop_addr,
+			    (struct mep_prologue *) *this_prologue_cache);
     }
 
-  return *this_prologue_cache;
+  return (struct mep_prologue *) *this_prologue_cache;
 }
 
 
@@ -2405,7 +2398,10 @@ mep_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
       /* The way to get the me_module code depends on the object file
          format.  At the moment, we only know how to handle ELF.  */
       if (bfd_get_flavour (info.abfd) == bfd_target_elf_flavour)
-        me_module = elf_elfheader (info.abfd)->e_flags & EF_MEP_INDEX_MASK;
+	{
+	  int flag = elf_elfheader (info.abfd)->e_flags & EF_MEP_INDEX_MASK;
+	  me_module = (CONFIG_ATTR) flag;
+	}
       else
         me_module = CONFIG_NONE;
     }
@@ -2451,7 +2447,7 @@ mep_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
     if (gdbarch_tdep (arches->gdbarch)->me_module == me_module)
       return arches->gdbarch;
 
-  tdep = (struct gdbarch_tdep *) xmalloc (sizeof (struct gdbarch_tdep));
+  tdep = XNEW (struct gdbarch_tdep);
   gdbarch = gdbarch_alloc (&info, tdep);
 
   /* Get a CGEN CPU descriptor for this architecture.  */
@@ -2470,8 +2466,8 @@ mep_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 
   /* Register set.  */
   set_gdbarch_read_pc (gdbarch, mep_read_pc);
-  set_gdbarch_write_pc (gdbarch, mep_write_pc);
   set_gdbarch_num_regs (gdbarch, MEP_NUM_RAW_REGS);
+  set_gdbarch_pc_regnum (gdbarch, MEP_PC_REGNUM);
   set_gdbarch_sp_regnum (gdbarch, MEP_SP_REGNUM);
   set_gdbarch_register_name (gdbarch, mep_register_name);
   set_gdbarch_register_type (gdbarch, mep_register_type);

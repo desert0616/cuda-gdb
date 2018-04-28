@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -23,8 +23,8 @@
 
 #include "defs.h"
 #include "inferior.h"
-#include "gdb_assert.h"
-#include "gdb_string.h"
+#include "common-defs.h"
+#include "string.h"
 #include "gdbcore.h"
 
 #include "cuda-options.h"
@@ -32,6 +32,78 @@
 #include "cuda-packet-manager.h"
 #include "cuda-utils.h"
 
+const char* cuda_api_mask_string(const cuda_api_warpmask* m)
+{
+    static char buf[sizeof(m->mask)*2 + 3] = {0};
+    sprintf(buf, "0x%.*llx", (int)sizeof(buf) - 3, (unsigned long long)(m->mask));
+    return buf;
+}
+
+void
+cuda_api_clear_mask(cuda_api_warpmask* mask)
+{
+    memset(mask, 0, sizeof(*mask));
+}
+
+void
+cuda_api_set_bit(cuda_api_warpmask* m, int i, int v)
+{
+    if (v)
+        m->mask |= (1ULL << (i%64));
+    else
+        m->mask &= ~(1ULL << (i%64));
+}
+
+int
+cuda_api_get_bit(const cuda_api_warpmask* m, int i)
+{
+    return (m->mask & (1ULL << (i%64))) != 0;
+}
+
+int
+cuda_api_has_bit(const cuda_api_warpmask* m)
+{
+    return !!(m->mask);
+}
+
+int
+cuda_api_has_multiple_bits(const cuda_api_warpmask* m)
+{
+    return !!(m->mask & (m->mask - 1));
+}
+
+int
+cuda_api_eq_mask(const cuda_api_warpmask* m1, const cuda_api_warpmask* m2)
+{
+    return memcmp(m1, m2, sizeof(*m1)) == 0;
+}
+
+void
+cuda_api_cp_mask(cuda_api_warpmask* dst, const cuda_api_warpmask* src)
+{
+    memcpy(dst, src, sizeof(*dst));
+}
+
+cuda_api_warpmask*
+cuda_api_or_mask(cuda_api_warpmask* dst, const cuda_api_warpmask* m1, const cuda_api_warpmask* m2)
+{
+    uint32_t i=0;
+    dst->mask = m1->mask | m2->mask;
+    return dst;
+}
+cuda_api_warpmask*
+cuda_api_and_mask(cuda_api_warpmask* dst, const cuda_api_warpmask* m1, const cuda_api_warpmask* m2) {
+    uint32_t i=0;
+    dst->mask = m1->mask & m2->mask;
+    return dst;
+}
+
+cuda_api_warpmask*
+cuda_api_not_mask(cuda_api_warpmask* dst, const cuda_api_warpmask* m1) {
+    uint32_t i=0;
+    dst->mask = ~m1->mask;
+    return dst;
+}
 
 static void
 cuda_api_trace (const char *fmt, ...)
@@ -47,7 +119,7 @@ static void
 cuda_api_print_api_call_result (int res)
 {
   if (res != CUDBG_SUCCESS)
-    cuda_api_trace ("API call received result: %s(0x%x)", cudbgGetErrorString(res), res);
+    cuda_api_trace ("API call received result: %s(0x%x)", cudbgGetErrorString((CUDBGResult) res), res);
 }
 
 static void cuda_api_error(CUDBGResult, const char *, ...) ATTRIBUTE_PRINTF (2, 3);
@@ -140,7 +212,7 @@ cuda_api_fatal (const char *msg, CUDBGResult res)
   cuda_managed_memory_clean_regions ();
 
   /* Report error */
-  fatal (_("fatal:  %s (error code = %s(0x%x)"), msg, cudbgGetErrorString(res), res);
+  throw_quit (_("fatal:  %s (error code = %s(0x%x)"), msg, cudbgGetErrorString(res), res);
 }
 
 int
@@ -204,7 +276,7 @@ cuda_api_handle_initialization_error (CUDBGResult res)
 }
 
 void
-cuda_api_finalize ()
+cuda_api_finalize (void)
 {
   CUDBGResult res;
 
@@ -220,7 +292,7 @@ cuda_api_finalize ()
 }
 
 void
-cuda_api_clear_state ()
+cuda_api_clear_state (void)
 {
   /* Mark the API as not initialized as early as possible. If the finalize()
    * call fails, we won't try to do anything stupid afterwards. */
@@ -247,7 +319,7 @@ cuda_api_handle_finalize_api_error (CUDBGResult res)
 }
 
 void
-cuda_api_initialize_attach_stub ()
+cuda_api_initialize_attach_stub (void)
 {
   CUDBGResult res;
 
@@ -298,27 +370,27 @@ cuda_api_suspend_device (uint32_t dev)
 
 /* Return true on success and false if resuming warps is not possible */
 bool
-cuda_api_resume_warps_until_pc (uint32_t dev, uint32_t sm, uint64_t warp_mask, uint64_t virt_pc)
+cuda_api_resume_warps_until_pc (uint32_t dev, uint32_t sm, cuda_api_warpmask *warp_mask, uint64_t virt_pc)
 {
   CUDBGResult res;
 
   if (!api_initialized)
     return false;
 
-  res = cudbgAPI->resumeWarpsUntilPC (dev, sm, warp_mask, virt_pc);
+  res = cudbgAPI->resumeWarpsUntilPC (dev, sm, warp_mask->mask, virt_pc);
   cuda_api_print_api_call_result (res);
 
   if (res == CUDBG_ERROR_WARP_RESUME_NOT_POSSIBLE)
     return false;
 
   if (res != CUDBG_SUCCESS)
-    cuda_api_error (res, _("Failed to resume warps (dev=%d, sm=%u, warp_mask=0x%llx)"),
-                    dev, sm, (unsigned long long)warp_mask);
+    cuda_api_error (res, _("Failed to resume warps (dev=%d, sm=%u, warp_mask=%s)"),
+                    dev, sm, cuda_api_mask_string (warp_mask));
   return true;
 }
 
 bool
-cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warp_mask)
+cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t nsteps, cuda_api_warpmask *warp_mask)
 {
   CUDBGResult res;
 
@@ -327,14 +399,15 @@ cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *war
   if (!api_initialized)
     return false;
 
-  res = cudbgAPI->singleStepWarp (dev, sm, wp, warp_mask);
+  res = cudbgAPI->singleStepWarp (dev, sm, wp, nsteps, &warp_mask->mask);
   cuda_api_print_api_call_result (res);
 
   if (res == CUDBG_ERROR_WARP_RESUME_NOT_POSSIBLE)
     return false;
 
   if (res != CUDBG_SUCCESS)
-    cuda_devsmwp_api_error ("single-step the warp", res, dev, sm, wp);
+    cuda_devsmwp_api_error ("single-step the warp", dev, sm, wp, res);
+
   return true;
 }
 
@@ -418,35 +491,37 @@ cuda_api_read_thread_idx (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, C
 }
 
 void
-cuda_api_read_broken_warps (uint32_t dev, uint32_t sm, uint64_t *brokenWarpsMask)
+cuda_api_read_broken_warps (uint32_t dev, uint32_t sm, cuda_api_warpmask *brokenWarpsMask)
 {
   CUDBGResult res;
 
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readBrokenWarps (dev, sm, brokenWarpsMask);
+  res = cudbgAPI->readBrokenWarps (dev, sm, &brokenWarpsMask->mask);
 
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     cuda_api_error (res, _("Failed to read the broken warps mask (dev=%u, sm=%u)"),
                     dev, sm);
+  cuda_trace(_("Read broken warps: %"WARP_MASK_FORMAT), cuda_api_mask_string(brokenWarpsMask));
 }
 
 void
-cuda_api_read_valid_warps (uint32_t dev, uint32_t sm, uint64_t *valid_warps)
+cuda_api_read_valid_warps (uint32_t dev, uint32_t sm, cuda_api_warpmask *valid_warps)
 {
   CUDBGResult res;
 
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readValidWarps (dev, sm, valid_warps);
+  res = cudbgAPI->readValidWarps (dev, sm, &valid_warps->mask);
 
   cuda_api_print_api_call_result (res);
   if (res != CUDBG_SUCCESS)
     cuda_api_error (res, _("Failed to read the valid warps mask (dev=%u, sm=%u)"),
                     dev, sm);
+  cuda_trace(_("Read valid warps: %"WARP_MASK_FORMAT), cuda_api_mask_string(valid_warps));
 }
 
 void
@@ -521,6 +596,12 @@ cuda_api_read_generic_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t l
 
   res = cudbgAPI->readGenericMemory (dev, sm, wp, ln, addr, buf, sz);
   cuda_api_print_api_call_result (res);
+
+  if (res == CUDBG_ERROR_INVALID_MEMORY_ACCESS) {
+    cuda_api_error (res, _("Generic memory is not available in this corefile"));
+    return;
+  }
+
   if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_ADDRESS_NOT_IN_DEVICE_MEM)
     cuda_api_error (res, _("Failed to read generic memory at address 0x%llx"
                     " on device %u sm %u warp %u lane %u"),
@@ -532,7 +613,7 @@ cuda_api_read_generic_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t l
       cuda_api_print_api_call_result (res);
       if (res != CUDBG_SUCCESS)
         cuda_api_error (res, _("Failed to translate device VA to host VA"));
-      read_memory (hostaddr, buf, sz);
+      read_memory (hostaddr, (gdb_byte *) buf, sz);
     }
 }
 
@@ -577,6 +658,12 @@ cuda_api_read_shared_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t ad
 
   res = cudbgAPI->readSharedMemory (dev, sm, wp, addr, buf, sz);
   cuda_api_print_api_call_result (res);
+
+  if (res == CUDBG_ERROR_INVALID_MEMORY_ACCESS) {
+    cuda_api_error (res, _("Shared memory is not available in this corefile"));
+    return;
+  }
+
   if (res != CUDBG_SUCCESS)
     cuda_api_error (res, _("Failed to read shared memory at address 0x%llx"
                     " on device %u sm %u warp %u"),
@@ -622,6 +709,12 @@ cuda_api_read_local_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln,
 
   res = cudbgAPI->readLocalMemory (dev, sm, wp, ln, addr, buf, sz);
   cuda_api_print_api_call_result (res);
+
+  if (res == CUDBG_ERROR_INVALID_MEMORY_ACCESS) {
+    cuda_api_error (res, _("Local memory is not available in this corefile"));
+    return;
+  }
+
   if (res != CUDBG_SUCCESS)
     cuda_api_error (res, _("Failed to read local memory at address 0x%llx"
                     " on device %u sm %u warp %u lane %u"),
@@ -793,7 +886,7 @@ cuda_api_read_error_pc (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *pc, bo
 }
 
 void
-cuda_api_read_device_exception_state (uint32_t dev, uint64_t *exceptionSMMask)
+cuda_api_read_device_exception_state (uint32_t dev, uint64_t *exceptionSMMask, uint32_t n)
 {
   CUDBGResult res;
 
@@ -802,7 +895,7 @@ cuda_api_read_device_exception_state (uint32_t dev, uint64_t *exceptionSMMask)
   if (!api_initialized)
     return;
 
-  res = cudbgAPI->readDeviceExceptionState (dev, exceptionSMMask);
+  res = cudbgAPI->readDeviceExceptionState (dev, exceptionSMMask, n);
   cuda_api_print_api_call_result(res);
   if (res != CUDBG_SUCCESS)
     {
@@ -832,7 +925,7 @@ cuda_api_write_generic_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t 
       cuda_api_print_api_call_result (res);
       if (res != CUDBG_SUCCESS)
         cuda_api_error (res, _("Failed to translate device VA to host VA"));
-      write_memory (hostaddr, buf, sz);
+      write_memory (hostaddr, (const gdb_byte *) buf, sz);
     }
 }
 
@@ -1297,7 +1390,7 @@ cuda_api_memcheck_read_error_address (uint32_t dev, uint32_t sm, uint32_t wp, ui
 }
 
 cuda_api_state_t
-cuda_api_get_state ()
+cuda_api_get_state (void)
 {
     return api_initialized ? CUDA_API_STATE_INITIALIZED:
                              CUDA_API_STATE_UNINITIALIZED;
@@ -1423,6 +1516,11 @@ cuda_api_read_global_memory (uint64_t addr, void *buf, uint32_t buf_size)
 
   res = cudbgAPI->readGlobalMemory (addr, buf, buf_size);
   cuda_api_print_api_call_result (res);
+
+  if (res == CUDBG_ERROR_INVALID_MEMORY_ACCESS) {
+    cuda_api_error (res, _("Global memory is not available in this corefile"));
+    return;
+  }
 
   if (res != CUDBG_SUCCESS)
     cuda_api_error (res, _("Failed to read %u bytes of global memory from 0x%llx\n"),

@@ -1,6 +1,6 @@
 /* Core dump and executable file functions above target vector, for GDB.
 
-   Copyright (C) 1986-2013 Free Software Foundation, Inc.
+   Copyright (C) 1986-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -18,8 +18,6 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "defs.h"
-#include "gdb_string.h"
-#include <errno.h>
 #include <signal.h>
 #include <fcntl.h>
 #include "inferior.h"
@@ -30,16 +28,14 @@
 #include "target.h"
 #include "gdbcore.h"
 #include "dis-asm.h"
-#include "gdb_stat.h"
+#include <sys/stat.h>
 #include "completer.h"
-#include "exceptions.h"
 #include "observer.h"
 #include "cli/cli-utils.h"
 
 /* Local function declarations.  */
 
 extern void _initialize_core (void);
-static void call_extra_exec_file_hooks (char *filename);
 
 /* You can have any number of hooks for `exec_file_command' command to
    call.  If there's only one hook, it is set in exec_file_display
@@ -50,7 +46,7 @@ static void call_extra_exec_file_hooks (char *filename);
    only one hook could be set, and which called
    deprecated_exec_file_display_hook directly.  */
 
-typedef void (*hook_type) (char *);
+typedef void (*hook_type) (const char *);
 
 hook_type deprecated_exec_file_display_hook;	/* The original hook.  */
 static hook_type *exec_file_extra_hooks;	/* Array of additional
@@ -87,7 +83,7 @@ core_file_command (char *filename, int from_tty)
    functions.  */
 
 static void
-call_extra_exec_file_hooks (char *filename)
+call_extra_exec_file_hooks (const char *filename)
 {
   int i;
 
@@ -99,7 +95,7 @@ call_extra_exec_file_hooks (char *filename)
    This is called from the x-window display code.  */
 
 void
-specify_exec_file_hook (void (*hook) (char *))
+specify_exec_file_hook (void (*hook) (const char *))
 {
   hook_type *new_array;
 
@@ -111,8 +107,7 @@ specify_exec_file_hook (void (*hook) (char *))
 	{
 	  /* If this is the first extra hook, initialize the hook
 	     array.  */
-	  exec_file_extra_hooks = (hook_type *)
-	    xmalloc (sizeof (hook_type));
+	  exec_file_extra_hooks = XNEW (hook_type);
 	  exec_file_extra_hooks[0] = deprecated_exec_file_display_hook;
 	  deprecated_exec_file_display_hook = call_extra_exec_file_hooks;
 	  exec_file_hook_count = 1;
@@ -149,7 +144,7 @@ reopen_exec_file (void)
   cleanups = make_cleanup (xfree, filename);
   res = stat (filename, &st);
 
-  if (exec_bfd_mtime && exec_bfd_mtime != st.st_mtime)
+  if (res == 0 && exec_bfd_mtime && exec_bfd_mtime != st.st_mtime)
     exec_file_attach (filename, 0);
   else
     /* If we accessed the file since last opening it, close it now;
@@ -193,22 +188,81 @@ Use the \"file\" or \"exec-file\" command."));
 }
 
 
-/* Report a memory error by throwing a MEMORY_ERROR error.  */
+char *
+memory_error_message (enum target_xfer_status err,
+		      struct gdbarch *gdbarch, CORE_ADDR memaddr)
+{
+  switch (err)
+    {
+    case TARGET_XFER_E_IO:
+      /* Actually, address between memaddr and memaddr + len was out of
+	 bounds.  */
+      return xstrprintf (_("Cannot access memory at address %s"),
+			 paddress (gdbarch, memaddr));
+    case TARGET_XFER_UNAVAILABLE:
+      return xstrprintf (_("Memory at address %s unavailable."),
+			 paddress (gdbarch, memaddr));
+    default:
+      internal_error (__FILE__, __LINE__,
+		      "unhandled target_xfer_status: %s (%s)",
+		      target_xfer_status_to_string (err),
+		      plongest (err));
+    }
+}
+
+/* Report a memory error by throwing a suitable exception.  */
 
 void
-memory_error (int status, CORE_ADDR memaddr)
+memory_error (enum target_xfer_status err, CORE_ADDR memaddr)
 {
-  if (status == EIO)
-    /* Actually, address between memaddr and memaddr + len was out of
-       bounds.  */
-    throw_error (MEMORY_ERROR,
-		 _("Cannot access memory at address %s"),
-		 paddress (target_gdbarch (), memaddr));
-  else
-    throw_error (MEMORY_ERROR,
-		 _("Error accessing memory address %s: %s."),
-		 paddress (target_gdbarch (), memaddr),
-		 safe_strerror (status));
+  char *str;
+  enum errors exception = GDB_NO_ERROR;
+
+  /* Build error string.  */
+  str = memory_error_message (err, target_gdbarch (), memaddr);
+  make_cleanup (xfree, str);
+
+  /* Choose the right error to throw.  */
+  switch (err)
+    {
+    case TARGET_XFER_E_IO:
+      exception = MEMORY_ERROR;
+      break;
+    case TARGET_XFER_UNAVAILABLE:
+      exception = NOT_AVAILABLE_ERROR;
+      break;
+    }
+
+  /* Throw it.  */
+  throw_error (exception, ("%s"), str);
+}
+
+/* Helper function.  */
+
+static void
+read_memory_object (enum target_object object, CORE_ADDR memaddr,
+		    gdb_byte *myaddr, ssize_t len)
+{
+  ULONGEST xfered = 0;
+
+  while (xfered < len)
+    {
+      enum target_xfer_status status;
+      ULONGEST xfered_len;
+
+      status = target_xfer_partial (current_target.beneath,
+				    object, NULL,
+				    myaddr + xfered, NULL,
+				    memaddr + xfered, len - xfered,
+				    &xfered_len);
+
+      if (status != TARGET_XFER_OK)
+	memory_error (status == TARGET_XFER_EOF ? TARGET_XFER_E_IO : status,
+		      memaddr + xfered);
+
+      xfered += xfered_len;
+      QUIT;
+    }
 }
 
 /* Same as target_read_memory, but report an error if can't read.  */
@@ -216,11 +270,7 @@ memory_error (int status, CORE_ADDR memaddr)
 void
 read_memory (CORE_ADDR memaddr, gdb_byte *myaddr, ssize_t len)
 {
-  int status;
-
-  status = target_read_memory (memaddr, myaddr, len);
-  if (status != 0)
-    memory_error (status, memaddr);
+  read_memory_object (TARGET_OBJECT_MEMORY, memaddr, myaddr, len);
 }
 
 /* Same as target_read_stack, but report an error if can't read.  */
@@ -228,45 +278,15 @@ read_memory (CORE_ADDR memaddr, gdb_byte *myaddr, ssize_t len)
 void
 read_stack (CORE_ADDR memaddr, gdb_byte *myaddr, ssize_t len)
 {
-  int status;
-
-  status = target_read_stack (memaddr, myaddr, len);
-  if (status != 0)
-    memory_error (status, memaddr);
+  read_memory_object (TARGET_OBJECT_STACK_MEMORY, memaddr, myaddr, len);
 }
 
-/* Argument / return result struct for use with
-   do_captured_read_memory_integer().  MEMADDR and LEN are filled in
-   by gdb_read_memory_integer().  RESULT is the contents that were
-   successfully read from MEMADDR of length LEN.  */
+/* Same as target_read_code, but report an error if can't read.  */
 
-struct captured_read_memory_integer_arguments
+void
+read_code (CORE_ADDR memaddr, gdb_byte *myaddr, ssize_t len)
 {
-  CORE_ADDR memaddr;
-  int len;
-  enum bfd_endian byte_order;
-  LONGEST result;
-};
-
-/* Helper function for gdb_read_memory_integer().  DATA must be a
-   pointer to a captured_read_memory_integer_arguments struct.
-   Return 1 if successful.  Note that the catch_errors() interface
-   will return 0 if an error occurred while reading memory.  This
-   choice of return code is so that we can distinguish between
-   success and failure.  */
-
-static int
-do_captured_read_memory_integer (void *data)
-{
-  struct captured_read_memory_integer_arguments *args
-    = (struct captured_read_memory_integer_arguments*) data;
-  CORE_ADDR memaddr = args->memaddr;
-  int len = args->len;
-  enum bfd_endian byte_order = args->byte_order;
-
-  args->result = read_memory_integer (memaddr, len, byte_order);
-
-  return 1;
+  read_memory_object (TARGET_OBJECT_CODE_MEMORY, memaddr, myaddr, len);
 }
 
 /* Read memory at MEMADDR of length LEN and put the contents in
@@ -278,19 +298,31 @@ safe_read_memory_integer (CORE_ADDR memaddr, int len,
 			  enum bfd_endian byte_order,
 			  LONGEST *return_value)
 {
-  int status;
-  struct captured_read_memory_integer_arguments args;
+  gdb_byte buf[sizeof (LONGEST)];
 
-  args.memaddr = memaddr;
-  args.len = len;
-  args.byte_order = byte_order;
+  if (target_read_memory (memaddr, buf, len))
+    return 0;
 
-  status = catch_errors (do_captured_read_memory_integer, &args,
-			 "", RETURN_MASK_ALL);
-  if (status)
-    *return_value = args.result;
+  *return_value = extract_signed_integer (buf, len, byte_order);
+  return 1;
+}
 
-  return status;
+/* Read memory at MEMADDR of length LEN and put the contents in
+   RETURN_VALUE.  Return 0 if MEMADDR couldn't be read and non-zero
+   if successful.  */
+
+int
+safe_read_memory_unsigned_integer (CORE_ADDR memaddr, int len,
+				   enum bfd_endian byte_order,
+				   ULONGEST *return_value)
+{
+  gdb_byte buf[sizeof (ULONGEST)];
+
+  if (target_read_memory (memaddr, buf, len))
+    return 0;
+
+  *return_value = extract_unsigned_integer (buf, len, byte_order);
+  return 1;
 }
 
 LONGEST
@@ -310,6 +342,26 @@ read_memory_unsigned_integer (CORE_ADDR memaddr, int len,
   gdb_byte buf[sizeof (ULONGEST)];
 
   read_memory (memaddr, buf, len);
+  return extract_unsigned_integer (buf, len, byte_order);
+}
+
+LONGEST
+read_code_integer (CORE_ADDR memaddr, int len,
+		   enum bfd_endian byte_order)
+{
+  gdb_byte buf[sizeof (LONGEST)];
+
+  read_code (memaddr, buf, len);
+  return extract_signed_integer (buf, len, byte_order);
+}
+
+ULONGEST
+read_code_unsigned_integer (CORE_ADDR memaddr, int len,
+			    enum bfd_endian byte_order)
+{
+  gdb_byte buf[sizeof (ULONGEST)];
+
+  read_code (memaddr, buf, len);
   return extract_unsigned_integer (buf, len, byte_order);
 }
 
@@ -343,14 +395,14 @@ read_memory_string (CORE_ADDR memaddr, char *buffer, int max_len)
 CORE_ADDR
 read_memory_typed_address (CORE_ADDR addr, struct type *type)
 {
-  gdb_byte *buf = alloca (TYPE_LENGTH (type));
+  gdb_byte *buf = (gdb_byte *) alloca (TYPE_LENGTH (type));
 
   read_memory (addr, buf, TYPE_LENGTH (type));
   return extract_typed_address (buf, type);
 }
 
-/* Same as target_write_memory, but report an error if can't
-   write.  */
+/* See gdbcore.h.  */
+
 void
 write_memory (CORE_ADDR memaddr, 
 	      const bfd_byte *myaddr, ssize_t len)
@@ -359,7 +411,7 @@ write_memory (CORE_ADDR memaddr,
 
   status = target_write_memory (memaddr, myaddr, len);
   if (status != 0)
-    memory_error (status, memaddr);
+    memory_error (TARGET_XFER_E_IO, memaddr);
 }
 
 /* Same as write_memory, but notify 'memory_changed' observers.  */
@@ -379,7 +431,7 @@ write_memory_unsigned_integer (CORE_ADDR addr, int len,
 			       enum bfd_endian byte_order,
 			       ULONGEST value)
 {
-  gdb_byte *buf = alloca (len);
+  gdb_byte *buf = (gdb_byte *) alloca (len);
 
   store_unsigned_integer (buf, len, byte_order, value);
   write_memory (addr, buf, len);
@@ -392,7 +444,7 @@ write_memory_signed_integer (CORE_ADDR addr, int len,
 			     enum bfd_endian byte_order,
 			     LONGEST value)
 {
-  gdb_byte *buf = alloca (len);
+  gdb_byte *buf = (gdb_byte *) alloca (len);
 
   store_signed_integer (buf, len, byte_order, value);
   write_memory (addr, buf, len);
@@ -434,7 +486,8 @@ set_gnutarget_command (char *ignore, int from_tty,
 /* A completion function for "set gnutarget".  */
 
 static VEC (char_ptr) *
-complete_set_gnutarget (struct cmd_list_element *cmd, char *text, char *word)
+complete_set_gnutarget (struct cmd_list_element *cmd,
+			const char *text, const char *word)
 {
   static const char **bfd_targets;
 
@@ -446,7 +499,7 @@ complete_set_gnutarget (struct cmd_list_element *cmd, char *text, char *word)
       for (last = 0; bfd_targets[last] != NULL; ++last)
 	;
 
-      bfd_targets = xrealloc (bfd_targets, (last + 2) * sizeof (const char **));
+      bfd_targets = XRESIZEVEC (const char *, bfd_targets, last + 2);
       bfd_targets[last] = "auto";
       bfd_targets[last + 1] = NULL;
     }

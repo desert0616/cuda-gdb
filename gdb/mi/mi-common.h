@@ -1,5 +1,5 @@
 /* Interface for common GDB/MI data
-   Copyright (C) 2005-2013 Free Software Foundation, Inc.
+   Copyright (C) 2005-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -57,8 +57,18 @@ struct mi_interp
   struct ui_file *targ;
   struct ui_file *event_channel;
 
+  /* Raw console output.  */
+  struct ui_file *raw_stdout;
+
+  /* Save the original value of raw_stdout here when logging, so we
+     can restore correctly when done.  */
+  struct ui_file *saved_raw_stdout;
+
   /* MI's builder.  */
-  struct ui_out *uiout;
+  struct ui_out *mi_uiout;
+
+  /* MI's CLI builder (wraps OUT).  */
+  struct ui_out *cli_uiout;
 
   /* This is the interpreter for the mi... */
   struct interp *mi2_interp;

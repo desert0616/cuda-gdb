@@ -1,5 +1,5 @@
 /* Darwin support for GDB, the GNU debugger.
-   Copyright (C) 1997-2013 Free Software Foundation, Inc.
+   Copyright (C) 1997-2016 Free Software Foundation, Inc.
 
    Contributed by Apple Computer, Inc.
 
@@ -19,7 +19,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -44,16 +44,12 @@
 #include "floatformat.h"
 #include "symtab.h"
 #include "regcache.h"
-#include "libbfd.h"
 #include "objfiles.h"
 
 #include "i387-tdep.h"
 #include "i386-tdep.h"
 #include "osabi.h"
 #include "ui-out.h"
-#include "symtab.h"
-#include "frame.h"
-#include "gdb_assert.h"
 #include "i386-darwin-tdep.h"
 #include "solib.h"
 #include "solib-darwin.h"

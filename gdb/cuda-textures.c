@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -54,8 +54,13 @@ typedef struct cuda_tex_map_t {
    The address of the texture, and the coordinates within the texture. 
    Whiling reading texture memory, should ALWAYS use texture_address to 
    hold the two components. */
-struct {
-  enum {from_value_ind = 0, from_value_ptradd} last_called;
+enum texture_address_origin {
+    from_value_ind = 0,
+    from_value_ptradd
+};
+
+struct texture_address_st {
+  enum texture_address_origin last_called;
   uint32_t address;
   uint32_t dim;
   uint32_t coords[TEXTURE_DIM_MAX];
@@ -224,7 +229,7 @@ cuda_find_tex_id (cuda_tex_map_t *mapping,
 {
   kernel_t kernel = NULL;
   struct symbol *symbol = NULL;
-  struct minimal_symbol *msymbol;
+  struct bound_minimal_symbol bmsym;
   const char *name = NULL;
   uint64_t pc;
 
@@ -240,16 +245,16 @@ cuda_find_tex_id (cuda_tex_map_t *mapping,
      cuda_current_kernel_name gives demangled. */
   kernel = cuda_current_kernel ();
   pc = kernel_get_virt_code_base (kernel);
-  msymbol = lookup_minimal_symbol_by_pc (pc);
+  bmsym = lookup_minimal_symbol_by_pc (pc);
   symbol = find_pc_function (pc);
 
-  if (symbol && msymbol != NULL &&
-      SYMBOL_VALUE_ADDRESS (msymbol) > BLOCK_START (SYMBOL_BLOCK_VALUE (symbol)))
-      name = SYMBOL_LINKAGE_NAME (msymbol);
+  if (symbol && bmsym.minsym != NULL &&
+      MSYMBOL_VALUE_ADDRESS (bmsym.objfile, bmsym.minsym) > BLOCK_START (SYMBOL_BLOCK_VALUE (symbol)))
+      name = MSYMBOL_LINKAGE_NAME (bmsym.minsym);
   else if (symbol)
       name = SYMBOL_CUDA_NAME (symbol);
-  else if (msymbol != NULL)
-      name = SYMBOL_LINKAGE_NAME (msymbol);
+  else if (bmsym.minsym != NULL)
+      name = MSYMBOL_LINKAGE_NAME (bmsym.minsym);
 
   cuda_textures_trace ("current kernel name: %s", name);
 
@@ -320,7 +325,7 @@ cuda_texture_create_kernel_mapping (struct symbol *symbol,
 bool
 cuda_texture_is_tex_ptr (struct type *type)
 {
-  CHECK_TYPEDEF (type);
+  check_typedef (type);
   if (TYPE_CODE (type) != TYPE_CODE_PTR)
     return false;
 

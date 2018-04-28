@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -31,7 +31,7 @@
 
 #define PBUFSIZ 16384
 
-struct {
+struct pktbuf_st {
   char *buf;
   long int buf_size;
 } pktbuf;
@@ -41,7 +41,7 @@ alloc_cuda_packet_buffer (void)
 {
   if (pktbuf.buf == NULL)
     {
-      pktbuf.buf = xmalloc (PBUFSIZ);
+      pktbuf.buf = (char *) xmalloc (PBUFSIZ);
       pktbuf.buf_size = PBUFSIZ;
     }
 }
@@ -162,11 +162,19 @@ cuda_remote_notification_aliased_event (void)
 }
 
 void
-cuda_remote_notification_analyze (void)
+cuda_remote_notification_analyze (ptid_t ptid)
 {
   char *p;
   cuda_packet_type_t packet_type = NOTIFICATION_ANALYZE;
-  struct thread_info *tp = inferior_thread ();
+  struct thread_info *tp;
+
+  /* Upon connecting to gdbserver, we may not have stablished an inferior_ptid,
+     so it is still null_ptid.  In that case, use the event ptid that should be
+     the thread that triggered this code path.  */
+  if (ptid_equal (inferior_ptid, null_ptid))
+    tp = find_thread_ptid (ptid);
+  else
+    tp = inferior_thread ();
 
   p = append_string ("qnv.", pktbuf.buf, false);
   p = append_bin ((gdb_byte *) &packet_type, p, sizeof (packet_type), true);
@@ -205,8 +213,8 @@ cuda_remote_update_grid_id_in_sm (uint32_t dev, uint32_t sm)
   CUDBGResult res;
   char *p;
   uint32_t wp;
-  uint64_t valid_warps_mask_c;
-  uint64_t valid_warps_mask_s;
+  cuda_api_warpmask* valid_warps_mask_c;
+  cuda_api_warpmask valid_warps_mask_s;
   uint32_t num_warps;
   uint64_t grid_id;
   cuda_packet_type_t packet_type = UPDATE_GRID_ID_IN_SM;
@@ -223,7 +231,7 @@ cuda_remote_update_grid_id_in_sm (uint32_t dev, uint32_t sm)
   getpkt (&pktbuf.buf, &pktbuf.buf_size, 1);
 
   extract_bin (pktbuf.buf, (gdb_byte *) &valid_warps_mask_s, sizeof (valid_warps_mask_s));
-  gdb_assert (valid_warps_mask_s == valid_warps_mask_c);
+  gdb_assert (cuda_api_eq_mask(&valid_warps_mask_s, valid_warps_mask_c));
   for (wp = 0; wp < num_warps; wp++)
     {
       if (warp_is_valid (dev, sm, wp))
@@ -243,8 +251,8 @@ cuda_remote_update_block_idx_in_sm (uint32_t dev, uint32_t sm)
   CUDBGResult res;
   char *p;
   uint32_t wp;
-  uint64_t valid_warps_mask_c;
-  uint64_t valid_warps_mask_s;
+  cuda_api_warpmask* valid_warps_mask_c;
+  cuda_api_warpmask valid_warps_mask_s;
   uint32_t num_warps;
   CuDim3 block_idx;
   cuda_packet_type_t packet_type = UPDATE_BLOCK_IDX_IN_SM;
@@ -261,7 +269,7 @@ cuda_remote_update_block_idx_in_sm (uint32_t dev, uint32_t sm)
   getpkt (&pktbuf.buf, &pktbuf.buf_size, 1);
 
   extract_bin (pktbuf.buf, (gdb_byte *) &valid_warps_mask_s, sizeof (valid_warps_mask_s));
-  gdb_assert (valid_warps_mask_s == valid_warps_mask_c);
+  gdb_assert (cuda_api_eq_mask(&valid_warps_mask_s, valid_warps_mask_c));
   for (wp = 0; wp < num_warps; wp++)
     {
        if (warp_is_valid (dev, sm, wp))
@@ -404,7 +412,7 @@ cuda_remote_api_finalize (void)
 }
 
 void
-cuda_remote_set_option ()
+cuda_remote_set_option (void)
 {
   char *p;
   bool general_trace       = cuda_options_debug_general ();
@@ -428,7 +436,7 @@ cuda_remote_set_option ()
 }
 
 void
-cuda_remote_query_trace_message ()
+cuda_remote_query_trace_message (void)
 {
   char *p;
   cuda_packet_type_t packet_type = QUERY_TRACE_MESSAGE;

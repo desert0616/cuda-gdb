@@ -1,6 +1,6 @@
 /* Target dependent code for GDB on TI C6x systems.
 
-   Copyright (C) 2010-2013 Free Software Foundation, Inc.
+   Copyright (C) 2010-2016 Free Software Foundation, Inc.
    Contributed by Andrew Jenner <andrew@codesourcery.com>
    Contributed by Yao Qi <yao@codesourcery.com>
 
@@ -22,7 +22,7 @@
 #include "server.h"
 #include "linux-low.h"
 
-#include <sys/ptrace.h>
+#include "nat/gdb_ptrace.h"
 #include <endian.h>
 
 #include "gdb_proc_service.h"
@@ -38,10 +38,15 @@
 
 /* Defined in auto-generated file tic6x-c64xp-linux.c.  */
 void init_registers_tic6x_c64xp_linux (void);
+extern const struct target_desc *tdesc_tic6x_c64xp_linux;
+
 /* Defined in auto-generated file tic6x-c64x-linux.c.  */
 void init_registers_tic6x_c64x_linux (void);
+extern const struct target_desc *tdesc_tic6x_c64x_linux;
+
 /* Defined in auto-generated file tic62x-c6xp-linux.c.  */
 void init_registers_tic6x_c62x_linux (void);
+extern const struct target_desc *tdesc_tic6x_c62x_linux;
 
 union tic6x_register
 {
@@ -166,12 +171,26 @@ extern struct linux_target_ops the_low_target;
 
 static int *tic6x_regmap;
 static unsigned int tic6x_breakpoint;
+#define tic6x_breakpoint_len 4
 
-static void
-tic6x_arch_setup (void)
+/* Implementation of linux_target_ops method "sw_breakpoint_from_kind".  */
+
+static const gdb_byte *
+tic6x_sw_breakpoint_from_kind (int kind, int *size)
+{
+  *size = tic6x_breakpoint_len;
+  return (const gdb_byte *) &tic6x_breakpoint;
+}
+
+/* Forward definition.  */
+static struct usrregs_info tic6x_usrregs_info;
+
+static const struct target_desc *
+tic6x_read_description (void)
 {
   register unsigned int csr asm ("B2");
   unsigned int cpuid;
+  const struct target_desc *tdesc;
 
   /* Determine the CPU we're running on to find the register order.  */
   __asm__ ("MVC .S2 CSR,%0" : "=r" (csr) :);
@@ -182,29 +201,30 @@ tic6x_arch_setup (void)
     case 0x02: /* C67x */
       tic6x_regmap = tic6x_regmap_c62x;
       tic6x_breakpoint = 0x0000a122;  /* BNOP .S2 0,5 */
-      init_registers_tic6x_c62x_linux ();
+      tdesc = tdesc_tic6x_c62x_linux;
       break;
     case 0x03: /* C67x+ */
       tic6x_regmap = tic6x_regmap_c64x;
       tic6x_breakpoint = 0x0000a122;  /* BNOP .S2 0,5 */
-      init_registers_tic6x_c64x_linux ();
+      tdesc = tdesc_tic6x_c64x_linux;
       break;
     case 0x0c: /* C64x */
       tic6x_regmap = tic6x_regmap_c64x;
       tic6x_breakpoint = 0x0000a122;  /* BNOP .S2 0,5 */
-      init_registers_tic6x_c64x_linux ();
+      tdesc = tdesc_tic6x_c64x_linux;
       break;
     case 0x10: /* C64x+ */
     case 0x14: /* C674x */
     case 0x15: /* C66x */
       tic6x_regmap = tic6x_regmap_c64xp;
       tic6x_breakpoint = 0x56454314;  /* illegal opcode */
-      init_registers_tic6x_c64xp_linux ();
+      tdesc = tdesc_tic6x_c64xp_linux;
       break;
     default:
       error ("Unknown CPU ID 0x%02x", cpuid);
     }
-  the_low_target.regmap = tic6x_regmap;
+  tic6x_usrregs_info.regmap = tic6x_regmap;
+  return tdesc;
 }
 
 static int
@@ -237,8 +257,6 @@ tic6x_set_pc (struct regcache *regcache, CORE_ADDR pc)
   supply_register_by_name (regcache, "PC", newpc.buf);
 }
 
-#define tic6x_breakpoint_len 4
-
 static int
 tic6x_breakpoint_at (CORE_ADDR where)
 {
@@ -256,7 +274,7 @@ tic6x_breakpoint_at (CORE_ADDR where)
 /* Fetch the thread-local storage pointer for libthread_db.  */
 
 ps_err_e
-ps_get_thread_area (const struct ps_prochandle *ph,
+ps_get_thread_area (struct ps_prochandle *ph,
 		    lwpid_t lwpid, int idx, void **base)
 {
   if (ptrace (PTRACE_GET_THREAD_AREA, lwpid, NULL, base) != 0)
@@ -311,25 +329,95 @@ tic6x_store_gregset (struct regcache *regcache, const void *buf)
       tic6x_supply_register (regcache, i, regset + tic6x_regmap[i]);
 }
 
-struct regset_info target_regsets[] = {
+static struct regset_info tic6x_regsets[] = {
   { PTRACE_GETREGS, PTRACE_SETREGS, 0, TIC6X_NUM_REGS * 4, GENERAL_REGS,
     tic6x_fill_gregset, tic6x_store_gregset },
-  { 0, 0, 0, -1, -1, NULL, NULL }
+  NULL_REGSET
 };
+
+static void
+tic6x_arch_setup (void)
+{
+  current_process ()->tdesc = tic6x_read_description ();
+}
+
+/* Support for hardware single step.  */
+
+static int
+tic6x_supports_hardware_single_step (void)
+{
+  return 1;
+}
+
+static struct regsets_info tic6x_regsets_info =
+  {
+    tic6x_regsets, /* regsets */
+    0, /* num_regsets */
+    NULL, /* disabled_regsets */
+  };
+
+static struct usrregs_info tic6x_usrregs_info =
+  {
+    TIC6X_NUM_REGS,
+    NULL, /* Set in tic6x_read_description.  */
+  };
+
+static struct regs_info regs_info =
+  {
+    NULL, /* regset_bitmap */
+    &tic6x_usrregs_info,
+    &tic6x_regsets_info
+  };
+
+static const struct regs_info *
+tic6x_regs_info (void)
+{
+  return &regs_info;
+}
 
 struct linux_target_ops the_low_target = {
   tic6x_arch_setup,
-  TIC6X_NUM_REGS,
-  0,
-  NULL,
+  tic6x_regs_info,
   tic6x_cannot_fetch_register,
   tic6x_cannot_store_register,
   NULL, /* fetch_register */
   tic6x_get_pc,
   tic6x_set_pc,
-  (const unsigned char *) &tic6x_breakpoint,
-  tic6x_breakpoint_len,
+  NULL, /* breakpoint_kind_from_pc */
+  tic6x_sw_breakpoint_from_kind,
   NULL,
   0,
   tic6x_breakpoint_at,
+  NULL, /* supports_z_point_type */
+  NULL, /* insert_point */
+  NULL, /* remove_point */
+  NULL, /* stopped_by_watchpoint */
+  NULL, /* stopped_data_address */
+  NULL, /* collect_ptrace_register */
+  NULL, /* supply_ptrace_register */
+  NULL, /* siginfo_fixup */
+  NULL, /* new_process */
+  NULL, /* new_thread */
+  NULL, /* new_fork */
+  NULL, /* prepare_to_resume */
+  NULL, /* process_qsupported */
+  NULL, /* supports_tracepoints */
+  NULL, /* get_thread_area */
+  NULL, /* install_fast_tracepoint_jump_pad */
+  NULL, /* emit_ops */
+  NULL, /* get_min_fast_tracepoint_insn_len */
+  NULL, /* supports_range_stepping */
+  NULL, /* breakpoint_kind_from_current_state */
+  tic6x_supports_hardware_single_step,
 };
+
+void
+initialize_low_arch (void)
+{
+  /* Initialize the Linux target descriptions.  */
+  init_registers_tic6x_c64xp_linux ();
+  init_registers_tic6x_c64x_linux ();
+  init_registers_tic6x_c62x_linux ();
+
+  initialize_regsets_info (&tic6x_regsets_info);
+}

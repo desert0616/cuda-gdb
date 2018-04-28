@@ -1,6 +1,6 @@
 /* Ravenscar PowerPC target support.
 
-   Copyright (C) 2011-2013 Free Software Foundation, Inc.
+   Copyright (C) 2011-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -121,9 +121,9 @@ supply_register_at_address (struct regcache *regcache, int regnum,
 {
   struct gdbarch *gdbarch = get_regcache_arch (regcache);
   int buf_size = register_size (gdbarch, regnum);
-  char *buf;
+  gdb_byte *buf;
 
-  buf = (char *) alloca (buf_size);
+  buf = (gdb_byte *) alloca (buf_size);
   read_memory (register_addr, buf, buf_size);
   regcache_raw_supply (regcache, regnum, buf);
 }
@@ -148,7 +148,6 @@ ppc_ravenscar_generic_fetch_registers
    struct regcache *regcache, int regnum)
 {
   struct gdbarch *gdbarch = get_regcache_arch (regcache);
-  const int sp_regnum = gdbarch_sp_regnum (gdbarch);
   const int num_regs = gdbarch_num_regs (gdbarch);
   int current_regnum;
   CORE_ADDR current_address;
@@ -189,7 +188,7 @@ ppc_ravenscar_generic_store_registers
 {
   struct gdbarch *gdbarch = get_regcache_arch (regcache);
   int buf_size = register_size (gdbarch, regnum);
-  char buf [buf_size];
+  gdb_byte buf[buf_size];
   ULONGEST register_address;
 
   if (register_in_thread_descriptor_p (reg_info, regnum))

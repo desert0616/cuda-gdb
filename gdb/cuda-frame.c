@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -79,7 +79,8 @@ cuda_frame_inlined_p (struct frame_info *next_frame)
      corresponding to inlined functions. Also find the outermost block in that
      block chain. */
   pc = cuda_frame_prev_pc (next_frame);
-  for (block = block_for_pc (pc); block; block = block->superblock)
+  for (block = (struct block *) block_for_pc (pc); block;
+       block = block->superblock)
     {
       if (!block->function)
         continue;
@@ -198,7 +199,7 @@ cuda_frame_cache (struct frame_info *this_frame, void **this_cache)
   gdb_assert (cuda_frame_p (this_frame));
 
   if (*this_cache)
-    return *this_cache;
+      return (struct cuda_frame_cache *) *this_cache;
 
   cache = FRAME_OBSTACK_ZALLOC (struct cuda_frame_cache);
   *this_cache = cache;
@@ -439,7 +440,7 @@ cuda_abi_frame_prev_register (struct frame_info *next_frame,
   struct gdbarch *gdbarch = get_frame_arch (next_frame);
   uint32_t pc_regnum = gdbarch_pc_regnum (gdbarch);
   CORE_ADDR pc = 0;
-  struct value *value;
+  struct value *value = NULL;
   struct frame_info *frame = NULL;
   enum frame_type frame_type = SENTINEL_FRAME;
   bool read_register_from_device = false;
@@ -464,12 +465,21 @@ cuda_abi_frame_prev_register (struct frame_info *next_frame,
     }
   else if (read_register_from_device)
     value = frame_unwind_got_register (next_frame, regnum, regnum);
-  else
+  /* Stack frame unwinding using .debug_frame information is buggy in the case
+   * of syscall user stubs, fallback on directly reading from the inner frame
+   * in this case */
+  else if (!get_frame_id_p(next_frame) || 
+           !get_frame_id(next_frame).special_addr_p ||
+           get_frame_id(next_frame).special_addr != 1)
     value = cuda_abi_hook_dwarf2_frame_prev_register (next_frame, this_cache, regnum);
+
+  /* Try to fetch the register value from the inner frame.  */
+  if (!value)
+    value = get_frame_register_value (next_frame, regnum);
 
   /* Last resort: if no value found, use the register for the innermost frame. */
   if (!value)
-    value = frame_unwind_got_register (next_frame, regnum, regnum);
+    value = frame_unwind_got_register (get_next_frame (frame), regnum, regnum);
 
   return value;
 }

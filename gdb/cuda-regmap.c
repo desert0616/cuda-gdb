@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -17,7 +17,7 @@
 
 
 #include "cuda-regmap.h"
-#include "gdb_assert.h"
+#include "common-defs.h"
 #include "obstack.h"
 #include "cuda-coords.h"
 #include "cuda-state.h"
@@ -173,7 +173,7 @@ regmap_get_class (regmap_t regmap, uint32_t idx)
   gdb_assert (idx < REGMAP_MAX_ENTRIES);
   gdb_assert (idx < regmap->output.num_entries);
 
-  return REGMAP_CLASS (regmap->output.raw_value[idx]);
+  return (CUDBGRegClass) REGMAP_CLASS (regmap->output.raw_value[idx]);
 }
 
 
@@ -441,7 +441,7 @@ regmap_read_elf_section (struct objfile *objfile, char **buffer, uint32_t *buffe
 
   /* allocate space to read the section */
   size  = bfd_get_section_size (asection);
-  ptr   = xmalloc (size);
+  ptr   = (char *) xmalloc (size);
   if (!ptr)
     return;
 
@@ -464,21 +464,32 @@ regmap_extend_liverange (regmap_func_t *func)
   regmap_map_t *map_end = &func->map[func->maps_no];
   uint32_t end_max = 0;
 
+  /* Find the max end for this function */
+  /* PERF: replace me with a lookup of the function's PC range instead */
   for (map = &func->map[0]; map < map_end; map++)
     if (end_max < map->end) end_max = map->end;
 
   for (map = &func->map[0]; map < map_end; map++)
     {
+      /* Initialize the extended end to be the end of the function */
+      map->extended_end = end_max;
+      /* Now look for a range interval that will cover *after* this interval and
+         reset the extended interval */
       for (map1 = &func->map[0]; map1 < map_end; map1++)
         {
-           if (map == map1 || map1->target != map->target)
-              continue;
-           if (map1->start - sizeof(uint64_t) > map->extended_end)
-            map->extended_end = map1->start-sizeof(uint64_t);
+           if (map == map1 || strncmp(map->rname, map1->rname, sizeof(map->rname)) != 0)
+               continue;
+           if (map1->start >= map->end)
+             {
+               /* Extend our end to cover tha gap */
+               map->extended_end = (map1->start < map->extended_end ? map1->start : map->extended_end);
+             }
+           else if (map1->end > map->end)
+             {  /* Overlapping range with an end further out, don't extend our range */
+               map->extended_end = map->end;
+               break;
+             }
         }
-        /* If register is unused - extend to the end of the function */
-        if (map->end == map->extended_end && map->end < end_max)
-            map->extended_end = end_max;
     }
 }
 
@@ -500,12 +511,12 @@ regmap_load_func (regmap_iterator_t *itr, regmap_table_t *table)
 
   regmap_parse_ondisk_func (itr, &fname, &num_entries, NULL);
   alloc_size = sizeof(regmap_func_t) + num_entries*sizeof(regmap_map_t);
-  func = obstack_alloc (table->obstack, alloc_size);
+  func = (regmap_func_t *) obstack_alloc (table->obstack, alloc_size);
   if (!func)
       return -1;
   memset (func, 0, alloc_size);
 
-  func->name = obstack_alloc(table->obstack, strlen(fname)+1);
+  func->name = (char *) obstack_alloc(table->obstack, strlen(fname)+1);
   if (!func->name)
     {
        obstack_free (table->obstack, func);
@@ -517,7 +528,8 @@ regmap_load_func (regmap_iterator_t *itr, regmap_table_t *table)
   for (cnt=0; cnt < num_entries; cnt++)
     {
       map = &func->map[func->maps_no];
-      map->idx        = regmap_iterator_read_uint32 (itr);
+      /* Map index is encoded as two lower bits for 32-bit word in PTX->SASS register map */
+      map->idx        = regmap_iterator_read_uint32 (itr) & 3;
       rname           = regmap_iterator_read_string (itr);
       map->target     = regmap_iterator_read_uint32 (itr);
       map->start      = regmap_iterator_read_uint32 (itr);
@@ -574,7 +586,7 @@ regmap_load_table (struct objfile *objfile)
     }
 
   alloc_size = sizeof(regmap_table_t) + cnt * sizeof(regmap_func_t *);
-  table = obstack_alloc (obstack, alloc_size);
+  table = (regmap_table_t *) obstack_alloc (obstack, alloc_size);
   if (!table)
     goto err;
 
@@ -696,6 +708,9 @@ regmap_table_search (struct objfile *objfile, const char *func_name,
                     map->extended_end : map->end) )
              continue;
 
+         /* Ignore upper 64-bit of 128-bit PTX registers */
+         if (map->idx > 1)
+             continue;
          /* Save the found element in the regmap object */
          cuda_regmap->output.location_index[cuda_regmap->output.num_entries] = map->idx;
          cuda_regmap->output.raw_value[cuda_regmap->output.num_entries] = map->target;
@@ -720,7 +735,7 @@ regmap_table_search (struct objfile *objfile, const char *func_name,
    name).
  */
 int
-cuda_decode_physical_register (uint64_t reg, int32_t*result)
+cuda_decode_physical_register (uint64_t reg, int32_t *result)
 {
   uint32_t dev_id   = cuda_current_device ();
   uint32_t num_regs = device_get_num_registers (dev_id);

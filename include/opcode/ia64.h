@@ -1,6 +1,5 @@
 /* ia64.h -- Header file for ia64 opcode table
-   Copyright (C) 1998, 1999, 2000, 2002, 2005, 2006, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1998-2016 Free Software Foundation, Inc.
    Contributed by David Mosberger-Tang <davidm@hpl.hp.com>
 
    This file is part of BFD, the Binary File Descriptor library.
@@ -26,6 +25,9 @@
 
 #include "bfd.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef BFD_HOST_U_64_BIT ia64_insn;
 
@@ -418,5 +420,9 @@ extern const struct ia64_dependency *ia64_find_dependency (int);
 /* To avoid circular library dependencies, this array is implemented
    in bfd/cpu-ia64-opc.c: */
 extern const struct ia64_operand elf64_ia64_operands[IA64_OPND_COUNT];
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* opcode_ia64_h */

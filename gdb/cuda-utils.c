@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -20,7 +20,7 @@
 #include "gdb_locale.h"
 #include "server.h"
 #else
-#include "gdb_assert.h"
+#include "common-defs.h"
 #include "defs.h"
 #include "inferior.h"
 #include "gdb/signals.h"
@@ -264,7 +264,7 @@ cuda_gdb_record_set_lock (int record_idx, bool enable_lock)
 }
 
 static void
-cuda_gdb_lock_file_initialize ()
+cuda_gdb_lock_file_initialize (void)
 {
   uint32_t i;
 
@@ -299,7 +299,7 @@ cuda_gdb_record_remove_all (void *unused)
 /* Check for the presence of the CUDA_VISIBLE_DEVICES variable. If it is
  * present, lock records */
 static void
-cuda_gdb_lock_file_create ()
+cuda_gdb_lock_file_create (void)
 {
   struct stat st;
   char buf[CUDA_GDB_TMP_BUF_SIZE];
@@ -410,7 +410,7 @@ cuda_gdb_tmpdir_setup (void)
   if (dir_exists)
     cuda_gdb_dir_cleanup_files (dirpath);
 
-  cuda_gdb_tmp_dir = xmalloc (strlen (dirpath) + 1);
+  cuda_gdb_tmp_dir = (char *) xmalloc (strlen (dirpath) + 1);
   strncpy (cuda_gdb_tmp_dir, dirpath, strlen (dirpath) + 1);
 
   /* No final cleanup chain at server side,
@@ -453,7 +453,7 @@ cuda_nat_save_gdb_signal_handlers (void)
   static int (*sighand_savers[])(int) =
     {signal_stop_state, signal_print_state, signal_pass_state};
 
-  sigs = xmalloc (GDB_SIGNAL_LAST*ARRAY_SIZE(sighand_savers));
+  sigs = (unsigned char *) xmalloc (GDB_SIGNAL_LAST*ARRAY_SIZE(sighand_savers));
 
   for (i=0; i < ARRAY_SIZE(sighand_savers); i++)
     for (j=0; j < GDB_SIGNAL_LAST; j++)
@@ -476,7 +476,7 @@ cuda_nat_restore_gdb_signal_handlers (unsigned char *sigs)
 
 static void cuda_nat_bypass_signals_cleanup (void *ptr)
 {
-  unsigned char *sigs = ptr;
+  unsigned char *sigs = (unsigned char *) ptr;
 
   cuda_nat_restore_gdb_signal_handlers (sigs);
   xfree (ptr);
@@ -594,11 +594,11 @@ cuda_ptx_cache_get_register (struct frame_info *frame, int dwarf_regnum, struct 
       !cuda_options_variable_value_cache_enabled ())
     {
       VALUE_LVAL (retval) = not_lval;
-      set_value_optimized_out (retval, 1);
+      mark_value_bytes_optimized_out (retval, 0, value_length (retval));
       return retval;
     }
 
-  set_value_optimized_out (retval, 0);
+  mark_value_bytes_optimized_out (retval, 0, 0);
   set_value_cached (retval, 1);
   memcpy (value_contents_raw(retval), elem->data, elem->len);
   return retval;
@@ -611,7 +611,7 @@ static void
 cuda_ptx_cache_update_local_vars (void)
 {
   struct frame_info *frame = NULL;
-  struct block *block = NULL;
+  const struct block *block = NULL;
 
   if (!cuda_focus_is_device() || is_executing (inferior_ptid) ) return;
   frame = get_current_frame();
@@ -653,9 +653,9 @@ cuda_ptx_cache_refresh (void)
 
 
 bool
-cuda_managed_msymbol_p (struct minimal_symbol *msym)
+cuda_managed_msymbol_p (struct bound_minimal_symbol bmsym)
 {
-  struct obj_section *section = SYMBOL_OBJ_SECTION(msym);
+  struct obj_section *section = MSYMBOL_OBJ_SECTION(bmsym.objfile, bmsym.minsym);
   struct objfile *obj= section ? section->objfile : NULL;
   struct gdbarch *arch = obj ? get_objfile_arch (obj) : NULL;
 
@@ -663,7 +663,7 @@ cuda_managed_msymbol_p (struct minimal_symbol *msym)
 
   return gdbarch_bfd_arch_info (arch)->arch == bfd_arch_m68k ?
   /* If this a device symbol MSYMBOL_TARGET_FLAG indicates if it is managed */
-          (MSYMBOL_TARGET_FLAG_1 (msym) != 0) :
+          (MSYMBOL_TARGET_FLAG_1 (bmsym.minsym) != 0) :
   /* Managed host symbols must be located in __nv_managed_data__ section */
           (section->the_bfd_section != NULL &&
           strcmp(section->the_bfd_section->name, "__nv_managed_data__") == 0 );
@@ -754,12 +754,18 @@ cuda_is_value_managed_pointer (struct value *value)
   if (type == NULL || TYPE_CODE (type) != TYPE_CODE_PTR)
     return result;
 
-  TRY_CATCH (e, RETURN_MASK_ALL)
-  {
-    result = cuda_managed_address_p (unpack_pointer (type, value_contents_for_printing (value)));
-  }
+  TRY
+    {
+      result = cuda_managed_address_p (unpack_pointer (type, value_contents_for_printing (value)));
+    }
+  CATCH (e, RETURN_MASK_ALL)
+    {
+      if (e.reason != 0)
+	return false;
+    }
+  END_CATCH
 
-  return e.reason != 0 ? false : result;
+  return result;
 }
 #endif /* GDBSERVER */
 

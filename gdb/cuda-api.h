@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -34,6 +34,26 @@ typedef enum {
   CUDA_API_STATE_INITIALIZED,
 } cuda_api_state_t;
 
+#define WARP_MASK_FORMAT "s"
+
+typedef struct cuda_api_warpmask_t cuda_api_warpmask;
+
+struct cuda_api_warpmask_t {
+    uint64_t mask;
+};
+
+const char* cuda_api_mask_string(const cuda_api_warpmask* mask);
+void cuda_api_clear_mask(cuda_api_warpmask* mask);
+void cuda_api_set_bit(cuda_api_warpmask* mask, int i, int v);
+int cuda_api_get_bit(const cuda_api_warpmask* mask, int i);
+int cuda_api_has_bit(const cuda_api_warpmask* mask);
+int cuda_api_has_multiple_bits(const cuda_api_warpmask* mask);
+int cuda_api_eq_mask(const cuda_api_warpmask* m1, const cuda_api_warpmask* m2);
+void cuda_api_cp_mask(cuda_api_warpmask* dst, const cuda_api_warpmask* src);
+cuda_api_warpmask* cuda_api_or_mask(cuda_api_warpmask* dst, const cuda_api_warpmask* m1, const cuda_api_warpmask* m2);
+cuda_api_warpmask* cuda_api_and_mask(cuda_api_warpmask* dst, const cuda_api_warpmask* m1, const cuda_api_warpmask* m2);
+cuda_api_warpmask* cuda_api_not_mask(cuda_api_warpmask* dst, const cuda_api_warpmask* m1);
+
 /* Initialization */
 void cuda_api_handle_initialization_error (CUDBGResult res);
 void cuda_api_handle_get_api_error (CUDBGResult res);
@@ -54,8 +74,8 @@ void cuda_api_request_cleanup_on_detach (uint32_t resumeAppFlag);
 /* Device Execution Control */
 void cuda_api_suspend_device (uint32_t dev);
 void cuda_api_resume_device (uint32_t dev);
-bool cuda_api_resume_warps_until_pc (uint32_t dev, uint32_t sm, uint64_t warp_mask, uint64_t virt_pc);
-bool cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warp_mask);
+bool cuda_api_resume_warps_until_pc (uint32_t dev, uint32_t sm, cuda_api_warpmask *warp_mask, uint64_t virt_pc);
+bool cuda_api_single_step_warp (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t nsteps, cuda_api_warpmask *warp_mask);
 
 /* Breakpoints */
 bool cuda_api_set_breakpoint (uint32_t dev, uint64_t addr);
@@ -66,8 +86,8 @@ void cuda_api_get_adjusted_code_address (uint32_t dev, uint64_t addr, uint64_t *
 void cuda_api_read_grid_id (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *grid_id);
 void cuda_api_read_block_idx (uint32_t dev, uint32_t sm, uint32_t wp, CuDim3 *blockIdx);
 void cuda_api_read_thread_idx (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, CuDim3 *threadIdx);
-void cuda_api_read_broken_warps (uint32_t dev, uint32_t sm, uint64_t *brokenWarpsMask);
-void cuda_api_read_valid_warps (uint32_t dev, uint32_t sm, uint64_t *valid_warps);
+void cuda_api_read_broken_warps (uint32_t dev, uint32_t sm, cuda_api_warpmask *brokenWarpsMask);
+void cuda_api_read_valid_warps (uint32_t dev, uint32_t sm, cuda_api_warpmask *valid_warps);
 void cuda_api_read_valid_lanes (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *valid_lanes);
 void cuda_api_read_active_lanes (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *active_lanes);
 void cuda_api_read_code_memory (uint32_t dev, uint64_t addr, void *buf, uint32_t sz);
@@ -88,7 +108,7 @@ void cuda_api_read_lane_exception (uint32_t dev, uint32_t sm, uint32_t wp, uint3
 void cuda_api_read_call_depth (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, int32_t *depth);
 void cuda_api_read_syscall_call_depth (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, int32_t *depth);
 void cuda_api_read_virtual_return_address (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, int32_t level, uint64_t *ra);
-void cuda_api_read_device_exception_state (uint32_t dev, uint64_t *exceptionSMMask);
+void cuda_api_read_device_exception_state (uint32_t dev, uint64_t *exceptionSMMask, uint32_t n);
 void cuda_api_read_error_pc (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *pc, bool* valid);
 void cuda_api_read_warp_state (uint32_t dev, uint32_t sm, uint32_t wp, CUDBGWarpState *state);
 void cuda_api_read_register_range (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32_t idx, uint32_t count, uint32_t *regs);

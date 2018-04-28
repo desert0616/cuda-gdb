@@ -1,6 +1,5 @@
 /* Definitions for opcode table for the sparc.
-   Copyright 1989, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 2000, 2002,
-   2003, 2005, 2010, 2011 Free Software Foundation, Inc.
+   Copyright (C) 1989-2016 Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler, GDB, the GNU debugger, and
    the GNU Binutils.
@@ -22,6 +21,10 @@
 
 #include "ansidecl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* The SPARC opcode table (and other related data) is defined in
    the opcodes library in sparc-opc.c.  If you change anything here, make
    sure you fix up that file, and vice versa.  */
@@ -42,17 +45,23 @@ enum sparc_opcode_arch_val
   SPARC_OPCODE_ARCH_V6 = 0,
   SPARC_OPCODE_ARCH_V7,
   SPARC_OPCODE_ARCH_V8,
+  SPARC_OPCODE_ARCH_LEON,
   SPARC_OPCODE_ARCH_SPARCLET,
   SPARC_OPCODE_ARCH_SPARCLITE,
   /* V9 variants must appear last.  */
   SPARC_OPCODE_ARCH_V9,
   SPARC_OPCODE_ARCH_V9A, /* V9 with ultrasparc additions.  */
   SPARC_OPCODE_ARCH_V9B, /* V9 with ultrasparc and cheetah additions.  */
+  SPARC_OPCODE_ARCH_V9C, /* V9 with UA2005 and T1 additions.  */
+  SPARC_OPCODE_ARCH_V9D, /* V9 with UA2007 and T3 additions.  */
+  SPARC_OPCODE_ARCH_V9E, /* V9 with OSA2011 and T4 additions modulus integer multiply-add.  */
+  SPARC_OPCODE_ARCH_V9V, /* V9 with OSA2011 and T4 additions, integer
+                            multiply and Fujitsu fp multiply-add.  */
+  SPARC_OPCODE_ARCH_V9M, /* V9 with OSA2015 and M7 additions.  */
+  SPARC_OPCODE_ARCH_MAX = SPARC_OPCODE_ARCH_V9M,
   SPARC_OPCODE_ARCH_BAD  /* Error return from sparc_opcode_lookup_arch.  */
 };
 
-/* The highest architecture in the table.  */
-#define SPARC_OPCODE_ARCH_MAX (SPARC_OPCODE_ARCH_BAD - 1)
 
 /* Given an enum sparc_opcode_arch_val, return the bitmask to use in
    insn encoding/decoding.  */
@@ -100,6 +109,7 @@ typedef struct sparc_opcode
   /* This was called "delayed" in versions before the flags.  */
   unsigned int flags;
   unsigned int hwcaps;
+  unsigned int hwcaps2;
   short architecture;	/* Bitmask of sparc_opcode_arch_val's.  */
 } sparc_opcode;
 
@@ -111,8 +121,12 @@ typedef struct sparc_opcode
 #define	F_JSR		0x00000010 /* Subroutine call.  */
 #define F_FLOAT		0x00000020 /* Floating point instruction (not a branch).  */
 #define F_FBR		0x00000040 /* Floating point branch.  */
+#define F_PREFERRED	0x00000080 /* A preferred alias.  */
 
-/* These must match the HWCAP_* values precisely.  */
+#define F_PREF_ALIAS	(F_ALIAS|F_PREFERRED)
+
+/* These must match the ELF_SPARC_HWCAP_* and ELF_SPARC_HWCAP2_*
+   values precisely.  See include/elf/sparc.h.  */
 #define HWCAP_MUL32	0x00000001 /* umul/umulcc/smul/smulcc insns */
 #define HWCAP_DIV32	0x00000002 /* udiv/udivcc/sdiv/sdivcc insns */
 #define HWCAP_FSMULD	0x00000004 /* 'fsmuld' insn */
@@ -145,6 +159,20 @@ typedef struct sparc_opcode
 #define HWCAP_CBCOND	0x10000000 /* Compare and Branch insns */
 #define HWCAP_CRC32C	0x20000000 /* CRC32C insn */
 
+#define HWCAP2_FJATHPLUS 0x00000001 /* Fujitsu Athena+ */
+#define HWCAP2_VIS3B     0x00000002 /* Subset of VIS3 present on sparc64 X+.  */
+#define HWCAP2_ADP       0x00000004 /* Application Data Protection */
+#define HWCAP2_SPARC5    0x00000008 /* The 29 new fp and sub instructions */
+#define HWCAP2_MWAIT     0x00000010 /* mwait instruction and load/monitor ASIs */
+#define HWCAP2_XMPMUL    0x00000020 /* XOR multiple precision multiply */
+#define HWCAP2_XMONT     0x00000040 /* XOR Montgomery mult/sqr instructions */
+#define HWCAP2_NSEC      \
+                         0x00000080 /* pause insn with support for nsec timings */
+#define HWCAP2_FJATHHPC  0x00001000 /* Fujitsu HPC instrs */
+#define HWCAP2_FJDES     0x00002000 /* Fujitsu DES instrs */
+#define HWCAP2_FJAES     0x00010000 /* Fujitsu AES instrs */
+
+
 /* All sparc opcodes are 32 bits, except for the `set' instruction (really a
    macro), which is 64 bits. It is handled as a special case.
 
@@ -170,6 +198,7 @@ typedef struct sparc_opcode
 	g	frsd floating point register.
 	H	frsd floating point register (double/even).
 	J	frsd floating point register (quad/multiple of 4).
+	}       frsd floating point register (double/even) that is == frs2
 	b	crs1 coprocessor register
 	c	crs2 coprocessor register
 	D	crsd coprocessor register
@@ -211,6 +240,7 @@ typedef struct sparc_opcode
 	s	%fprs. (v9)
 	P	%pc.  (v9)
 	W	%tick.	(v9)
+	{	%mcdper. (v9b)
 	o	%asi. (v9)
 	6	%fcc0. (v9)
 	7	%fcc1. (v9)
@@ -218,6 +248,8 @@ typedef struct sparc_opcode
 	9	%fcc3. (v9)
 	!	Privileged Register in rd (v9)
 	?	Privileged Register in rs1 (v9)
+	%	Hyperprivileged Register in rd (v9b)
+	$	Hyperprivileged Register in rs1 (v9b)
 	*	Prefetch function constant. (v9)
 	x	OPF field (v9 impdep).
 	0	32/64 bit immediate for set or setx (v9) insns
@@ -274,3 +306,6 @@ extern const char *sparc_decode_sparclet_cpreg (int);
    comment-column: 0
    End: */
 
+#ifdef __cplusplus
+}
+#endif

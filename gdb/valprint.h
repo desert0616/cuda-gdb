@@ -1,6 +1,6 @@
 /* Declarations for value printing routines for GDB, the GNU debugger.
 
-   Copyright (C) 1986-2013 Free Software Foundation, Inc.
+   Copyright (C) 1986-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -24,14 +24,14 @@
    functions.  */
 struct value_print_options
 {
-  /* Pretty-printing control.  */
-  enum val_prettyprint pretty;
+  /* Pretty-formatting control.  */
+  enum val_prettyformat prettyformat;
 
-  /* Controls pretty printing of arrays.  */
-  int prettyprint_arrays;
+  /* Controls pretty formatting of arrays.  */
+  int prettyformat_arrays;
 
-  /* Controls pretty printing of structures.  */
-  int prettyprint_structs;
+  /* Controls pretty formatting of structures.  */
+  int prettyformat_structs;
 
   /* Controls printing of virtual tables.  */
   int vtblprint;
@@ -81,10 +81,12 @@ struct value_print_options
      share one flag, why not Pascal too?  */
   int pascal_static_field_print;
 
-  /* Controls Python pretty-printing.  */
+  /* If non-zero don't do Python pretty-printing.  */
   int raw;
 
-  /* If nonzero, print the value in "summary" form.  */
+  /* If nonzero, print the value in "summary" form.
+     If raw and summary are both non-zero, don't print non-scalar values
+     ("..." is printed instead).  */
   int summary;
 
   /* If nonzero, when printing a pointer, print the symbol to which it
@@ -101,8 +103,8 @@ extern struct value_print_options user_print_options;
 extern void get_user_print_options (struct value_print_options *opts);
 
 /* Initialize *OPTS to be a copy of the user print options, but with
-   pretty-printing disabled.  */
-extern void get_raw_print_options (struct value_print_options *opts);
+   pretty-formatting disabled.  */
+extern void get_no_prettyformat_print_options (struct value_print_options *);
 
 /* Initialize *OPTS to be a copy of the user print options, but using
    FORMAT as the formatting option.  */
@@ -113,7 +115,7 @@ extern void maybe_print_array_index (struct type *index_type, LONGEST index,
                                      struct ui_file *stream,
 				     const struct value_print_options *);
 
-extern void val_print_array_elements (struct type *, const gdb_byte *, int,
+extern void val_print_array_elements (struct type *, const gdb_byte *, LONGEST,
 				      CORE_ADDR, struct ui_file *, int,
 				      const struct value *,
 				      const struct value_print_options *,
@@ -122,12 +124,8 @@ extern void val_print_array_elements (struct type *, const gdb_byte *, int,
 extern void val_print_type_code_int (struct type *, const gdb_byte *,
 				     struct ui_file *);
 
-extern void val_print_type_code_flags (struct type *type,
-				       const gdb_byte *valaddr,
-				       struct ui_file *stream);
-
 extern void val_print_scalar_formatted (struct type *,
-					const gdb_byte *, int,
+					const gdb_byte *, LONGEST,
 					const struct value *,
 					const struct value_print_options *,
 					int,
@@ -158,7 +156,11 @@ extern int read_string (CORE_ADDR addr, int len, int width,
 			enum bfd_endian byte_order, gdb_byte **buffer,
 			int *bytes_read);
 
-extern void val_print_optimized_out (struct ui_file *stream);
+extern void val_print_optimized_out (const struct value *val,
+				     struct ui_file *stream);
+
+/* Prints "<not saved>" to STREAM.  */
+extern void val_print_not_saved (struct ui_file *stream);
 
 extern void val_print_unavailable (struct ui_file *stream);
 
@@ -184,6 +186,10 @@ struct generic_val_print_decorations
   /* What to print when we see TYPE_CODE_VOID.  */
 
   const char *void_name;
+
+  /* Array start and end strings.  */
+  const char *array_start;
+  const char *array_end;
 };
 
 
@@ -203,6 +209,30 @@ extern void generic_printstr (struct ui_file *stream, struct type *type,
 			      int quote_char, int c_style_terminator,
 			      const struct value_print_options *options);
 
-extern void output_command (char *exp, int from_tty);
+/* Run the "output" command.  ARGS and FROM_TTY are the usual
+   arguments passed to all command implementations, except ARGS is
+   const.  */
+
+extern void output_command_const (const char *args, int from_tty);
+
+extern int val_print_scalar_type_p (struct type *type);
+
+struct format_data
+  {
+    int count;
+    char format;
+    char size;
+
+    /* CUDA - memory segments */
+    enum type_instance_flag_value segment_type;
+
+    /* True if the value should be printed raw -- that is, bypassing
+       python-based formatters.  */
+    unsigned char raw;
+  };
+
+extern void print_command_parse_format (const char **expp, const char *cmdname,
+					struct format_data *fmtp);
+extern void print_value (struct value *val, const struct format_data *fmtp);
 
 #endif

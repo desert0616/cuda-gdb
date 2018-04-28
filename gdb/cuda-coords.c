@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -20,8 +20,8 @@
 #include "inferior.h"
 #include "language.h"
 #include "target.h"
-#include "gdb_assert.h"
-#include "gdb_string.h"
+#include "common-defs.h"
+#include "string.h"
 #include "ui-out.h"
 
 #include "cuda-options.h"
@@ -51,7 +51,7 @@ cuda_coords_reset_current (void)
 }
 
 bool
-cuda_focus_is_device ()
+cuda_focus_is_device (void)
 {
   return current_coords.valid;
 }
@@ -779,8 +779,8 @@ cuda_coords_find_valid_exact (cuda_coords_t wished, cuda_coords_t *found, cuda_s
 void
 cuda_coords_find_valid (cuda_coords_t wished, cuda_coords_t found[CK_MAX], cuda_select_t select_mask)
 {
+  int kind;
   cuda_coords_t origin = { true, 0, 0, { 0, 0 }, { 0, 0, 0 }, 0, 0, 0, 0 };
-  cuda_coords_kind_t kind;
   uint64_t relative_distance_logical, relative_distance_physical;
   uint64_t absolute_distance_logical, absolute_distance_physical;
   uint64_t best_relative_distance_logical = 0ULL, best_relative_distance_physical = 0ULL;
@@ -798,7 +798,8 @@ cuda_coords_find_valid (cuda_coords_t wished, cuda_coords_t found[CK_MAX], cuda_
     found[kind].valid = false;
 
   cuda_coords_initialized_wished_coords (&wished);
-  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter, CUDA_SELECT_VALID | select_mask);
+  iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_THREADS, &filter,
+			       (cuda_select_t) (CUDA_SELECT_VALID | select_mask));
 
   for (cuda_iterator_start (iter);
        !cuda_iterator_end (iter);
@@ -888,10 +889,10 @@ cuda_coords_find_valid (cuda_coords_t wished, cuda_coords_t found[CK_MAX], cuda_
 void
 cuda_coords_update_current (bool breakpoint_hit, bool exception_hit)
 {
+  int kind;
   cuda_coords_t result;
   cuda_coords_t coords[CK_MAX];
-  cuda_coords_kind_t kind;
-  cuda_select_t select_mask = CUDA_SELECT_ALL;
+  uint32_t select_mask = CUDA_SELECT_ALL;
 
   for (kind = 0; kind < CK_MAX; ++kind)
     coords[kind] = CUDA_INVALID_COORDS;
@@ -904,13 +905,13 @@ cuda_coords_update_current (bool breakpoint_hit, bool exception_hit)
 
   /* first try the previous set of current coordinates (fast). Note,
      current_coords may be invalid at this point. */
-  cuda_coords_find_valid_exact (current_coords, &result, select_mask);
+  cuda_coords_find_valid_exact (current_coords, &result, (cuda_select_t) select_mask);
 
   /* if that does not work, brute-force it */
   if (!result.valid)
     {
       cuda_trace ("could not find exact valid coordinates, trying brute force");
-      cuda_coords_find_valid (current_coords, coords, select_mask);
+      cuda_coords_find_valid (current_coords, coords, (cuda_select_t) select_mask);
 
       if (cuda_options_software_preemption () && coords[CK_EXACT_LOGICAL].valid)
         kind = CK_EXACT_LOGICAL;
@@ -951,7 +952,7 @@ cuda_print_message_focus (bool switching)
 
   gdb_assert (cuda_focus_is_device ());
 
-  string = xmalloc (size);
+  string = (char *) xmalloc (size);
   cuda_coords_get_current (&current);
   cuda_coords_to_fancy_string (&current, string, size);
 
@@ -1022,9 +1023,9 @@ cuda_coords_flat_physical (cuda_coords_t *c)
     // Force devices to be far enough from each other
     d += c->dev * 0xffffffffULL;
   if (!CUDA_COORD_IS_SPECIAL (c->sm))
-    d += c->sm * CUDBG_MAX_WARPS * CUDBG_MAX_SMS;
+    d += c->sm * CUDBG_MAX_SMS * CUDBG_MAX_WARPS;
   if (!CUDA_COORD_IS_SPECIAL (c->wp))
-    d += c->wp * CUDBG_MAX_SMS;
+    d += c->wp * CUDBG_MAX_WARPS;
   if (!CUDA_COORD_IS_SPECIAL (c->ln))
     d += c->ln;
 

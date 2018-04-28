@@ -3,6 +3,12 @@ sinclude(../../bfd/bfd.m4)
 
 sinclude(../acx_configure_dir.m4)
 
+# This gets GDB_AC_LIBMCHECK.
+sinclude(../libmcheck.m4)
+
+# This gets AM_GDB_WARNINGS.
+sinclude(../warning.m4)
+
 dnl This gets autoconf bugfixes
 sinclude(../../config/override.m4)
 
@@ -11,6 +17,20 @@ sinclude(../../config/acx.m4)
 
 m4_include(../../config/depstand.m4)
 m4_include(../../config/lead-dot.m4)
+
+dnl codeset.m4 is needed for common.m4, but not for
+dnl anything else in gdbserver.
+m4_include(../../config/codeset.m4)
+m4_include(../common/common.m4)
+
+dnl For libiberty_INIT.
+m4_include(../libiberty.m4)
+
+dnl For --enable-build-with-cxx and COMPILER.
+m4_include(../build-with-cxx.m4)
+
+dnl For GDB_AC_PTRACE.
+m4_include(../ptrace.m4)
 
 dnl Check for existence of a type $1 in libthread_db.h
 dnl Based on BFD_HAVE_SYS_PROCFS_TYPE in bfd/bfd.m4.

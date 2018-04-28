@@ -1,4 +1,4 @@
-/* Copyright (C) 2001-2002, 2004-2012 Free Software Foundation, Inc.
+/* Copyright (C) 2001-2002, 2004-2015 Free Software Foundation, Inc.
    Written by Paul Eggert, Bruno Haible, Sam Steingold, Peter Burwood.
    This file is part of gnulib.
 
@@ -16,7 +16,7 @@
    along with this program; if not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -56,8 +56,7 @@
    other system header files; just include the system's <stdint.h>.
    Ideally we should test __BIONIC__ here, but it is only defined after
    <sys/cdefs.h> has been included; hence test __ANDROID__ instead.  */
-#if defined __ANDROID__ \
-    && defined _SYS_TYPES_H_ && !defined _SSIZE_T_DEFINED_
+#if defined __ANDROID__ && defined _GL_INCLUDING_SYS_TYPES_H
 # @INCLUDE_NEXT@ @NEXT_STDINT_H@
 #else
 

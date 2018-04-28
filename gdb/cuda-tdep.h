@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -20,7 +20,6 @@
 
 #include "defs.h"
 #include "bfd.h"
-#include "elf-bfd.h"
 #include "cudadebugger.h"
 #include "gdbarch.h"
 #include "dis-asm.h"
@@ -30,7 +29,6 @@
 #include "cuda-defs.h"
 #include "cuda-kernel.h"
 #include "cuda-modules.h"
-#include "progspace.h"
 
 extern bool cuda_elf_path; /* REMOVE THIS ONCE CUDA ELF PATH IS COMPLETE! */
 
@@ -60,12 +58,6 @@ extern bool cuda_producer_is_open64;
 
 /*------------------------------ Type Declarations -----------------------------*/
 
-typedef enum {
-  cuda_bp_none = 0,
-  cuda_bp_runtime_api, /* Transition from host stub code to device code */
-  cuda_bp_driver_api,  /* Always dynamically resolved (initially pending) */
-} cuda_bptype_t;
-
 #define CUDA_MAX_NUM_RESIDENT_BLOCKS_PER_GRID 256
 #define CUDA_MAX_NUM_RESIDENT_THREADS_PER_BLOCK 1024
 #define CUDA_MAX_NUM_RESIDENT_THREADS (CUDA_MAX_NUM_RESIDENT_BLOCKS_PER_GRID * CUDA_MAX_NUM_RESIDENT_THREADS_PER_BLOCK)
@@ -88,7 +80,7 @@ DEF_VEC_O(kernel_entry_point_t);
 extern VEC(kernel_entry_point_t) *cuda_kernel_entry_points;
 extern void cuda_set_current_elf_image (elf_image_t);
 
-cuda_coords_t cuda_coords_current;
+extern cuda_coords_t cuda_coords_current;
 
 /* Offsets of the CUDA built-in variables */
 #define CUDBG_BUILTINS_BASE                        ((CORE_ADDR) 0)
@@ -155,9 +147,13 @@ uint32_t cuda_sstep_dev_id (void);
 uint64_t cuda_sstep_grid_id (void);
 uint32_t cuda_sstep_wp_id (void);
 uint32_t cuda_sstep_sm_id (void);
-uint64_t cuda_sstep_wp_mask (void);
+uint64_t cuda_sstep_get_last_pc (void);
+bool     cuda_sstep_lane_stepped (uint32_t ln_id);
+uint32_t cuda_sstep_get_lowest_lane_stepped (void);
+cuda_api_warpmask* cuda_sstep_wp_mask (void);
 ptid_t   cuda_sstep_ptid (void);
 void     cuda_sstep_set_ptid (ptid_t ptid);
+void     cuda_sstep_set_nsteps (int nsteps);
 void     cuda_sstep_initialize (bool stepping);
 bool     cuda_sstep_execute (ptid_t ptid);
 void     cuda_sstep_reset (bool sstep);
@@ -166,6 +162,7 @@ bool     cuda_sstep_kernel_has_terminated (void);
 /*Registers */
 bool          cuda_get_dwarf_register_string (reg_t reg, char *deviceReg, size_t sz);
 int           cuda_reg_to_regnum_ex (struct gdbarch *gdbarch, reg_t reg, bool *extrapolated);
+int           cuda_reg_to_regnum_extrapolated (struct gdbarch *gdbarch, reg_t reg);
 
 /*Storage addresses and names */
 void        cuda_print_lmem_address_type (void);
@@ -203,6 +200,7 @@ int cuda_breakpoint_address_match (struct gdbarch *gdbarch,
                                    struct address_space *aspace2, CORE_ADDR addr2);
 void cuda_adjust_host_pc (ptid_t r);
 void cuda_adjust_device_code_address (CORE_ADDR original_addr, CORE_ADDR *adjusted_addr);
+uint64_t cuda_find_next_control_flow_instruction (uint64_t pc, uint64_t range_end_pc, bool skip_subroutines, uint32_t *inst_size);
 
 /* Linux vs. Mac OS X */
 bool cuda_platform_supports_tid (void);

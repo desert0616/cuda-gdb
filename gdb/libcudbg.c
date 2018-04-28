@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -26,7 +26,7 @@
 #include <ansidecl.h>
 #else
 #include <defs.h>
-#include <gdb_assert.h>
+#include <common-defs.h>
 #include <cuda-options.h>
 #include <cuda-tdep.h>
 #endif
@@ -220,7 +220,8 @@ cudbgReadBrokenWarps (uint32_t dev, uint32_t sm, uint64_t *brokenWarpsMask)
     CUDBG_IPC_REQUEST((void *)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
-    *brokenWarpsMask = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
+    memcpy(brokenWarpsMask, ipc_buf, sizeof(uint64_t));
+    ipc_buf += sizeof(uint64_t);
 
     CUDBG_IPC_PROFILE_END(CUDBGAPIREQ_readBrokenWarps, "readBrokenWarps");
 
@@ -242,7 +243,8 @@ cudbgReadValidWarps (uint32_t dev, uint32_t sm, uint64_t *validWarpsMask)
     CUDBG_IPC_REQUEST((void *)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
-    *validWarpsMask = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
+    memcpy(validWarpsMask, ipc_buf, sizeof(uint64_t));
+    ipc_buf += sizeof(uint64_t);
 
     CUDBG_IPC_PROFILE_END(CUDBGAPIREQ_readValidWarps, "readValidWarps");
 
@@ -1303,14 +1305,14 @@ cudbgGetHostAddrFromDeviceAddr (uint32_t dev, uint64_t device_addr, uint64_t *ho
 }
 
 static CUDBGResult
-cudbgSingleStepWarp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warpMask)
+cudbgSingleStepWarp41 (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warpMask)
 {
     char *ipc_buf;
     CUDBGResult result;
 
     CUDBG_IPC_PROFILE_START();
 
-    CUDBG_IPC_BEGIN(CUDBGAPIREQ_singleStepWarp);
+    CUDBG_IPC_BEGIN(CUDBGAPIREQ_singleStepWarp41);
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
@@ -1320,7 +1322,7 @@ cudbgSingleStepWarp (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warpMask)
     ipc_buf +=sizeof(CUDBGResult);
     *warpMask = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
 
-    CUDBG_IPC_PROFILE_END(CUDBGAPIREQ_singleStepWarp, "singleStepWarp");
+    CUDBG_IPC_PROFILE_END(CUDBGAPIREQ_singleStepWarp41, "singleStepWarp41");
 
     return result;
 }
@@ -1604,7 +1606,13 @@ cudbgGetDevicePCIBusInfo (uint32_t devId, uint32_t *pciBusId, uint32_t *pciDevId
 }
 
 static CUDBGResult
-cudbgReadDeviceExceptionState (uint32_t devId, uint64_t *exceptionSMMask)
+cudbgReadDeviceExceptionState80 (uint32_t devId, uint64_t *exceptionSMMask)
+{
+    return CUDBG_ERROR_UNKNOWN;
+}
+
+static CUDBGResult
+cudbgReadDeviceExceptionState (uint32_t devId, uint64_t *mask, uint32_t sz)
 {
     char *ipc_buf;
     CUDBGResult result;
@@ -1613,11 +1621,12 @@ cudbgReadDeviceExceptionState (uint32_t devId, uint64_t *exceptionSMMask)
 
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_readDeviceExceptionState);
     CUDBG_IPC_APPEND(&devId,sizeof(devId));
+    CUDBG_IPC_APPEND(&sz,sizeof(sz));
 
     CUDBG_IPC_REQUEST((void *)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
-    *exceptionSMMask = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
+    memcpy(mask, ipc_buf, sz*sizeof(*mask)); ipc_buf+=sz*sizeof(*mask);
 
     CUDBG_IPC_PROFILE_END(CUDBGAPIREQ_readDeviceExceptionState, "readDeviceExceptionState");
 
@@ -2089,6 +2098,30 @@ cudbgGetDeviceName (uint32_t dev, char *buf, uint32_t buf_size)
     return result;
 }
 
+static CUDBGResult
+cudbgSingleStepWarp (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t nsteps, uint64_t *warpMask)
+{
+    char *ipc_buf;
+    CUDBGResult result;
+
+    CUDBG_IPC_PROFILE_START();
+
+    CUDBG_IPC_BEGIN(CUDBGAPIREQ_singleStepWarp);
+    CUDBG_IPC_APPEND(&dev,sizeof(dev));
+    CUDBG_IPC_APPEND(&sm,sizeof(sm));
+    CUDBG_IPC_APPEND(&wp,sizeof(wp));
+    CUDBG_IPC_APPEND(&nsteps,sizeof(nsteps));
+
+    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    result = *(CUDBGResult *)ipc_buf;
+    ipc_buf +=sizeof(CUDBGResult);
+    *warpMask = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
+
+    CUDBG_IPC_PROFILE_END(CUDBGAPIREQ_singleStepWarp, "singleStepWarp");
+
+    return result;
+}
+
 static const struct CUDBGAPI_st cudbgCurrentApi={
     /* Initialization */
     cudbgInitialize,
@@ -2189,7 +2222,7 @@ static const struct CUDBGAPI_st cudbgCurrentApi={
 
     /* 4.1 Extensions */
     cudbgGetHostAddrFromDeviceAddr,
-    cudbgSingleStepWarp,
+    cudbgSingleStepWarp41,
     cudbgSetNotifyNewEventCallback,
     cudbgReadSyscallCallDepth,
 
@@ -2214,7 +2247,7 @@ static const struct CUDBGAPI_st cudbgCurrentApi={
     cudbgGetGridStatus,
     cudbgSetKernelLaunchNotificationMode,
     cudbgGetDevicePCIBusInfo,
-    cudbgReadDeviceExceptionState,
+    cudbgReadDeviceExceptionState80,
 
     /* 6.0 Extensions */
     cudbgGetAdjustedCodeAddress,
@@ -2240,6 +2273,10 @@ static const struct CUDBGAPI_st cudbgCurrentApi={
     cudbgWriteCCRegister,
 
     cudbgGetDeviceName,
+    cudbgSingleStepWarp,
+
+    /* 9.0 Extensions */
+    cudbgReadDeviceExceptionState,
 };
 
 CUDBGResult

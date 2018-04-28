@@ -1,6 +1,6 @@
 /* GDB-specific functions for operating on agent expressions.
 
-   Copyright (C) 1998-2013 Free Software Foundation, Inc.
+   Copyright (C) 1998-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -30,11 +30,9 @@
 #include "target.h"
 #include "ax.h"
 #include "ax-gdb.h"
-#include "gdb_string.h"
 #include "block.h"
 #include "regcache.h"
 #include "user-regs.h"
-#include "language.h"
 #include "dictionary.h"
 #include "breakpoint.h"
 #include "tracepoint.h"
@@ -42,6 +40,8 @@
 #include "arch-utils.h"
 #include "cli/cli-utils.h"
 #include "linespec.h"
+#include "location.h"
+#include "objfiles.h"
 
 #include "valprint.h"
 #include "c-lang.h"
@@ -312,36 +312,6 @@ maybe_const_expr (union exp_element **pc)
    sizes), and this is simpler.)  */
 
 
-/* Generating bytecode from GDB expressions: the `trace' kludge  */
-
-/* The compiler in this file is a general-purpose mechanism for
-   translating GDB expressions into bytecode.  One ought to be able to
-   find a million and one uses for it.
-
-   However, at the moment it is HOPELESSLY BRAIN-DAMAGED for the sake
-   of expediency.  Let he who is without sin cast the first stone.
-
-   For the data tracing facility, we need to insert `trace' bytecodes
-   before each data fetch; this records all the memory that the
-   expression touches in the course of evaluation, so that memory will
-   be available when the user later tries to evaluate the expression
-   in GDB.
-
-   This should be done (I think) in a post-processing pass, that walks
-   an arbitrary agent expression and inserts `trace' operations at the
-   appropriate points.  But it's much faster to just hack them
-   directly into the code.  And since we're in a crunch, that's what
-   I've done.
-
-   Setting the flag trace_kludge to non-zero enables the code that
-   emits the trace bytecodes at the appropriate points.  */
-int trace_kludge;
-
-/* Inspired by trace_kludge, this indicates that pointers to chars
-   should get an added tracenz bytecode to record nonzero bytes, up to
-   a length that is the value of trace_string_kludge.  */
-int trace_string_kludge;
-
 /* Scan for all static fields in the given class, including any base
    classes, and generate tracing bytecodes for each.  */
 
@@ -353,7 +323,7 @@ gen_trace_static_fields (struct gdbarch *gdbarch,
   int i, nbases = TYPE_N_BASECLASSES (type);
   struct axs_value value;
 
-  CHECK_TYPEDEF (type);
+  type = check_typedef (type);
 
   for (i = TYPE_NFIELDS (type) - 1; i >= nbases; i--)
     {
@@ -401,19 +371,19 @@ gen_traced_pop (struct gdbarch *gdbarch,
 		struct agent_expr *ax, struct axs_value *value)
 {
   int string_trace = 0;
-  if (trace_string_kludge
+  if (ax->trace_string
       && TYPE_CODE (value->type) == TYPE_CODE_PTR
       && c_textual_element_type (check_typedef (TYPE_TARGET_TYPE (value->type)),
 				 's'))
     string_trace = 1;
 
-  if (trace_kludge)
+  if (ax->tracing)
     switch (value->kind)
       {
       case axs_rvalue:
 	if (string_trace)
 	  {
-	    ax_const_l (ax, trace_string_kludge);
+	    ax_const_l (ax, ax->trace_string);
 	    ax_simple (ax, aop_tracenz);
 	  }
 	else
@@ -424,25 +394,24 @@ gen_traced_pop (struct gdbarch *gdbarch,
 
       case axs_lvalue_memory:
 	{
-	  if (string_trace)
-	    ax_simple (ax, aop_dup);
-
 	  /* Initialize the TYPE_LENGTH if it is a typedef.  */
 	  check_typedef (value->type);
 
-	  /* There's no point in trying to use a trace_quick bytecode
-	     here, since "trace_quick SIZE pop" is three bytes, whereas
-	     "const8 SIZE trace" is also three bytes, does the same
-	     thing, and the simplest code which generates that will also
-	     work correctly for objects with large sizes.  */
-	  ax_const_l (ax, TYPE_LENGTH (value->type));
-	  ax_simple (ax, aop_trace);
-
 	  if (string_trace)
 	    {
-	      ax_simple (ax, aop_ref32);
-	      ax_const_l (ax, trace_string_kludge);
+	      gen_fetch (ax, value->type);
+	      ax_const_l (ax, ax->trace_string);
 	      ax_simple (ax, aop_tracenz);
+	    }
+	  else
+	    {
+	      /* There's no point in trying to use a trace_quick bytecode
+	         here, since "trace_quick SIZE pop" is three bytes, whereas
+	         "const8 SIZE trace" is also three bytes, does the same
+	         thing, and the simplest code which generates that will also
+	         work correctly for objects with large sizes.  */
+	      ax_const_l (ax, TYPE_LENGTH (value->type));
+	      ax_simple (ax, aop_trace);
 	    }
 	}
 	break;
@@ -459,7 +428,7 @@ gen_traced_pop (struct gdbarch *gdbarch,
 	if (string_trace)
 	  {
 	    ax_reg (ax, value->u.reg);
-	    ax_const_l (ax, trace_string_kludge);
+	    ax_const_l (ax, ax->trace_string);
 	    ax_simple (ax, aop_tracenz);
 	  }
 	break;
@@ -469,7 +438,7 @@ gen_traced_pop (struct gdbarch *gdbarch,
     ax_simple (ax, aop_pop);
 
   /* To trace C++ classes with static fields stored elsewhere.  */
-  if (trace_kludge
+  if (ax->tracing
       && (TYPE_CODE (value->type) == TYPE_CODE_STRUCT
 	  || TYPE_CODE (value->type) == TYPE_CODE_UNION))
     gen_trace_static_fields (gdbarch, ax, value->type);
@@ -509,7 +478,7 @@ gen_extend (struct agent_expr *ax, struct type *type)
 static void
 gen_fetch (struct agent_expr *ax, struct type *type)
 {
-  if (trace_kludge)
+  if (ax->tracing)
     {
       /* Record the area of memory we're about to fetch.  */
       ax_trace_quick (ax, TYPE_LENGTH (type));
@@ -662,6 +631,12 @@ gen_var_ref (struct gdbarch *gdbarch, struct agent_expr *ax,
   value->type = check_typedef (SYMBOL_TYPE (var));
   value->optimized_out = 0;
 
+  if (SYMBOL_COMPUTED_OPS (var) != NULL)
+    {
+      SYMBOL_COMPUTED_OPS (var)->tracepoint_var_ref (var, gdbarch, ax, value);
+      return;
+    }
+
   /* I'm imitating the code in read_var_value.  */
   switch (SYMBOL_CLASS (var))
     {
@@ -737,26 +712,20 @@ gen_var_ref (struct gdbarch *gdbarch, struct agent_expr *ax,
 
     case LOC_UNRESOLVED:
       {
-	struct minimal_symbol *msym
+	struct bound_minimal_symbol msym
 	  = lookup_minimal_symbol (SYMBOL_LINKAGE_NAME (var), NULL, NULL);
 
-	if (!msym)
+	if (!msym.minsym)
 	  error (_("Couldn't resolve symbol `%s'."), SYMBOL_PRINT_NAME (var));
 
 	/* Push the address of the variable.  */
-	ax_const_l (ax, SYMBOL_VALUE_ADDRESS (msym));
+	ax_const_l (ax, BMSYMBOL_VALUE_ADDRESS (msym));
 	value->kind = axs_lvalue_memory;
       }
       break;
 
     case LOC_COMPUTED:
-      /* FIXME: cagney/2004-01-26: It should be possible to
-	 unconditionally call the SYMBOL_COMPUTED_OPS method when available.
-	 Unfortunately DWARF 2 stores the frame-base (instead of the
-	 function) location in a function's symbol.  Oops!  For the
-	 moment enable this when/where applicable.  */
-      SYMBOL_COMPUTED_OPS (var)->tracepoint_var_ref (var, gdbarch, ax, value);
-      break;
+      gdb_assert_not_reached (_("LOC_COMPUTED variable missing a method"));
 
     case LOC_OPTIMIZED_OUT:
       /* Flag this, but don't say anything; leave it up to callers to
@@ -916,7 +885,7 @@ gen_conversion (struct agent_expr *ax, struct type *from, struct type *to)
   /* If we're converting to a narrower type, then we need to clear out
      the upper bits.  */
   if (TYPE_LENGTH (to) < TYPE_LENGTH (from))
-    gen_extend (ax, from);
+    gen_extend (ax, to);
 
   /* If the two values have equal width, but different signednesses,
      then we need to extend.  */
@@ -1361,7 +1330,7 @@ gen_bitfield_ref (struct expression *exp, struct agent_expr *ax,
 	  /* Add the offset.  */
 	  gen_offset (ax, offset / TARGET_CHAR_BIT);
 
-	  if (trace_kludge)
+	  if (ax->tracing)
 	    {
 	      /* Record the area of memory we're about to fetch.  */
 	      ax_trace_quick (ax, op_size / TARGET_CHAR_BIT);
@@ -1469,7 +1438,7 @@ gen_struct_ref_recursive (struct expression *exp, struct agent_expr *ax,
   int i, rslt;
   int nbases = TYPE_N_BASECLASSES (type);
 
-  CHECK_TYPEDEF (type);
+  type = check_typedef (type);
 
   for (i = TYPE_NFIELDS (type) - 1; i >= nbases; i--)
     {
@@ -1587,7 +1556,7 @@ gen_static_field (struct gdbarch *gdbarch,
   else
     {
       const char *phys_name = TYPE_FIELD_STATIC_PHYSNAME (type, fieldno);
-      struct symbol *sym = lookup_symbol (phys_name, 0, VAR_DOMAIN, 0);
+      struct symbol *sym = lookup_symbol (phys_name, 0, VAR_DOMAIN, 0).symbol;
 
       if (sym)
 	{
@@ -1678,20 +1647,20 @@ gen_maybe_namespace_elt (struct expression *exp,
 			 const struct type *curtype, char *name)
 {
   const char *namespace_name = TYPE_TAG_NAME (curtype);
-  struct symbol *sym;
+  struct block_symbol sym;
 
   sym = cp_lookup_symbol_namespace (namespace_name, name,
 				    block_for_pc (ax->scope),
 				    VAR_DOMAIN);
 
-  if (sym == NULL)
+  if (sym.symbol == NULL)
     return 0;
 
-  gen_var_ref (exp->gdbarch, ax, value, sym);
+  gen_var_ref (exp->gdbarch, ax, value, sym.symbol);
 
   if (value->optimized_out)
     error (_("`%s' has been optimized out, cannot use"),
-	   SYMBOL_PRINT_NAME (sym));
+	   SYMBOL_PRINT_NAME (sym.symbol));
 
   return 1;
 }
@@ -1930,7 +1899,7 @@ gen_expr (struct expression *exp, union exp_element **pc,
 	  if (tsv)
 	    {
 	      ax_tsv (ax, aop_setv, tsv->number);
-	      if (trace_kludge)
+	      if (ax->tracing)
 		ax_tsv (ax, aop_tracev, tsv->number);
 	    }
 	  else
@@ -1957,7 +1926,7 @@ gen_expr (struct expression *exp, union exp_element **pc,
 	    {
 	      /* The tsv will be the left half of the binary operation.  */
 	      ax_tsv (ax, aop_getv, tsv->number);
-	      if (trace_kludge)
+	      if (ax->tracing)
 		ax_tsv (ax, aop_tracev, tsv->number);
 	      /* Trace state variables are always 64-bit integers.  */
 	      value1.kind = axs_rvalue;
@@ -1966,7 +1935,7 @@ gen_expr (struct expression *exp, union exp_element **pc,
 	      gen_expr_binop_rest (exp, op2, pc, ax, value, &value1, &value2);
 	      /* We have a result of the binary op, set the tsv.  */
 	      ax_tsv (ax, aop_setv, tsv->number);
-	      if (trace_kludge)
+	      if (ax->tracing)
 		ax_tsv (ax, aop_tracev, tsv->number);
 	    }
 	  else
@@ -2047,7 +2016,7 @@ gen_expr (struct expression *exp, union exp_element **pc,
 	if (tsv)
 	  {
 	    ax_tsv (ax, aop_getv, tsv->number);
-	    if (trace_kludge)
+	    if (ax->tracing)
 	      ax_tsv (ax, aop_tracev, tsv->number);
 	    /* Trace state variables are always 64-bit integers.  */
 	    value->kind = axs_rvalue;
@@ -2218,14 +2187,14 @@ gen_expr (struct expression *exp, union exp_element **pc,
     case OP_THIS:
       {
 	struct symbol *sym, *func;
-	struct block *b;
+	const struct block *b;
 	const struct language_defn *lang;
 
 	b = block_for_pc (ax->scope);
 	func = block_linkage_function (b);
 	lang = language_def (SYMBOL_LANGUAGE (func));
 
-	sym = lookup_language_this (lang, b);
+	sym = lookup_language_this (lang, b).symbol;
 	if (!sym)
 	  error (_("no `%s' found"), lang->la_name_of_this);
 
@@ -2424,7 +2393,7 @@ gen_expr_binop_rest (struct expression *exp,
 
 struct agent_expr *
 gen_trace_for_var (CORE_ADDR scope, struct gdbarch *gdbarch,
-		   struct symbol *var)
+		   struct symbol *var, int trace_string)
 {
   struct cleanup *old_chain = 0;
   struct agent_expr *ax = new_agent_expr (gdbarch, scope);
@@ -2432,7 +2401,8 @@ gen_trace_for_var (CORE_ADDR scope, struct gdbarch *gdbarch,
 
   old_chain = make_cleanup_free_agent_expr (ax);
 
-  trace_kludge = 1;
+  ax->tracing = 1;
+  ax->trace_string = trace_string;
   gen_var_ref (gdbarch, ax, &value, var);
 
   /* If there is no actual variable to trace, flag it by returning
@@ -2464,7 +2434,8 @@ gen_trace_for_var (CORE_ADDR scope, struct gdbarch *gdbarch,
    caller can then use the ax_reqs function to discover which
    registers it relies upon.  */
 struct agent_expr *
-gen_trace_for_expr (CORE_ADDR scope, struct expression *expr)
+gen_trace_for_expr (CORE_ADDR scope, struct expression *expr,
+		    int trace_string)
 {
   struct cleanup *old_chain = 0;
   struct agent_expr *ax = new_agent_expr (expr->gdbarch, scope);
@@ -2474,7 +2445,8 @@ gen_trace_for_expr (CORE_ADDR scope, struct expression *expr)
   old_chain = make_cleanup_free_agent_expr (ax);
 
   pc = expr->elts;
-  trace_kludge = 1;
+  ax->tracing = 1;
+  ax->trace_string = trace_string;
   value.optimized_out = 0;
   gen_expr (expr, &pc, ax, &value);
 
@@ -2509,7 +2481,7 @@ gen_eval_for_expr (CORE_ADDR scope, struct expression *expr)
   old_chain = make_cleanup_free_agent_expr (ax);
 
   pc = expr->elts;
-  trace_kludge = 0;
+  ax->tracing = 0;
   value.optimized_out = 0;
   gen_expr (expr, &pc, ax, &value);
 
@@ -2526,7 +2498,8 @@ gen_eval_for_expr (CORE_ADDR scope, struct expression *expr)
 }
 
 struct agent_expr *
-gen_trace_for_return_address (CORE_ADDR scope, struct gdbarch *gdbarch)
+gen_trace_for_return_address (CORE_ADDR scope, struct gdbarch *gdbarch,
+			      int trace_string)
 {
   struct cleanup *old_chain = 0;
   struct agent_expr *ax = new_agent_expr (gdbarch, scope);
@@ -2534,7 +2507,8 @@ gen_trace_for_return_address (CORE_ADDR scope, struct gdbarch *gdbarch)
 
   old_chain = make_cleanup_free_agent_expr (ax);
 
-  trace_kludge = 1;
+  ax->tracing = 1;
+  ax->trace_string = trace_string;
 
   gdbarch_gen_return_address (gdbarch, ax, &value, scope);
 
@@ -2570,13 +2544,14 @@ gen_printf (CORE_ADDR scope, struct gdbarch *gdbarch,
 
   old_chain = make_cleanup_free_agent_expr (ax);
 
+  /* We're computing values, not doing side effects.  */
+  ax->tracing = 0;
+
   /* Evaluate and push the args on the stack in reverse order,
      for simplicity of collecting them on the target side.  */
   for (tem = nargs - 1; tem >= 0; --tem)
     {
       pc = exprs[tem]->elts;
-      /* We're computing values, not doing side effects.  */
-      trace_kludge = 0;
       value.optimized_out = 0;
       gen_expr (exprs[tem], &pc, ax, &value);
       require_rvalue (ax, &value);
@@ -2588,7 +2563,7 @@ gen_printf (CORE_ADDR scope, struct gdbarch *gdbarch,
 
   /* Issue the printf bytecode proper.  */
   ax_simple (ax, aop_printf);
-  ax_simple (ax, nargs);
+  ax_raw_byte (ax, nargs);
   ax_string (ax, format, fmtlen);
 
   /* And terminate.  */
@@ -2603,24 +2578,25 @@ gen_printf (CORE_ADDR scope, struct gdbarch *gdbarch,
 }
 
 static void
-agent_eval_command_one (char *exp, int eval, CORE_ADDR pc)
+agent_eval_command_one (const char *exp, int eval, CORE_ADDR pc)
 {
   struct cleanup *old_chain = 0;
   struct expression *expr;
   struct agent_expr *agent;
   const char *arg;
+  int trace_string = 0;
 
   if (!eval)
     {
-      trace_string_kludge = 0;
       if (*exp == '/')
-        exp = decode_agent_options (exp);
+        exp = decode_agent_options (exp, &trace_string);
     }
 
   arg = exp;
   if (!eval && strcmp (arg, "$_ret") == 0)
     {
-      agent = gen_trace_for_return_address (pc, get_current_arch ());
+      agent = gen_trace_for_return_address (pc, get_current_arch (),
+					    trace_string);
       old_chain = make_cleanup_free_agent_expr (agent);
     }
   else
@@ -2628,9 +2604,12 @@ agent_eval_command_one (char *exp, int eval, CORE_ADDR pc)
       expr = parse_exp_1 (&arg, pc, block_for_pc (pc), 0);
       old_chain = make_cleanup (free_current_contents, &expr);
       if (eval)
-	agent = gen_eval_for_expr (pc, expr);
+	{
+	  gdb_assert (trace_string == 0);
+	  agent = gen_eval_for_expr (pc, expr);
+	}
       else
-	agent = gen_trace_for_expr (pc, expr);
+	agent = gen_trace_for_expr (pc, expr, trace_string);
       make_cleanup_free_agent_expr (agent);
     }
 
@@ -2663,13 +2642,16 @@ agent_command_1 (char *exp, int eval)
       int ix;
       struct linespec_sals *iter;
       struct cleanup *old_chain;
+      struct event_location *location;
 
       exp = skip_spaces (exp);
       init_linespec_result (&canonical);
-      decode_line_full (&exp, DECODE_LINE_FUNFIRSTLINE,
+      location = new_linespec_location (&exp);
+      old_chain = make_cleanup_delete_event_location (location);
+      decode_line_full (location, DECODE_LINE_FUNFIRSTLINE, NULL,
 			(struct symtab *) NULL, 0, &canonical,
 			NULL, NULL);
-      old_chain = make_cleanup_destroy_linespec_result (&canonical);
+      make_cleanup_destroy_linespec_result (&canonical);
       exp = skip_spaces (exp);
       if (exp[0] == ',')
         {

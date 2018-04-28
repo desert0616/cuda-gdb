@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2015-2016 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -42,7 +42,7 @@
  * cv_get_last_driver_api_error_func_name ignore any such errors while updating variables.
  * */
 static uint64_t
-cv_get_last_driver_api_error_code ()
+cv_get_last_driver_api_error_code (void)
 {
   CORE_ADDR error_code_addr;
   uint64_t res;
@@ -53,7 +53,7 @@ cv_get_last_driver_api_error_code ()
       return 0;
     }
 
-  target_read_memory (error_code_addr, (char *)&res, sizeof (uint64_t));
+  target_read_memory (error_code_addr, (gdb_byte *)&res, sizeof (uint64_t));
   return res;
 }
 
@@ -71,7 +71,7 @@ cv_get_last_driver_api_error_func_name (CORE_ADDR *name)
       return;
     }
 
-  target_read_memory (error_func_name_core_addr, (char *)&error_func_name_addr, sizeof (uint64_t));
+  target_read_memory (error_func_name_core_addr, (gdb_byte *)&error_func_name_addr, sizeof (uint64_t));
   *name = (CORE_ADDR)error_func_name_addr;
 }
 
@@ -84,10 +84,10 @@ cuda_convenience_convert_to_kernel_id_array_value (uint64_t *kernels,
   struct value **kernel_id_values;
   uint32_t i;
 
-  kernel_id_values = xmalloc (num_kernels * sizeof(*kernel_id_values));
+  kernel_id_values = (struct value **) xmalloc (num_kernels * sizeof(*kernel_id_values));
 
   for (i = 0; i < num_kernels; i++)
-    kernel_id_values[i] = value_from_longest (type_uint32, (LONGEST) kernels[i]);
+    kernel_id_values[i] = (struct value *) value_from_longest (type_uint32, (LONGEST) kernels[i]);
 
   kernel_id_array_value = value_array (1, num_kernels, kernel_id_values);
 
@@ -109,19 +109,19 @@ cuda_convenience_convert_to_block_idx_array_value (CuDim3 **blocks,
   CuDim3 blockIdx;
   uint32_t i, j;
 
-  kernel_block_idx_array_value = xmalloc (num_kernels * sizeof(*kernel_block_idx_array_value));
+  kernel_block_idx_array_value = (struct value **) xmalloc (num_kernels * sizeof(*kernel_block_idx_array_value));
 
   for (i = 0; i < num_kernels; i++)
     {
-      block_idx_values = xmalloc (max_blocks * sizeof (*block_idx_values));
+      block_idx_values = (struct value **) xmalloc (max_blocks * sizeof (*block_idx_values));
 
       for (j = 0; j < max_blocks; j++)
       {
         blockIdx = blocks[i][j];
-        block_idx_value[0] = value_from_longest (type_uint32, (LONGEST) blockIdx.x);
-        block_idx_value[1] = value_from_longest (type_uint32, (LONGEST) blockIdx.y);
-        block_idx_value[2] = value_from_longest (type_uint32, (LONGEST) blockIdx.z);
-        block_idx_values[j] = value_array (1, 3, block_idx_value);
+        block_idx_value[0] = (struct value *) value_from_longest (type_uint32, (LONGEST) blockIdx.x);
+        block_idx_value[1] = (struct value *) value_from_longest (type_uint32, (LONGEST) blockIdx.y);
+        block_idx_value[2] = (struct value *) value_from_longest (type_uint32, (LONGEST) blockIdx.z);
+        block_idx_values[j] = (struct value *) value_array (1, 3, block_idx_value);
       }
 
       kernel_block_idx_array_value[i] = value_array (1, max_blocks, block_idx_values);
@@ -183,8 +183,8 @@ cuda_convenience_get_present_blocks_kernels(struct value **kernel_id_array_value
     }
 
   /* fill up kernels and blocks */
-  kernels = xmalloc (num_kernels * sizeof(*kernels));
-  blocks  = xmalloc (num_kernels * sizeof(*blocks));
+  kernels = (uint64_t *) xmalloc (num_kernels * sizeof(*kernels));
+  blocks  = (CuDim3 **) xmalloc (num_kernels * sizeof(*blocks));
 
   i = 0;
   filter = CUDA_WILDCARD_COORDS;
@@ -195,7 +195,7 @@ cuda_convenience_get_present_blocks_kernels(struct value **kernel_id_array_value
       kernel_id = c.kernelId;
 
       kernels[i] = kernel_id;
-      blocks[i]  = xmalloc (max_blocks * sizeof(**blocks)); // max_blocks, yes.
+      blocks[i]  = (CuDim3 *) xmalloc (max_blocks * sizeof(**blocks)); // max_blocks, yes.
       for (j = 0; j < max_blocks; ++j)
         blocks[i][j] = invalid_blockIdx;
 
@@ -205,7 +205,7 @@ cuda_convenience_get_present_blocks_kernels(struct value **kernel_id_array_value
       block_iter = cuda_iterator_create (CUDA_ITERATOR_TYPE_BLOCKS, &filter, CUDA_SELECT_VALID);
       for (cuda_iterator_start (block_iter); !cuda_iterator_end (block_iter); cuda_iterator_next (block_iter))
         {
-          c  = cuda_iterator_get_current (kernel_iter);
+          c  = cuda_iterator_get_current (block_iter);
           blocks[i][j] = c.blockIdx;
           ++j;
         }
@@ -254,10 +254,8 @@ cv_update_hw_vars(void)
 {
   cuda_coords_t current;
   bool valid;
-  uint32_t num_dev;
 
   valid = !cuda_coords_get_current (&current);
-  num_dev   = cuda_system_get_num_devices ();
 
   cv_set_uint32_var ("cuda_latest_launched_kernel_id", cuda_latest_launched_kernel_id ());
 

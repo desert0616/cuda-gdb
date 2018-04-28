@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -20,7 +20,7 @@
 
 #include "defs.h"
 #include "frame.h"
-#include "gdb_assert.h"
+#include "common-defs.h"
 #include "exceptions.h"
 
 #include "cuda-api.h"
@@ -58,11 +58,11 @@ inst_create (uint64_t pc, const char *text, uint32_t size, inst_t next)
   gdb_assert (text);
 
   len = strlen (text);
-  inst = xmalloc (sizeof *inst);
-  inst->text= xmalloc (len + 1);
+  inst = (inst_t) xmalloc (sizeof *inst);
+  inst->text = (char *) xmalloc (len + 1);
 
   inst->pc   = pc;
-  inst->text= strncpy (inst->text, text, len + 1);
+  inst->text = strncpy (inst->text, text, len + 1);
   inst->next = next;
   inst->size = size;
 
@@ -94,7 +94,7 @@ disasm_cache_create (void)
 {
   disasm_cache_t disasm_cache;
 
-  disasm_cache = xmalloc (sizeof *disasm_cache);
+  disasm_cache = (disasm_cache_t) xmalloc (sizeof *disasm_cache);
 
   disasm_cache->cached     = false;
   disasm_cache->entry_pc   = 0ULL;
@@ -196,7 +196,7 @@ static char *find_cuobjdump (void)
 }
 
 static bool
-disasm_cache_parse_line(const char *line, char *insn, uint64_t *offs, uint32_t *insn_size)
+disasm_cache_parse_line(const char *line, char *insn, uint64_t *offs)
 {
   #define INSN_HEX_SIGNATURE "/* 0x"
   #define INSN_HEX_LENGTH strlen(INSN_HEX_SIGNATURE)
@@ -209,7 +209,6 @@ disasm_cache_parse_line(const char *line, char *insn, uint64_t *offs, uint32_t *
 
   memset (insn, 0, INSN_MAX_LENGTH);
   *offs = (uint64_t)-1LL;
-  *insn_size = (uint32_t)-1;
 
   /* If instruction size signature can not be found, return false*/
   if (!size_end_ptr)
@@ -219,8 +218,6 @@ disasm_cache_parse_line(const char *line, char *insn, uint64_t *offs, uint32_t *
   while (isspace (*line)) ++line;
   if (line != offs_start_ptr)
     return false;
-
-  *insn_size = ((unsigned long)size_end_ptr - (unsigned long)size_start_ptr - INSN_HEX_LENGTH)/2;
 
   /* If offs_ptr is NULL - return empty line instruction */
   if (!offs_start_ptr || offs_start_ptr == size_start_ptr)
@@ -253,6 +250,16 @@ disasm_cache_parse_line(const char *line, char *insn, uint64_t *offs, uint32_t *
   return true;
 }
 
+static uint32_t
+disasm_get_inst_size (uint64_t pc)
+{
+    uint32_t inst_size = 0;
+    uint32_t devId = cuda_current_device ();
+
+    cuda_api_disassemble (devId, pc, &inst_size, NULL, 0);
+    return inst_size;
+}
+
 static void
 disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
 {
@@ -260,7 +267,7 @@ disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
   module_t module;
   elf_image_t elf_img;
   struct objfile *objfile;
-  uint32_t devId, size;
+  uint32_t devId, inst_size;
   uint64_t ofst = 0, entry_pc = 0;
   FILE *sass;
   char command[1024], line[1024], header[1024];
@@ -278,6 +285,16 @@ disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
   if (disasm_cache->cached && disasm_cache->entry_pc == entry_pc)
     return;
 
+  devId = cuda_current_device ();
+  inst_size = device_get_inst_size (devId);
+  if (!inst_size)
+    {
+      inst_size = disasm_get_inst_size (entry_pc);
+      if (!inst_size)
+        throw_error (GENERIC_ERROR, "Cannot find the instruction size while disassembling.");
+      device_set_inst_size (devId, inst_size);
+    }
+
   disasm_cache_flush (disasm_cache);
   disasm_cache->cached = true;
   disasm_cache->entry_pc = entry_pc;
@@ -287,7 +304,7 @@ disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
   module      = kernel_get_module (kernel);
   elf_img     = module_get_elf_image (module);
   objfile     = cuda_elf_image_get_objfile (elf_img);
-  filename    = objfile->name;
+  filename    = objfile->original_name;
   function_name = cuda_find_function_name_from_pc (pc, false);
 
   /* Could not disasemble outside of the symbol boundaries */
@@ -295,7 +312,7 @@ disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
     return;
 
   /* generate the dissassembled code using cuobjdump if available */
-  snprintf (command, sizeof (command), "%s --function %s --dump-sass %s",
+  snprintf (command, sizeof (command), "%s --function '%s' --dump-sass '%s'",
             find_cuobjdump(), function_name, filename);
   sass = popen (command, "r");
 
@@ -327,7 +344,7 @@ disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
       if (strcmp (line, "\n") == 0)
         break;
 
-       if (!disasm_cache_parse_line (line, text, &ofst, &size))
+       if (!disasm_cache_parse_line (line, text, &ofst))
          continue;
        if (ofst == (uint64_t)-1LL)
            ofst = disasm_cache->head ? disasm_cache->head->pc + disasm_cache->head->size : entry_pc;
@@ -335,7 +352,7 @@ disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
            ofst += entry_pc;
 
       /* add the instruction to the cache at the found offset */
-      disasm_cache->head = inst_create (ofst, text, size, disasm_cache->head);
+      disasm_cache->head = inst_create (ofst, text, inst_size, disasm_cache->head);
     }
 
   /* close the sass file */
@@ -347,10 +364,11 @@ disasm_cache_populate_from_elf_image (disasm_cache_t disasm_cache, uint64_t pc)
 }
 
 static void
-disasm_cache_read_from_device_memory (disasm_cache_t disasm_cache, uint64_t pc, uint32_t *inst_size)
+disasm_cache_read_from_device_memory (disasm_cache_t disasm_cache, uint64_t pc)
 {
   char buf[512];
   uint32_t devId;
+  uint32_t inst_size;
 
   /* no caching */
   disasm_cache_flush (disasm_cache);
@@ -360,9 +378,9 @@ disasm_cache_read_from_device_memory (disasm_cache_t disasm_cache, uint64_t pc, 
 
   buf[0] = 0;
   devId = cuda_current_device ();
-  cuda_api_disassemble (devId, pc, inst_size, buf, sizeof (buf));
+  cuda_api_disassemble (devId, pc, &inst_size, buf, sizeof (buf));
 
-  disasm_cache->head = inst_create (pc, buf, *inst_size, disasm_cache->head);
+  disasm_cache->head = inst_create (pc, buf, inst_size, disasm_cache->head);
 }
 
 const char *
@@ -378,7 +396,7 @@ disasm_cache_find_instruction (disasm_cache_t disasm_cache,
   if (cuda_options_disassemble_from_elf_image ())
     disasm_cache_populate_from_elf_image (disasm_cache, pc);
   else
-    disasm_cache_read_from_device_memory (disasm_cache, pc, inst_size);
+    disasm_cache_read_from_device_memory (disasm_cache, pc);
 
 
   /* find the cached disassembled instruction. */

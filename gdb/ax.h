@@ -1,5 +1,5 @@
 /* Definitions for expressions designed to be executed on the agent
-   Copyright (C) 1998-2013 Free Software Foundation, Inc.
+   Copyright (C) 1998-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -143,6 +143,23 @@ struct agent_expr
     */
     int reg_mask_len;
     unsigned char *reg_mask;
+
+    /* For the data tracing facility, we need to insert `trace' bytecodes
+       before each data fetch; this records all the memory that the
+       expression touches in the course of evaluation, so that memory will
+       be available when the user later tries to evaluate the expression
+       in GDB.
+
+       Setting the flag 'tracing' to non-zero enables the code that
+       emits the trace bytecodes at the appropriate points.  */
+
+    unsigned int tracing : 1;
+
+    /* This indicates that pointers to chars should get an added
+       tracenz bytecode to record nonzero bytes, up to a length that
+       is the value of trace_string.  */
+
+    int trace_string;
   };
 
 /* Pointer to an agent_expr structure.  */
@@ -172,6 +189,9 @@ extern struct agent_expr *new_agent_expr (struct gdbarch *, CORE_ADDR);
 /* Free a agent expression.  */
 extern void free_agent_expr (struct agent_expr *);
 extern struct cleanup *make_cleanup_free_agent_expr (struct agent_expr *);
+
+/* Append a raw byte to EXPR.  */
+extern void ax_raw_byte (struct agent_expr *expr, gdb_byte byte);
 
 /* Append a simple operator OP to EXPR.  */
 extern void ax_simple (struct agent_expr *EXPR, enum agent_op OP);

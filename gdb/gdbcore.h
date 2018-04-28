@@ -1,6 +1,6 @@
 /* Machine independent variables that describe the core file under GDB.
 
-   Copyright (C) 1986-2013 Free Software Foundation, Inc.
+   Copyright (C) 1986-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -27,6 +27,7 @@ struct regcache;
 
 #include "bfd.h"
 #include "exec.h"
+#include "target.h"
 
 /* Return the name of the executable file as a string.
    ERR nonzero means get error if there is none specified;
@@ -40,7 +41,13 @@ extern int have_core_file_p (void);
 
 /* Report a memory error with error().  */
 
-extern void memory_error (int status, CORE_ADDR memaddr);
+extern void memory_error (enum target_xfer_status status, CORE_ADDR memaddr);
+
+/* The string 'memory_error' would use as exception message.  Space
+   for the result is malloc'd, caller must free.  */
+
+extern char *memory_error_message (enum target_xfer_status err,
+				   struct gdbarch *gdbarch, CORE_ADDR memaddr);
 
 /* Like target_read_memory, but report an error if can't read.  */
 
@@ -49,6 +56,10 @@ extern void read_memory (CORE_ADDR memaddr, gdb_byte *myaddr, ssize_t len);
 /* Like target_read_stack, but report an error if can't read.  */
 
 extern void read_stack (CORE_ADDR memaddr, gdb_byte *myaddr, ssize_t len);
+
+/* Like target_read_code, but report an error if can't read.  */
+
+extern void read_code (CORE_ADDR memaddr, gdb_byte *myaddr, ssize_t len);
 
 /* Read an integer from debugged memory, given address and number of
    bytes.  */
@@ -65,6 +76,22 @@ extern int safe_read_memory_integer (CORE_ADDR memaddr, int len,
 extern ULONGEST read_memory_unsigned_integer (CORE_ADDR memaddr,
 					      int len,
 					      enum bfd_endian byte_order);
+extern int safe_read_memory_unsigned_integer (CORE_ADDR memaddr, int len,
+					      enum bfd_endian byte_order,
+					      ULONGEST *return_value);
+
+/* Read an integer from debugged code memory, given address,
+   number of bytes, and byte order for code.  */
+
+extern LONGEST read_code_integer (CORE_ADDR memaddr, int len,
+				  enum bfd_endian byte_order);
+
+/* Read an unsigned integer from debugged code memory, given address,
+   number of bytes, and byte order for code.  */
+
+extern ULONGEST read_code_unsigned_integer (CORE_ADDR memaddr,
+					    int len,
+					    enum bfd_endian byte_order);
 
 /* Read a null-terminated string from the debuggee's memory, given
    address, a buffer into which to place the string, and the maximum
@@ -77,10 +104,8 @@ extern void read_memory_string (CORE_ADDR, char *, int);
 
 CORE_ADDR read_memory_typed_address (CORE_ADDR addr, struct type *type);
 
-/* This takes a char *, not void *.  This is probably right, because
-   passing in an int * or whatever is wrong with respect to
-   byteswapping, alignment, different sizes for host vs. target types,
-   etc.  */
+/* Same as target_write_memory, but report an error if can't
+   write.  */
 
 extern void write_memory (CORE_ADDR memaddr, const gdb_byte *myaddr,
 			  ssize_t len);
@@ -103,14 +128,14 @@ extern void write_memory_signed_integer (CORE_ADDR addr, int len,
 
 /* Hook for `exec_file_command' command to call.  */
 
-extern void (*deprecated_exec_file_display_hook) (char *filename);
+extern void (*deprecated_exec_file_display_hook) (const char *filename);
 
 /* Hook for "file_command", which is more useful than above
    (because it is invoked AFTER symbols are read, not before).  */
 
 extern void (*deprecated_file_changed_hook) (char *filename);
 
-extern void specify_exec_file_hook (void (*hook) (char *filename));
+extern void specify_exec_file_hook (void (*hook) (const char *filename));
 
 /* Binary File Diddler for the core file.  */
 
@@ -124,7 +149,15 @@ extern int write_files;
 
 extern void core_file_command (char *filename, int from_tty);
 
-extern void exec_file_attach (char *filename, int from_tty);
+extern void exec_file_attach (const char *filename, int from_tty);
+
+/* If the filename of the main executable is unknown, attempt to
+   determine it.  If a filename is determined, proceed as though
+   it was just specified with the "file" command.  Do nothing if
+   the filename of the main executable is already known.
+   DEFER_BP_RESET uses SYMFILE_DEFER_BP_RESET for the main symbol file.  */
+
+extern void exec_file_locate_attach (int pid, int defer_bp_reset, int from_tty);
 
 extern void exec_file_clear (int from_tty);
 
@@ -204,7 +237,5 @@ struct core_fns
 extern void deprecated_add_core_fns (struct core_fns *cf);
 extern int default_core_sniffer (struct core_fns *cf, bfd * abfd);
 extern int default_check_format (bfd * abfd);
-
-struct target_section *deprecated_core_resize_section_table (int num_added);
 
 #endif /* !defined (GDBCORE_H) */

@@ -1,6 +1,6 @@
 /* Inline frame unwinder for GDB.
 
-   Copyright (C) 2008-2013 Free Software Foundation, Inc.
+   Copyright (C) 2008-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -18,7 +18,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -44,8 +44,7 @@
 #include "regcache.h"
 #include "symtab.h"
 #include "vec.h"
-
-#include "gdb_assert.h"
+#include "frame.h"
 
 /* We need to save a few variables for every thread stopped at the
    virtual call site of an inlined function.  If there was always a
@@ -172,11 +171,11 @@ inline_frame_this_id (struct frame_info *this_frame,
 
   /* In order to have a stable frame ID for a given inline function,
      we must get the stack / special addresses from the underlying
-     real frame's this_id method.  So we must call get_prev_frame.
-     Because we are inlined into some function, there must be previous
-     frames, so this is safe - as long as we're careful not to
-     create any cycles.  */
-  *this_id = get_frame_id (get_prev_frame (this_frame));
+     real frame's this_id method.  So we must call
+     get_prev_frame_always.  Because we are inlined into some
+     function, there must be previous frames, so this is safe - as
+     long as we're careful not to create any cycles.  */
+  *this_id = get_frame_id (get_prev_frame_always (this_frame));
 
   /* We need a valid frame ID, so we need to be based on a valid
      frame.  FSF submission NOTE: this would be a good assertion to
@@ -226,7 +225,7 @@ inline_frame_sniffer (const struct frame_unwind *self,
 		      void **this_cache)
 {
   CORE_ADDR this_pc;
-  struct block *frame_block, *cur_block;
+  const struct block *frame_block, *cur_block;
   int depth;
   struct frame_info *next_frame;
   struct inline_state *state = find_inline_frame_state (inferior_ptid);
@@ -244,6 +243,8 @@ inline_frame_sniffer (const struct frame_unwind *self,
     {
       if (block_inlined_p (cur_block))
 	depth++;
+      else if (BLOCK_FUNCTION (cur_block) != NULL)
+	break;
 
       cur_block = BLOCK_SUPERBLOCK (cur_block);
     }
@@ -291,16 +292,16 @@ const struct frame_unwind inline_frame_unwind = {
    before it).  */
 
 static int
-block_starting_point_at (CORE_ADDR pc, struct block *block)
+block_starting_point_at (CORE_ADDR pc, const struct block *block)
 {
-  struct blockvector *bv;
+  const struct blockvector *bv;
   struct block *new_block;
 
   bv = blockvector_for_pc (pc, NULL);
   if (BLOCKVECTOR_MAP (bv) == NULL)
     return 0;
 
-  new_block = addrmap_find (BLOCKVECTOR_MAP (bv), pc - 1);
+  new_block = (struct block *) addrmap_find (BLOCKVECTOR_MAP (bv), pc - 1);
   if (new_block == NULL)
     return 1;
 
@@ -321,7 +322,7 @@ void
 skip_inline_frames (ptid_t ptid)
 {
   CORE_ADDR this_pc;
-  struct block *frame_block, *cur_block;
+  const struct block *frame_block, *cur_block;
   struct symbol *last_sym = NULL;
   int skip_count = 0;
   struct inline_state *state;
@@ -352,6 +353,9 @@ skip_inline_frames (ptid_t ptid)
 	      else
 		break;
 	    }
+	  else if (BLOCK_FUNCTION (cur_block) != NULL)
+	    break;
+
 	  cur_block = BLOCK_SUPERBLOCK (cur_block);
 	}
     }

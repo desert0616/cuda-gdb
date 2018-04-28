@@ -1,5 +1,5 @@
 /* Darwin support for GDB, the GNU debugger.
-   Copyright (C) 1997-2013 Free Software Foundation, Inc.
+   Copyright (C) 1997-2016 Free Software Foundation, Inc.
 
    Contributed by Apple Computer, Inc.
 
@@ -27,14 +27,13 @@
 #include "objfiles.h"
 #include "gdbcmd.h"
 #include "regcache.h"
-#include "gdb_assert.h"
 #include "i386-tdep.h"
 #include "i387-tdep.h"
 #include "gdbarch.h"
 #include "arch-utils.h"
 #include "gdbcore.h"
 
-#include "i386-nat.h"
+#include "x86-nat.h"
 #include "darwin-nat.h"
 #include "i386-darwin-tdep.h"
 
@@ -79,6 +78,11 @@ i386_darwin_fetch_inferior_registers (struct target_ops *ops,
 				 (unsigned long) current_thread);
 	      MACH_CHECK_ERROR (ret);
 	    }
+
+	  /* Some kernels don't sanitize the values.  */
+	  gp_regs.uts.ts64.__fs &= 0xffff;
+	  gp_regs.uts.ts64.__gs &= 0xffff;
+
 	  amd64_supply_native_gregset (regcache, &gp_regs.uts, -1);
           fetched++;
         }
@@ -189,6 +193,10 @@ i386_darwin_store_inferior_registers (struct target_ops *ops,
 
 	  amd64_collect_native_gregset (regcache, &gp_regs.uts, regno);
 
+	  /* Some kernels don't sanitize the values.  */
+	  gp_regs.uts.ts64.__fs &= 0xffff;
+	  gp_regs.uts.ts64.__gs &= 0xffff;
+
           ret = thread_set_state (current_thread, x86_THREAD_STATE,
                                   (thread_state_t) &gp_regs,
                                   x86_THREAD_STATE_COUNT);
@@ -287,7 +295,7 @@ i386_darwin_store_inferior_registers (struct target_ops *ops,
  */
 
 static void
-i386_darwin_dr_set (int regnum, unsigned long value)
+i386_darwin_dr_set (int regnum, CORE_ADDR value)
 {
   thread_t current_thread;
   x86_debug_state_t dr_regs;
@@ -328,87 +336,81 @@ i386_darwin_dr_set (int regnum, unsigned long value)
       dr_regs.dsh.count = x86_DEBUG_STATE64_COUNT;
     }
   count = x86_DEBUG_STATE_COUNT;
-  ret = thread_get_state (current_thread, x86_DEBUG_STATE, 
+  ret = thread_get_state (current_thread, x86_DEBUG_STATE,
                           (thread_state_t) &dr_regs, &count);
+  MACH_CHECK_ERROR (ret);
 
-  if (ret != KERN_SUCCESS)
+  switch (dr_regs.dsh.flavor)
     {
-      printf_unfiltered (_("Error reading debug registers "
-			   "thread 0x%x via thread_get_state\n"),
-			 (int) current_thread);
-      MACH_CHECK_ERROR (ret);
+    case x86_DEBUG_STATE32:
+      switch (regnum)
+	{
+	case 0:
+	  dr_regs.uds.ds32.__dr0 = value;
+	  break;
+	case 1:
+	  dr_regs.uds.ds32.__dr1 = value;
+	  break;
+	case 2:
+	  dr_regs.uds.ds32.__dr2 = value;
+	  break;
+	case 3:
+	  dr_regs.uds.ds32.__dr3 = value;
+	  break;
+	case 4:
+	  dr_regs.uds.ds32.__dr4 = value;
+	  break;
+	case 5:
+	  dr_regs.uds.ds32.__dr5 = value;
+	  break;
+	case 6:
+	  dr_regs.uds.ds32.__dr6 = value;
+	  break;
+	case 7:
+	  dr_regs.uds.ds32.__dr7 = value;
+	  break;
+	}
+      break;
+#ifdef BFD64
+    case x86_DEBUG_STATE64:
+      switch (regnum)
+	{
+	case 0:
+	  dr_regs.uds.ds64.__dr0 = value;
+	  break;
+	case 1:
+	  dr_regs.uds.ds64.__dr1 = value;
+	  break;
+	case 2:
+	  dr_regs.uds.ds64.__dr2 = value;
+	  break;
+	case 3:
+	  dr_regs.uds.ds64.__dr3 = value;
+	  break;
+	case 4:
+	  dr_regs.uds.ds64.__dr4 = value;
+	  break;
+	case 5:
+	  dr_regs.uds.ds64.__dr5 = value;
+	  break;
+	case 6:
+	  dr_regs.uds.ds64.__dr6 = value;
+	  break;
+	case 7:
+	  dr_regs.uds.ds64.__dr7 = value;
+	  break;
+	}
+      break;
+#endif
     }
 
-  if (regs.tsh.flavor==x86_THREAD_STATE32)
-    switch (regnum)
-      {
-        case 0:
-          dr_regs.uds.ds32.__dr0 = value;
-          break;
-        case 1:
-          dr_regs.uds.ds32.__dr1 = value;
-          break;
-        case 2:
-          dr_regs.uds.ds32.__dr2 = value;
-          break;
-        case 3:
-          dr_regs.uds.ds32.__dr3 = value;
-          break;
-        case 4:
-          dr_regs.uds.ds32.__dr4 = value;
-          break;
-        case 5:
-          dr_regs.uds.ds32.__dr5 = value;
-          break;
-        case 6:
-          dr_regs.uds.ds32.__dr6 = value;
-          break;
-        case 7:
-          dr_regs.uds.ds32.__dr7 = value;
-          break;
-      }
-  else
-    switch (regnum)
-      {
-        case 0:
-          dr_regs.uds.ds64.__dr0 = value;
-          break;
-        case 1:
-          dr_regs.uds.ds64.__dr1 = value;
-          break;
-        case 2:
-          dr_regs.uds.ds64.__dr2 = value;
-          break;
-        case 3:
-          dr_regs.uds.ds64.__dr3 = value;
-          break;
-        case 4:
-          dr_regs.uds.ds64.__dr4 = value;
-          break;
-        case 5:
-          dr_regs.uds.ds64.__dr5 = value;
-          break;
-        case 6:
-          dr_regs.uds.ds64.__dr6 = value;
-          break;
-        case 7:
-          dr_regs.uds.ds64.__dr7 = value;
-          break;
-      }
+  ret = thread_set_state (current_thread, dr_regs.dsh.flavor,
+                          (thread_state_t) &dr_regs.uds, count);
 
-  ret = thread_set_state (current_thread, x86_DEBUG_STATE, 
-                          (thread_state_t) &dr_regs, count);
-
-  if (ret != KERN_SUCCESS)
-    {
-      printf_unfiltered (_("Error writing debug registers "
-			   "thread 0x%x via thread_get_state\n"),
-			 (int) current_thread);
-      MACH_CHECK_ERROR (ret);
-    }
+  MACH_CHECK_ERROR (ret);
 }
 
-static unsigned long
+static CORE_ADDR
 i386_darwin_dr_get (int regnum)
 {
   thread_t current_thread;
@@ -451,58 +453,63 @@ i386_darwin_dr_get (int regnum)
     }
 
   count = x86_DEBUG_STATE_COUNT;
-  ret = thread_get_state (current_thread, x86_DEBUG_STATE, 
+  ret = thread_get_state (current_thread, x86_DEBUG_STATE,
                           (thread_state_t) &dr_regs, &count);
+  MACH_CHECK_ERROR (ret);
 
-  if (ret != KERN_SUCCESS)
+  switch (dr_regs.dsh.flavor)
     {
-      printf_unfiltered (_("Error reading debug registers "
-			   "thread 0x%x via thread_get_state\n"),
-			 (int) current_thread);
-      MACH_CHECK_ERROR (ret);
+    case x86_DEBUG_STATE32:
+      switch (regnum)
+	{
+	case 0:
+	  return dr_regs.uds.ds32.__dr0;
+	case 1:
+	  return dr_regs.uds.ds32.__dr1;
+	case 2:
+	  return dr_regs.uds.ds32.__dr2;
+	case 3:
+	  return dr_regs.uds.ds32.__dr3;
+	case 4:
+	  return dr_regs.uds.ds32.__dr4;
+	case 5:
+	  return dr_regs.uds.ds32.__dr5;
+	case 6:
+	  return dr_regs.uds.ds32.__dr6;
+	case 7:
+	  return dr_regs.uds.ds32.__dr7;
+	default:
+	  return -1;
+	}
+      break;
+#ifdef BFD64
+    case x86_DEBUG_STATE64:
+      switch (regnum)
+	{
+	case 0:
+	  return dr_regs.uds.ds64.__dr0;
+	case 1:
+	  return dr_regs.uds.ds64.__dr1;
+	case 2:
+	  return dr_regs.uds.ds64.__dr2;
+	case 3:
+	  return dr_regs.uds.ds64.__dr3;
+	case 4:
+	  return dr_regs.uds.ds64.__dr4;
+	case 5:
+	  return dr_regs.uds.ds64.__dr5;
+	case 6:
+	  return dr_regs.uds.ds64.__dr6;
+	case 7:
+	  return dr_regs.uds.ds64.__dr7;
+	default:
+	  return -1;
+	}
+      break;
+#endif
+    default:
+      return -1;
     }
-
-  if (regs.tsh.flavor==x86_THREAD_STATE32)
-    switch (regnum)
-      {
-        case 0:
-          return dr_regs.uds.ds32.__dr0;
-        case 1:
-          return dr_regs.uds.ds32.__dr1;
-        case 2:
-          return dr_regs.uds.ds32.__dr2;
-        case 3:
-          return dr_regs.uds.ds32.__dr3;
-        case 4:
-          return dr_regs.uds.ds32.__dr4;
-        case 5:
-          return dr_regs.uds.ds32.__dr5;
-        case 6:
-          return dr_regs.uds.ds32.__dr6;
-        case 7:
-          return dr_regs.uds.ds32.__dr7;
-      }
-  else
-    switch (regnum)
-      {
-        case 0:
-          return dr_regs.uds.ds64.__dr0;
-        case 1:
-          return dr_regs.uds.ds64.__dr1;
-        case 2:
-          return dr_regs.uds.ds64.__dr2;
-        case 3:
-          return dr_regs.uds.ds64.__dr3;
-        case 4:
-          return dr_regs.uds.ds64.__dr4;
-        case 5:
-          return dr_regs.uds.ds64.__dr5;
-        case 6:
-          return dr_regs.uds.ds64.__dr6;
-        case 7:
-          return dr_regs.uds.ds64.__dr7;
-      }
-  return -1;
 }
 
 static void
@@ -564,7 +571,7 @@ darwin_check_osabi (darwin_inferior *inf, thread_t thread)
 	info.bfd_arch_info = bfd_lookup_arch (bfd_arch_i386,
 					      bfd_mach_x86_64);
       else
-	info.bfd_arch_info = bfd_lookup_arch (bfd_arch_i386, 
+	info.bfd_arch_info = bfd_lookup_arch (bfd_arch_i386,
 					      bfd_mach_i386_i386);
       gdbarch_update_p (info);
     }
@@ -664,14 +671,14 @@ darwin_set_sstep (thread_t thread, int enable)
     case x86_THREAD_STATE32:
       {
 	__uint32_t bit = enable ? X86_EFLAGS_T : 0;
-	
+
 	if (enable && i386_darwin_sstep_at_sigreturn (&regs))
 	  return;
 	if ((regs.uts.ts32.__eflags & X86_EFLAGS_T) == bit)
 	  return;
 	regs.uts.ts32.__eflags
 	  = (regs.uts.ts32.__eflags & ~X86_EFLAGS_T) | bit;
-	kret = thread_set_state (thread, x86_THREAD_STATE, 
+	kret = thread_set_state (thread, x86_THREAD_STATE,
 				 (thread_state_t) &regs, count);
 	MACH_CHECK_ERROR (kret);
       }
@@ -687,7 +694,7 @@ darwin_set_sstep (thread_t thread, int enable)
 	  return;
 	regs.uts.ts64.__rflags
 	  = (regs.uts.ts64.__rflags & ~X86_EFLAGS_T) | bit;
-	kret = thread_set_state (thread, x86_THREAD_STATE, 
+	kret = thread_set_state (thread, x86_THREAD_STATE,
 				 (thread_state_t) &regs, count);
 	MACH_CHECK_ERROR (kret);
       }
@@ -708,15 +715,12 @@ darwin_complete_target (struct target_ops *target)
   amd64_native_gregset32_num_regs = i386_darwin_thread_state_num_regs;
 #endif
 
-  target->to_fetch_registers = i386_darwin_fetch_inferior_registers;
-  target->to_store_registers = i386_darwin_store_inferior_registers;
-
 /*
  * CUDA - add host hardware breakpoint support 
  *
  * Enable HW breakpoint/watchpoint support
  * i386_use-watchpints updates target ops with x86-specific implementation
- * which uses i386_dr_low interface to read/update debug registers 
+ * which uses x86_dr_low interface to read/update debug registers 
  * in OS thread structure.
  *
  * Darwin i386 NAT implementation should implement all i386_dr_low
@@ -724,15 +728,21 @@ darwin_complete_target (struct target_ops *target)
  * defined in i386-linux-nat.c
  */
 
-  i386_use_watchpoints (target);
-  i386_dr_low.set_control = i386_darwin_dr_set_control;
-  i386_dr_low.set_addr = i386_darwin_dr_set_addr;
-  i386_dr_low.get_addr = i386_darwin_dr_get_addr;
-  i386_dr_low.get_status = i386_darwin_dr_get_status;
-  i386_dr_low.get_control = i386_darwin_dr_get_control;
-#ifdef BFD64
-  i386_set_debug_register_length (8);
+  x86_use_watchpoints (target);
+
+  x86_dr_low.set_control = i386_darwin_dr_set_control;
+  x86_dr_low.set_addr = i386_darwin_dr_set_addr;
+  x86_dr_low.get_addr = i386_darwin_dr_get_addr;
+  x86_dr_low.get_status = i386_darwin_dr_get_status;
+  x86_dr_low.get_control = i386_darwin_dr_get_control;
+
+  /* Let's assume that the kernel is 64 bits iff the executable is.  */
+#ifdef __x86_64__
+  x86_set_debug_register_length (8);
 #else
-  i386_set_debug_register_length (4);
+  x86_set_debug_register_length (4);
 #endif
+
+  target->to_fetch_registers = i386_darwin_fetch_inferior_registers;
+  target->to_store_registers = i386_darwin_store_inferior_registers;
 }

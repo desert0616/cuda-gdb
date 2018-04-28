@@ -1,6 +1,6 @@
 /* Support routines for decoding "stabs" debugging information format.
 
-   Copyright (C) 1986-2013 Free Software Foundation, Inc.
+   Copyright (C) 1986-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -24,7 +24,6 @@
    Avoid placing any object file format specific code in this file.  */
 
 #include "defs.h"
-#include "gdb_string.h"
 #include "bfd.h"
 #include "gdb_obstack.h"
 #include "symtab.h"
@@ -44,14 +43,13 @@
 #include "doublest.h"
 #include "cp-abi.h"
 #include "cp-support.h"
-#include "gdb_assert.h"
+#include <ctype.h>
 #include "frame.h"
 #include "value.h"
-#include <ctype.h>
 
 #include <exceptions.h>
 
-#include "dwarf2loc.h"          /* dl added this for the baton stuff */
+#include "dwarf2loc.h" /* dl added this for the baton stuff */
 
 /* Ask stabsread.h to define the vars it normally declares `extern'.  */
 #define	EXTERN
@@ -61,6 +59,24 @@
 
 extern void _initialize_stabsread (void);
 
+struct nextfield
+{
+  struct nextfield *next;
+
+  /* This is the raw visibility from the stab.  It is not checked
+     for being one of the visibilities we recognize, so code which
+     examines this field better be able to deal.  */
+  int visibility;
+
+  struct field field;
+};
+
+struct next_fnfieldlist
+{
+  struct next_fnfieldlist *next;
+  struct fn_fieldlist fn_fieldlist;
+};
+
 /* The routines that read and process a complete stabs for a C struct or 
    C++ class pass lists of data member fields and lists of member function
    fields in an instance of a field_info structure, as defined below.
@@ -69,24 +85,8 @@ extern void _initialize_stabsread (void);
 
 struct field_info
   {
-    struct nextfield
-      {
-	struct nextfield *next;
-
-	/* This is the raw visibility from the stab.  It is not checked
-	   for being one of the visibilities we recognize, so code which
-	   examines this field better be able to deal.  */
-	int visibility;
-
-	struct field field;
-      }
-     *list;
-    struct next_fnfieldlist
-      {
-	struct next_fnfieldlist *next;
-	struct fn_fieldlist fn_fieldlist;
-      }
-     *fnlist;
+    struct nextfield *list;
+    struct next_fnfieldlist *fnlist;
   };
 
 static void
@@ -182,7 +182,7 @@ static void
 reg_value_complaint (int regnum, int num_regs, const char *sym)
 {
   complaint (&symfile_complaints,
-	     _("register number %d too large (max %d) in symbol %s"),
+	     _("bad register number %d (max %d) in symbol %s"),
              regnum, num_regs - 1, sym);
 }
 
@@ -219,6 +219,23 @@ static int noname_undefs_length;
     if (**(pp) == '\\' || (**(pp) == '?' && (*(pp))[1] == '\0')) \
       *(pp) = next_symbol_text (objfile);	\
   } while (0)
+
+/* Vector of types defined so far, indexed by their type numbers.
+   (In newer sun systems, dbx uses a pair of numbers in parens,
+   as in "(SUBFILENUM,NUMWITHINSUBFILE)".
+   Then these numbers must be translated through the type_translations
+   hash table to get the index into the type vector.)  */
+
+static struct type **type_vector;
+
+/* Number of elements allocated for type_vector currently.  */
+
+static int type_vector_length;
+
+/* Initial size of type vector.  Is realloc'd larger if needed, and
+   realloc'd down to the size actually used, when completed.  */
+
+#define INITIAL_TYPE_VECTOR_LENGTH 160
 
 
 /* Look up a dbx type-number pair.  Return the address of the slot
@@ -273,8 +290,7 @@ dbx_lookup_type (int typenums[2], struct objfile *objfile)
 	  if (old_len == 0)
 	    {
 	      type_vector_length = INITIAL_TYPE_VECTOR_LENGTH;
-	      type_vector = (struct type **)
-		xmalloc (type_vector_length * sizeof (struct type *));
+	      type_vector = XNEWVEC (struct type *, type_vector_length);
 	    }
 	  while (index >= type_vector_length)
 	    {
@@ -391,16 +407,12 @@ patch_block_stabs (struct pending *symbols, struct pending_stabs *stabs,
 	      /* On xcoff, if a global is defined and never referenced,
 	         ld will remove it from the executable.  There is then
 	         a N_GSYM stab for it, but no regular (C_EXT) symbol.  */
-	      sym = (struct symbol *)
-		obstack_alloc (&objfile->objfile_obstack,
-			       sizeof (struct symbol));
-
-	      memset (sym, 0, sizeof (struct symbol));
+	      sym = allocate_symbol (objfile);
 	      SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
-	      SYMBOL_CLASS (sym) = LOC_OPTIMIZED_OUT;
+	      SYMBOL_ACLASS_INDEX (sym) = LOC_OPTIMIZED_OUT;
 	      SYMBOL_SET_LINKAGE_NAME
-		(sym, obstack_copy0 (&objfile->objfile_obstack,
-				     name, pp - name));
+		(sym, (char *) obstack_copy0 (&objfile->objfile_obstack,
+					      name, pp - name));
 	      pp += 2;
 	      if (*(pp - 1) == 'F' || *(pp - 1) == 'f')
 		{
@@ -598,8 +610,9 @@ stab_reg_to_regnum (struct symbol *sym, struct gdbarch *gdbarch)
 {
   int regno = gdbarch_stab_reg_to_regnum (gdbarch, SYMBOL_VALUE (sym));
 
-  if (regno >= gdbarch_num_regs (gdbarch)
-		+ gdbarch_num_pseudo_regs (gdbarch))
+  if (regno < 0
+      || regno >= (gdbarch_num_regs (gdbarch)
+		   + gdbarch_num_pseudo_regs (gdbarch)))
     {
       reg_value_complaint (regno,
 			   gdbarch_num_regs (gdbarch)
@@ -615,6 +628,11 @@ stab_reg_to_regnum (struct symbol *sym, struct gdbarch *gdbarch)
 static const struct symbol_register_ops stab_register_funcs = {
   stab_reg_to_regnum
 };
+
+/* The "aclass" indices for computed symbols.  */
+
+static int stab_register_index;
+static int stab_regparm_index;
 
 struct symbol *
 define_symbol (CORE_ADDR valu, char *string, int desc, int type,
@@ -659,22 +677,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
      e.g. ":t10=*2" or a nameless enum like " :T16=ered:0,green:1,blue:2,;" */
   nameless = (p == string || ((string[0] == ' ') && (string[1] == ':')));
 
-  current_symbol = sym = (struct symbol *)
-    obstack_alloc (&objfile->objfile_obstack, sizeof (struct symbol));
-  memset (sym, 0, sizeof (struct symbol));
-
-  switch (type & N_TYPE)
-    {
-    case N_TEXT:
-      SYMBOL_SECTION (sym) = SECT_OFF_TEXT (objfile);
-      break;
-    case N_DATA:
-      SYMBOL_SECTION (sym) = SECT_OFF_DATA (objfile);
-      break;
-    case N_BSS:
-      SYMBOL_SECTION (sym) = SECT_OFF_BSS (objfile);
-      break;
-    }
+  current_symbol = sym = allocate_symbol (objfile);
 
   if (processing_gcc_compilation)
     {
@@ -686,6 +689,9 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     {
       SYMBOL_LINE (sym) = 0;	/* unknown */
     }
+
+  SYMBOL_SET_LANGUAGE (sym, current_subfile->language,
+		       &objfile->objfile_obstack);
 
   if (is_cplus_marker (string[0]))
     {
@@ -722,10 +728,9 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
   else
     {
     normal:
-      SYMBOL_SET_LANGUAGE (sym, current_subfile->language);
       if (SYMBOL_LANGUAGE (sym) == language_cplus)
 	{
-	  char *name = alloca (p - string + 1);
+	  char *name = (char *) alloca (p - string + 1);
 
 	  memcpy (name, string, p - string);
 	  name[p - string] = '\0';
@@ -773,7 +778,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
          (where type 6 is defined by "blobs:t6=eblob1:0,blob2:1,;").  */
       if (*p != '=')
 	{
-	  SYMBOL_CLASS (sym) = LOC_CONST;
+	  SYMBOL_ACLASS_INDEX (sym) = LOC_CONST;
 	  SYMBOL_TYPE (sym) = error_type (&p, objfile);
 	  SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
 	  add_symbol_to_list (sym, &file_symbols);
@@ -793,14 +798,14 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 	       probably has the necessary code.  */
 
 	    dbl_type = objfile_type (objfile)->builtin_double;
-	    dbl_valu =
-	      obstack_alloc (&objfile->objfile_obstack,
-			     TYPE_LENGTH (dbl_type));
+	    dbl_valu
+	      = (gdb_byte *) obstack_alloc (&objfile->objfile_obstack,
+					    TYPE_LENGTH (dbl_type));
 	    store_typed_floating (dbl_valu, dbl_type, d);
 
 	    SYMBOL_TYPE (sym) = dbl_type;
 	    SYMBOL_VALUE_BYTES (sym) = dbl_valu;
-	    SYMBOL_CLASS (sym) = LOC_CONST_BYTES;
+	    SYMBOL_ACLASS_INDEX (sym) = LOC_CONST_BYTES;
 	  }
 	  break;
 	case 'i':
@@ -814,7 +819,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 
 	    SYMBOL_TYPE (sym) = objfile_type (objfile)->builtin_long;
 	    SYMBOL_VALUE (sym) = atoi (p);
-	    SYMBOL_CLASS (sym) = LOC_CONST;
+	    SYMBOL_ACLASS_INDEX (sym) = LOC_CONST;
 	  }
 	  break;
 
@@ -822,7 +827,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 	  {
 	    SYMBOL_TYPE (sym) = objfile_type (objfile)->builtin_char;
 	    SYMBOL_VALUE (sym) = atoi (p);
-	    SYMBOL_CLASS (sym) = LOC_CONST;
+	    SYMBOL_ACLASS_INDEX (sym) = LOC_CONST;
 	  }
 	  break;
 
@@ -836,7 +841,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 
 	    if (quote != '\'' && quote != '"')
 	      {
-		SYMBOL_CLASS (sym) = LOC_CONST;
+		SYMBOL_ACLASS_INDEX (sym) = LOC_CONST;
 		SYMBOL_TYPE (sym) = error_type (&p, objfile);
 		SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
 		add_symbol_to_list (sym, &file_symbols);
@@ -861,7 +866,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 	      }
 	    if (*p != quote)
 	      {
-		SYMBOL_CLASS (sym) = LOC_CONST;
+		SYMBOL_ACLASS_INDEX (sym) = LOC_CONST;
 		SYMBOL_TYPE (sym) = error_type (&p, objfile);
 		SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
 		add_symbol_to_list (sym, &file_symbols);
@@ -871,18 +876,19 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 	    /* NULL terminate the string.  */
 	    string_local[ind] = 0;
 	    range_type
-	      = create_range_type (NULL,
-				   objfile_type (objfile)->builtin_int,
-				   0, ind);
+	      = create_static_range_type (NULL,
+					  objfile_type (objfile)->builtin_int,
+					  0, ind);
 	    SYMBOL_TYPE (sym) = create_array_type (NULL,
 				  objfile_type (objfile)->builtin_char,
 				  range_type);
-	    string_value = obstack_alloc (&objfile->objfile_obstack, ind + 1);
+	    string_value
+	      = (gdb_byte *) obstack_alloc (&objfile->objfile_obstack, ind + 1);
 	    memcpy (string_value, string_local, ind + 1);
 	    p++;
 
 	    SYMBOL_VALUE_BYTES (sym) = string_value;
-	    SYMBOL_CLASS (sym) = LOC_CONST_BYTES;
+	    SYMBOL_ACLASS_INDEX (sym) = LOC_CONST_BYTES;
 	  }
 	  break;
 
@@ -892,7 +898,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 	     e.g. "b:c=e6,0" for "const b = blob1"
 	     (where type 6 is defined by "blobs:t6=eblob1:0,blob2:1,;").  */
 	  {
-	    SYMBOL_CLASS (sym) = LOC_CONST;
+	    SYMBOL_ACLASS_INDEX (sym) = LOC_CONST;
 	    SYMBOL_TYPE (sym) = read_type (&p, objfile);
 
 	    if (*p != ',')
@@ -913,7 +919,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 	  break;
 	default:
 	  {
-	    SYMBOL_CLASS (sym) = LOC_CONST;
+	    SYMBOL_ACLASS_INDEX (sym) = LOC_CONST;
 	    SYMBOL_TYPE (sym) = error_type (&p, objfile);
 	  }
 	}
@@ -924,7 +930,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     case 'C':
       /* The name of a caught exception.  */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_LABEL;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_LABEL;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       SYMBOL_VALUE_ADDRESS (sym) = valu;
       add_symbol_to_list (sym, &local_symbols);
@@ -933,7 +939,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     case 'f':
       /* A static function definition.  */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_BLOCK;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_BLOCK;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       add_symbol_to_list (sym, &file_symbols);
       /* fall into process_function_types.  */
@@ -1004,7 +1010,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     case 'F':
       /* A global function definition.  */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_BLOCK;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_BLOCK;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       add_symbol_to_list (sym, &global_symbols);
       goto process_function_types;
@@ -1015,7 +1021,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
          corresponding linker definition to find the value.
          These definitions appear at the end of the namelist.  */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_STATIC;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_STATIC;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       /* Don't add symbol references to global_sym_chain.
          Symbol references don't have valid names and wont't match up with
@@ -1036,7 +1042,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     case 's':
     case 'l':
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_LOCAL;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_LOCAL;
       SYMBOL_VALUE (sym) = valu;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       add_symbol_to_list (sym, &local_symbols);
@@ -1056,7 +1062,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
       else
 	SYMBOL_TYPE (sym) = read_type (&p, objfile);
 
-      SYMBOL_CLASS (sym) = LOC_ARG;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_ARG;
       SYMBOL_VALUE (sym) = valu;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       SYMBOL_IS_ARGUMENT (sym) = 1;
@@ -1104,8 +1110,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     case 'R':
       /* Parameter which is in a register.  */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_REGISTER;
-      SYMBOL_REGISTER_OPS (sym) = &stab_register_funcs;
+      SYMBOL_ACLASS_INDEX (sym) = stab_register_index;
       SYMBOL_IS_ARGUMENT (sym) = 1;
       SYMBOL_VALUE (sym) = valu;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
@@ -1115,8 +1120,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     case 'r':
       /* Register variable (either global or local).  */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_REGISTER;
-      SYMBOL_REGISTER_OPS (sym) = &stab_register_funcs;
+      SYMBOL_ACLASS_INDEX (sym) = stab_register_index;
       SYMBOL_VALUE (sym) = valu;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       if (within_function)
@@ -1153,8 +1157,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 		  && strcmp (SYMBOL_LINKAGE_NAME (prev_sym),
 			     SYMBOL_LINKAGE_NAME (sym)) == 0)
 		{
-		  SYMBOL_CLASS (prev_sym) = LOC_REGISTER;
-		  SYMBOL_REGISTER_OPS (prev_sym) = &stab_register_funcs;
+		  SYMBOL_ACLASS_INDEX (prev_sym) = stab_register_index;
 		  /* Use the type from the LOC_REGISTER; that is the type
 		     that is actually in that register.  */
 		  SYMBOL_TYPE (prev_sym) = SYMBOL_TYPE (sym);
@@ -1172,24 +1175,24 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     case 'S':
       /* Static symbol at top level of file.  */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_STATIC;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_STATIC;
       SYMBOL_VALUE_ADDRESS (sym) = valu;
       if (gdbarch_static_transform_name_p (gdbarch)
 	  && gdbarch_static_transform_name (gdbarch,
 					    SYMBOL_LINKAGE_NAME (sym))
 	     != SYMBOL_LINKAGE_NAME (sym))
 	{
-	  struct minimal_symbol *msym;
+	  struct bound_minimal_symbol msym;
 
 	  msym = lookup_minimal_symbol (SYMBOL_LINKAGE_NAME (sym),
 					NULL, objfile);
-	  if (msym != NULL)
+	  if (msym.minsym != NULL)
 	    {
 	      const char *new_name = gdbarch_static_transform_name
 		(gdbarch, SYMBOL_LINKAGE_NAME (sym));
 
 	      SYMBOL_SET_LINKAGE_NAME (sym, new_name);
-	      SYMBOL_VALUE_ADDRESS (sym) = SYMBOL_VALUE_ADDRESS (msym);
+	      SYMBOL_VALUE_ADDRESS (sym) = BMSYMBOL_VALUE_ADDRESS (msym);
 	    }
 	}
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
@@ -1221,7 +1224,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
       if (nameless)
 	return NULL;
 
-      SYMBOL_CLASS (sym) = LOC_TYPEDEF;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_TYPEDEF;
       SYMBOL_VALUE (sym) = valu;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       /* C++ vagaries: we may have a type which is derived from
@@ -1302,11 +1305,10 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
       if (synonym)
         {
           /* Create the STRUCT_DOMAIN clone.  */
-          struct symbol *struct_sym = (struct symbol *)
-            obstack_alloc (&objfile->objfile_obstack, sizeof (struct symbol));
+          struct symbol *struct_sym = allocate_symbol (objfile);
 
           *struct_sym = *sym;
-          SYMBOL_CLASS (struct_sym) = LOC_TYPEDEF;
+          SYMBOL_ACLASS_INDEX (struct_sym) = LOC_TYPEDEF;
           SYMBOL_VALUE (struct_sym) = valu;
           SYMBOL_DOMAIN (struct_sym) = STRUCT_DOMAIN;
           if (TYPE_NAME (SYMBOL_TYPE (sym)) == 0)
@@ -1334,7 +1336,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
       if (nameless)
 	return NULL;
 
-      SYMBOL_CLASS (sym) = LOC_TYPEDEF;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_TYPEDEF;
       SYMBOL_VALUE (sym) = valu;
       SYMBOL_DOMAIN (sym) = STRUCT_DOMAIN;
       if (TYPE_TAG_NAME (SYMBOL_TYPE (sym)) == 0)
@@ -1347,11 +1349,10 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
       if (synonym)
 	{
 	  /* Clone the sym and then modify it.  */
-	  struct symbol *typedef_sym = (struct symbol *)
-	    obstack_alloc (&objfile->objfile_obstack, sizeof (struct symbol));
+	  struct symbol *typedef_sym = allocate_symbol (objfile);
 
 	  *typedef_sym = *sym;
-	  SYMBOL_CLASS (typedef_sym) = LOC_TYPEDEF;
+	  SYMBOL_ACLASS_INDEX (typedef_sym) = LOC_TYPEDEF;
 	  SYMBOL_VALUE (typedef_sym) = valu;
 	  SYMBOL_DOMAIN (typedef_sym) = VAR_DOMAIN;
 	  if (TYPE_NAME (SYMBOL_TYPE (sym)) == 0)
@@ -1366,24 +1367,24 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     case 'V':
       /* Static symbol of local scope.  */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_STATIC;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_STATIC;
       SYMBOL_VALUE_ADDRESS (sym) = valu;
       if (gdbarch_static_transform_name_p (gdbarch)
 	  && gdbarch_static_transform_name (gdbarch,
 					    SYMBOL_LINKAGE_NAME (sym))
 	     != SYMBOL_LINKAGE_NAME (sym))
 	{
-	  struct minimal_symbol *msym;
+	  struct bound_minimal_symbol msym;
 
 	  msym = lookup_minimal_symbol (SYMBOL_LINKAGE_NAME (sym), 
 					NULL, objfile);
-	  if (msym != NULL)
+	  if (msym.minsym != NULL)
 	    {
 	      const char *new_name = gdbarch_static_transform_name
 		(gdbarch, SYMBOL_LINKAGE_NAME (sym));
 
 	      SYMBOL_SET_LINKAGE_NAME (sym, new_name);
-	      SYMBOL_VALUE_ADDRESS (sym) = SYMBOL_VALUE_ADDRESS (msym);
+	      SYMBOL_VALUE_ADDRESS (sym) = BMSYMBOL_VALUE_ADDRESS (msym);
 	    }
 	}
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
@@ -1393,7 +1394,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     case 'v':
       /* Reference parameter */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_REF_ARG;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_REF_ARG;
       SYMBOL_IS_ARGUMENT (sym) = 1;
       SYMBOL_VALUE (sym) = valu;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
@@ -1403,8 +1404,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
     case 'a':
       /* Reference parameter which is in a register.  */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_REGPARM_ADDR;
-      SYMBOL_REGISTER_OPS (sym) = &stab_register_funcs;
+      SYMBOL_ACLASS_INDEX (sym) = stab_regparm_index;
       SYMBOL_IS_ARGUMENT (sym) = 1;
       SYMBOL_VALUE (sym) = valu;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
@@ -1417,7 +1417,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
          that Pascal uses it too, but when I tried it Pascal used
          "x:3" (local symbol) instead.  */
       SYMBOL_TYPE (sym) = read_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_LOCAL;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_LOCAL;
       SYMBOL_VALUE (sym) = valu;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       add_symbol_to_list (sym, &local_symbols);
@@ -1425,7 +1425,7 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
 
     default:
       SYMBOL_TYPE (sym) = error_type (&p, objfile);
-      SYMBOL_CLASS (sym) = LOC_CONST;
+      SYMBOL_ACLASS_INDEX (sym) = LOC_CONST;
       SYMBOL_VALUE (sym) = 0;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       add_symbol_to_list (sym, &file_symbols);
@@ -1442,11 +1442,11 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
       /* We have to convert LOC_REGISTER to LOC_REGPARM_ADDR (for
          variables passed in a register).  */
       if (SYMBOL_CLASS (sym) == LOC_REGISTER)
-	SYMBOL_CLASS (sym) = LOC_REGPARM_ADDR;
+	SYMBOL_ACLASS_INDEX (sym) = LOC_REGPARM_ADDR;
       /* Likewise for converting LOC_ARG to LOC_REF_ARG (for the 7th
 	 and subsequent arguments on SPARC, for example).  */
       else if (SYMBOL_CLASS (sym) == LOC_ARG)
-	SYMBOL_CLASS (sym) = LOC_REF_ARG;
+	SYMBOL_ACLASS_INDEX (sym) = LOC_REF_ARG;
     }
 
   return sym;
@@ -1527,7 +1527,7 @@ read_xlf_char_type(char** pp, struct type* rettype, struct objfile *objfile)
   *pp +=3; 
   bound = read_huge_number(pp, 0, &bits, 0);
   chartype = objfile_type (objfile)->builtin_char;
-  range_type = create_range_type((struct type *) NULL, objfile_type (objfile)->builtin_int, 1, bound);
+  range_type = create_static_range_type((struct type *) NULL, objfile_type (objfile)->builtin_int, 1, bound);
   rettype = create_array_type ( rettype, chartype, range_type);
   TYPE_CODE (rettype) = TYPE_CODE_STRING;
   return rettype;
@@ -1666,15 +1666,16 @@ again:
 	  type_name = NULL;
 	  if (current_subfile->language == language_cplus)
 	    {
-	      char *new_name, *name = alloca (p - *pp + 1);
+	      char *new_name, *name = (char *) alloca (p - *pp + 1);
 
 	      memcpy (name, *pp, p - *pp);
 	      name[p - *pp] = '\0';
 	      new_name = cp_canonicalize_string (name);
 	      if (new_name != NULL)
 		{
-		  type_name = obstack_copy0 (&objfile->objfile_obstack,
-					     new_name, strlen (new_name));
+		  type_name
+		    = (char *) obstack_copy0 (&objfile->objfile_obstack,
+					      new_name, strlen (new_name));
 		  xfree (new_name);
 		}
 	    }
@@ -1852,10 +1853,10 @@ again:
         while (**pp && **pp != '#')
           {
             struct type *arg_type = read_type (pp, objfile);
-            struct type_list *new = alloca (sizeof (*new));
-            new->type = arg_type;
-            new->next = arg_types;
-            arg_types = new;
+            struct type_list *newobj = XALLOCA (struct type_list);
+            newobj->type = arg_type;
+            newobj->next = arg_types;
+            arg_types = newobj;
             num_args++;
           }
         if (**pp == '#')
@@ -2141,13 +2142,13 @@ static const struct objfile_data *rs6000_builtin_type_data;
 static struct type *
 rs6000_builtin_type (int typenum, struct objfile *objfile)
 {
-  struct type **negative_types = objfile_data (objfile,
-					       rs6000_builtin_type_data);
+  struct type **negative_types
+    = (struct type **) objfile_data (objfile, rs6000_builtin_type_data);
 
   /* We recognize types numbered from -NUMBER_RECOGNIZED to -1.  */
 #define NUMBER_RECOGNIZED 36
   struct type *rettype = NULL;
-  int fortran = (current_subfile->language == language_fortran);
+  int fortran = (current_subfile->language = language_fortran);
 
   if (typenum >= 0 || typenum < -NUMBER_RECOGNIZED)
     {
@@ -2402,10 +2403,8 @@ read_member_functions (struct field_info *fip, char **pp, struct type *type,
       look_ahead_type = NULL;
       length = 0;
 
-      new_fnlist = (struct next_fnfieldlist *)
-	xmalloc (sizeof (struct next_fnfieldlist));
+      new_fnlist = XCNEW (struct next_fnfieldlist);
       make_cleanup (xfree, new_fnlist);
-      memset (new_fnlist, 0, sizeof (struct next_fnfieldlist));
 
       if ((*pp)[0] == 'o' && (*pp)[1] == 'p' && is_cplus_marker ((*pp)[2]))
 	{
@@ -2444,10 +2443,8 @@ read_member_functions (struct field_info *fip, char **pp, struct type *type,
 
       do
 	{
-	  new_sublist =
-	    (struct next_fnfield *) xmalloc (sizeof (struct next_fnfield));
+	  new_sublist = XCNEW (struct next_fnfield);
 	  make_cleanup (xfree, new_sublist);
-	  memset (new_sublist, 0, sizeof (struct next_fnfield));
 
 	  /* Check for and handle cretinous dbx symbol name continuation!  */
 	  if (look_ahead_type == NULL)
@@ -2476,14 +2473,21 @@ read_member_functions (struct field_info *fip, char **pp, struct type *type,
 	      p++;
 	    }
 
-	  /* If this is just a stub, then we don't have the real name here.  */
+	  /* These are methods, not functions.  */
+	  if (TYPE_CODE (new_sublist->fn_field.type) == TYPE_CODE_FUNC)
+	    TYPE_CODE (new_sublist->fn_field.type) = TYPE_CODE_METHOD;
+	  else
+	    gdb_assert (TYPE_CODE (new_sublist->fn_field.type)
+			== TYPE_CODE_METHOD);
 
+	  /* If this is just a stub, then we don't have the real name here.  */
 	  if (TYPE_STUB (new_sublist->fn_field.type))
 	    {
-	      if (!TYPE_DOMAIN_TYPE (new_sublist->fn_field.type))
-		TYPE_DOMAIN_TYPE (new_sublist->fn_field.type) = type;
+	      if (!TYPE_SELF_TYPE (new_sublist->fn_field.type))
+		set_type_self_type (new_sublist->fn_field.type, type);
 	      new_sublist->fn_field.is_stub = 1;
 	    }
+
 	  new_sublist->fn_field.physname = savestring (*pp, p - *pp);
 	  *pp = p + 1;
 
@@ -2728,17 +2732,16 @@ read_member_functions (struct field_info *fip, char **pp, struct type *type,
 
 	      /* Create a new fn_fieldlist for the destructors.  */
 
-	      destr_fnlist = (struct next_fnfieldlist *)
-		xmalloc (sizeof (struct next_fnfieldlist));
+	      destr_fnlist = XCNEW (struct next_fnfieldlist);
 	      make_cleanup (xfree, destr_fnlist);
-	      memset (destr_fnlist, 0, sizeof (struct next_fnfieldlist));
+
 	      destr_fnlist->fn_fieldlist.name
 		= obconcat (&objfile->objfile_obstack, "~",
 			    new_fnlist->fn_fieldlist.name, (char *) NULL);
 
-	      destr_fnlist->fn_fieldlist.fn_fields = (struct fn_field *)
-		obstack_alloc (&objfile->objfile_obstack,
-			       sizeof (struct fn_field) * has_destructor);
+	      destr_fnlist->fn_fieldlist.fn_fields =
+		XOBNEWVEC (&objfile->objfile_obstack,
+			   struct fn_field, has_destructor);
 	      memset (destr_fnlist->fn_fieldlist.fn_fields, 0,
 		  sizeof (struct fn_field) * has_destructor);
 	      tmp_sublist = sublist;
@@ -2808,8 +2811,9 @@ read_member_functions (struct field_info *fip, char **pp, struct type *type,
 					     dem_opname, 0);
 	      if (ret)
 		new_fnlist->fn_fieldlist.name
-		  = obstack_copy0 (&objfile->objfile_obstack,
-				   dem_opname, strlen (dem_opname));
+		  = ((const char *)
+		     obstack_copy0 (&objfile->objfile_obstack, dem_opname,
+				    strlen (dem_opname)));
 	      xfree (main_fn_name);
 	    }
 
@@ -2950,8 +2954,8 @@ read_one_struct_field (struct field_info *fip, char **pp, char *p,
 {
   struct gdbarch *gdbarch = get_objfile_arch (objfile);
 
-  fip->list->field.name =
-    obstack_copy0 (&objfile->objfile_obstack, *pp, p - *pp);
+  fip->list->field.name
+    = (const char *) obstack_copy0 (&objfile->objfile_obstack, *pp, p - *pp);
   *pp = p + 1;
 
   /* This means we have a visibility for a field coming.  */
@@ -3092,7 +3096,7 @@ read_struct_fields (struct field_info *fip, char **pp, struct type *type,
 		    struct objfile *objfile)
 {
   char *p;
-  struct nextfield *new;
+  struct nextfield *newobj;
 
   /* We better set p right now, in case there are no fields at all...    */
 
@@ -3108,11 +3112,11 @@ read_struct_fields (struct field_info *fip, char **pp, struct type *type,
     {
       STABS_CONTINUE (pp, objfile);
       /* Get space to record the next field's data.  */
-      new = (struct nextfield *) xmalloc (sizeof (struct nextfield));
-      make_cleanup (xfree, new);
-      memset (new, 0, sizeof (struct nextfield));
-      new->next = fip->list;
-      fip->list = new;
+      newobj = XCNEW (struct nextfield);
+      make_cleanup (xfree, newobj);
+
+      newobj->next = fip->list;
+      fip->list = newobj;
 
       /* Get the field name.  */
       p = *pp;
@@ -3190,7 +3194,7 @@ read_baseclasses (struct field_info *fip, char **pp, struct type *type,
 		  struct objfile *objfile)
 {
   int i;
-  struct nextfield *new;
+  struct nextfield *newobj;
 
   if (**pp != '!')
     {
@@ -3230,12 +3234,12 @@ read_baseclasses (struct field_info *fip, char **pp, struct type *type,
 
   for (i = 0; i < TYPE_N_BASECLASSES (type); i++)
     {
-      new = (struct nextfield *) xmalloc (sizeof (struct nextfield));
-      make_cleanup (xfree, new);
-      memset (new, 0, sizeof (struct nextfield));
-      new->next = fip->list;
-      fip->list = new;
-      FIELD_BITSIZE (new->field) = 0;	/* This should be an unpacked
+      newobj = XCNEW (struct nextfield);
+      make_cleanup (xfree, newobj);
+
+      newobj->next = fip->list;
+      fip->list = newobj;
+      FIELD_BITSIZE (newobj->field) = 0;	/* This should be an unpacked
 					   field!  */
 
       STABS_CONTINUE (pp, objfile);
@@ -3257,8 +3261,8 @@ read_baseclasses (struct field_info *fip, char **pp, struct type *type,
 	}
       ++(*pp);
 
-      new->visibility = *(*pp)++;
-      switch (new->visibility)
+      newobj->visibility = *(*pp)++;
+      switch (newobj->visibility)
 	{
 	case VISIBILITY_PRIVATE:
 	case VISIBILITY_PROTECTED:
@@ -3270,8 +3274,8 @@ read_baseclasses (struct field_info *fip, char **pp, struct type *type,
 	  {
 	    complaint (&symfile_complaints,
 		       _("Unknown visibility `%c' for baseclass"),
-		       new->visibility);
-	    new->visibility = VISIBILITY_PUBLIC;
+		       newobj->visibility);
+	    newobj->visibility = VISIBILITY_PUBLIC;
 	  }
 	}
 
@@ -3282,7 +3286,7 @@ read_baseclasses (struct field_info *fip, char **pp, struct type *type,
 	   corresponding to this baseclass.  Always zero in the absence of
 	   multiple inheritance.  */
 
-	SET_FIELD_BITPOS (new->field, read_huge_number (pp, ',', &nbits, 0));
+	SET_FIELD_BITPOS (newobj->field, read_huge_number (pp, ',', &nbits, 0));
 	if (nbits != 0)
 	  return 0;
       }
@@ -3291,8 +3295,8 @@ read_baseclasses (struct field_info *fip, char **pp, struct type *type,
          base class.  Read it, and remember it's type name as this
          field's name.  */
 
-      new->field.type = read_type (pp, objfile);
-      new->field.name = type_name_no_tag (new->field.type);
+      newobj->field.type = read_type (pp, objfile);
+      newobj->field.name = type_name_no_tag (newobj->field.type);
 
       /* Skip trailing ';' and bump count of number of fields seen.  */
       if (**pp == ';')
@@ -3360,7 +3364,7 @@ read_tilde_fields (struct field_info *fip, char **pp, struct type *type,
 	      return 0;
 	    }
 
-	  TYPE_VPTR_BASETYPE (type) = t;
+	  set_type_vptr_basetype (type, t);
 	  if (type == t)	/* Our own class provides vtbl ptr.  */
 	    {
 	      for (i = TYPE_NFIELDS (t) - 1;
@@ -3372,7 +3376,7 @@ read_tilde_fields (struct field_info *fip, char **pp, struct type *type,
 		  if (!strncmp (name, vptr_name, sizeof (vptr_name) - 2)
 		      && is_cplus_marker (name[sizeof (vptr_name) - 2]))
 		    {
-		      TYPE_VPTR_FIELDNO (type) = i;
+		      set_type_vptr_fieldno (type, i);
 		      goto gotit;
 		    }
 		}
@@ -3385,7 +3389,7 @@ read_tilde_fields (struct field_info *fip, char **pp, struct type *type,
 	    }
 	  else
 	    {
-	      TYPE_VPTR_FIELDNO (type) = TYPE_VPTR_FIELDNO (t);
+	      set_type_vptr_fieldno (type, TYPE_VPTR_FIELDNO (t));
 	    }
 
 	gotit:
@@ -3630,7 +3634,10 @@ read_struct_type (char **pp, struct type *type, enum type_code type_code,
 
     TYPE_LENGTH (type) = read_huge_number (pp, 0, &nbits, 0);
     if (nbits != 0)
-      return error_type (pp, objfile);
+      {
+	do_cleanups (back_to);
+	return error_type (pp, objfile);
+      }
     set_length_in_type_chain (type);
   }
 
@@ -3777,7 +3784,7 @@ stabs_evaluate_allocated_safely (void *baton, struct value *val, void* frame)
       upper = value_as_long ( value_at (objfile_type (b->objfile)->builtin_long, obj + offset + (i * 3 + 1) * (is64bit ? 8 : 4)))
 	+ lower - 1;
 
-      range_type = create_range_type (NULL, objfile_type (b->objfile)->builtin_long, lower, upper);
+      range_type = create_static_range_type (NULL, objfile_type (b->objfile)->builtin_long, lower, upper);
 
       target_type = create_array_type(NULL, target_type, range_type);
     }
@@ -3791,7 +3798,7 @@ stabs_evaluate_allocated_safely (void *baton, struct value *val, void* frame)
   else 
     {
       replace_type (type, target_type);
-      stabs_create_generic_allocated_baton (type, baton, range_type);
+      stabs_create_generic_allocated_baton (type, (struct stabs_alloc_baton *) baton, range_type);
     
     }
 
@@ -3804,14 +3811,19 @@ stabs_evaluate_allocated (void *baton, struct value *val, void* frame)
   volatile struct gdb_exception exception;
   CORE_ADDR array_addr = 0;  
 
-  TRY_CATCH (exception, -1)
+  TRY
     {
       array_addr = stabs_evaluate_allocated_safely (baton, val, frame);
     }
-  exception_print (gdb_stderr, exception); 
-  if (exception.reason != 0)
-    return 0;
-  else return array_addr;
+  CATCH (exception, RETURN_MASK_ALL)
+    {
+      exception_print (gdb_stderr, exception); 
+      if (exception.reason != 0)
+	return 0;
+    }
+  END_CATCH
+
+  return array_addr;
 }
 
 static struct type *
@@ -3829,7 +3841,7 @@ read_allocatable_array (struct type* type, char **pp, struct objfile *objfile, i
   baton->allocatable = allocatable;
   baton->descriptor_offset = offset;
   baton->objfile = objfile; 
-  range_type = create_range_type(NULL, objfile_type (objfile)->builtin_int, 0, 1);
+  range_type = create_static_range_type(NULL, objfile_type (objfile)->builtin_int, 0, 1);
   type = create_array_type(type, baton->element_type, range_type);
 
   stabs_create_generic_allocated_baton (type, baton, range_type);
@@ -3922,11 +3934,11 @@ read_array_type (char **pp, struct type *type,
 	return error_type (pp, objfile);
       ++*pp;
     }
-    if ((**pp < '0' || **pp > '9') && **pp != '-')
-      {
-	char t = **pp;
-	switch (**pp)
-	  {
+  if ((**pp < '0' || **pp > '9') && **pp != '-')
+    {
+      char t = **pp;
+      switch (**pp)
+	{
 	  case 'T':
 	  case 'A':
 	  case 'S':
@@ -3946,20 +3958,19 @@ read_array_type (char **pp, struct type *type,
 	    complaint (&symfile_complaints,
 		       _("Array bound type %c not handled yet"), **pp);
 	    break;
-	  }
-      }
-    else
-      lower = read_huge_number (pp, ';', &nbits, 0);
+	}
+    }
+  else
+    lower = read_huge_number (pp, ';', &nbits, 0);
 
-    if (nbits != 0)
-      return error_type (pp, objfile);
+  if (nbits != 0)
+    return error_type (pp, objfile);
 
-
-    if ((**pp < '0' || **pp > '9') && **pp != '-')
-      {
-	char t = **pp;
-	switch (**pp)
-	  {
+  if ((**pp < '0' || **pp > '9') && **pp != '-')
+    {
+      char t = **pp;
+      switch (**pp)
+	{
 	  case 'T':
 	  case 'A':
 	  case 'S':
@@ -3981,24 +3992,18 @@ read_array_type (char **pp, struct type *type,
 	  default:
 	    complaint (&symfile_complaints,
 		       _("Array bound type %c not handled yet"), **pp);
-	  }
-      }
-    else
-      {
-	upper = read_huge_number (pp, ';', &nbits, 0);
-	if (nbits != 0)
-	  return error_type (pp, objfile);
-      }
-    element_type = read_type (pp, objfile);
-
-/*   if (adjustable)		 */
-/*     { */
-/*       lower = 0; */
-/*       upper = -1; */
-/*     } */
+	}
+    }
+  else
+    {
+      upper = read_huge_number (pp, ';', &nbits, 0);
+      if (nbits != 0)
+	return error_type (pp, objfile);
+    }
+  element_type = read_type (pp, objfile);
 
   range_type =
-    create_range_type_d ((struct type *) NULL, index_type, lower, upper, lower_baton, upper_baton, NULL, (LONGEST (*)(void*, CORE_ADDR, void*)) &stabs_evaluate_bound);
+    create_static_range_type_d ((struct type *) NULL, index_type, lower, upper, lower_baton, upper_baton, NULL, (LONGEST (*)(void*, CORE_ADDR, void*)) &stabs_evaluate_bound);
   /* XLF emits arrays with minor dimension first, but GDB expects major dimension first.  */
   if (current_subfile->language == language_fortran
       && TYPE_CODE (element_type) == TYPE_CODE_ARRAY)
@@ -4015,7 +4020,6 @@ read_array_type (char **pp, struct type *type,
     }
   else
       type = create_array_type (type, element_type, range_type);
-
 
   return type;
 }
@@ -4074,18 +4078,17 @@ read_enum_type (char **pp, struct type *type,
       p = *pp;
       while (*p != ':')
 	p++;
-      name = obstack_copy0 (&objfile->objfile_obstack, *pp, p - *pp);
+      name = (char *) obstack_copy0 (&objfile->objfile_obstack, *pp, p - *pp);
       *pp = p + 1;
       n = read_huge_number (pp, ',', &nbits, 0);
       if (nbits != 0)
 	return error_type (pp, objfile);
 
-      sym = (struct symbol *)
-	obstack_alloc (&objfile->objfile_obstack, sizeof (struct symbol));
-      memset (sym, 0, sizeof (struct symbol));
+      sym = allocate_symbol (objfile);
       SYMBOL_SET_LINKAGE_NAME (sym, name);
-      SYMBOL_SET_LANGUAGE (sym, current_subfile->language);
-      SYMBOL_CLASS (sym) = LOC_CONST;
+      SYMBOL_SET_LANGUAGE (sym, current_subfile->language,
+			   &objfile->objfile_obstack);
+      SYMBOL_ACLASS_INDEX (sym) = LOC_CONST;
       SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       SYMBOL_VALUE (sym) = n;
       if (n < 0)
@@ -4645,7 +4648,8 @@ handle_true_range:
       index_type = objfile_type (objfile)->builtin_int;
     }
 
-  result_type = create_range_type ((struct type *) NULL, index_type, n2, n3);
+  result_type
+    = create_static_range_type ((struct type *) NULL, index_type, n2, n3);
   return (result_type);
 }
 
@@ -4691,8 +4695,7 @@ read_args (char **pp, int end, struct objfile *objfile, int *nargsp,
       *varargsp = 0;
     }
 
-  rval = (struct field *) xmalloc (n * sizeof (struct field));
-  memset (rval, 0, n * sizeof (struct field));
+  rval = XCNEWVEC (struct field, n);
   for (i = 0; i < n; i++)
     rval[i].type = types[i];
   *nargsp = n;
@@ -4728,8 +4731,8 @@ common_block_start (char *name, struct objfile *objfile)
     }
   common_block = local_symbols;
   common_block_i = local_symbols ? local_symbols->nsyms : 0;
-  common_block_name = obstack_copy0 (&objfile->objfile_obstack,
-				     name, strlen (name));
+  common_block_name = (char *) obstack_copy0 (&objfile->objfile_obstack, name,
+					      strlen (name));
 }
 
 /* Process a N_ECOMM symbol.  */
@@ -4744,7 +4747,7 @@ common_block_end (struct objfile *objfile)
      symbol for the common block name for later fixup.  */
   int i;
   struct symbol *sym;
-  struct pending *new = 0;
+  struct pending *newobj = 0;
   struct pending *next;
   int j;
 
@@ -4754,12 +4757,10 @@ common_block_end (struct objfile *objfile)
       return;
     }
 
-  sym = (struct symbol *)
-    obstack_alloc (&objfile->objfile_obstack, sizeof (struct symbol));
-  memset (sym, 0, sizeof (struct symbol));
+  sym = allocate_symbol (objfile);
   /* Note: common_block_name already saved on objfile_obstack.  */
   SYMBOL_SET_LINKAGE_NAME (sym, common_block_name);
-  SYMBOL_CLASS (sym) = LOC_BLOCK;
+  SYMBOL_ACLASS_INDEX (sym) = LOC_BLOCK;
 
   /* Now we copy all the symbols which have been defined since the BCOMM.  */
 
@@ -4769,7 +4770,7 @@ common_block_end (struct objfile *objfile)
        next = next->next)
     {
       for (j = 0; j < next->nsyms; j++)
-	add_symbol_to_list (next->symbol[j], &new);
+	add_symbol_to_list (next->symbol[j], &newobj);
     }
 
   /* Copy however much of COMMON_BLOCK we need.  If COMMON_BLOCK is
@@ -4778,9 +4779,9 @@ common_block_end (struct objfile *objfile)
 
   if (common_block != NULL)
     for (j = common_block_i; j < common_block->nsyms; j++)
-      add_symbol_to_list (common_block->symbol[j], &new);
+      add_symbol_to_list (common_block->symbol[j], &newobj);
 
-  SYMBOL_TYPE (sym) = (struct type *) new;
+  SYMBOL_TYPE (sym) = (struct type *) newobj;
 
   /* Should we be putting local_symbols back to what it was?
      Does it matter?  */
@@ -4950,9 +4951,9 @@ cleanup_undefined_types_1 (void)
 		struct pending *ppt;
 		int i;
 		/* Name of the type, without "struct" or "union".  */
-		const char *typename = TYPE_TAG_NAME (*type);
+		const char *type_name = TYPE_TAG_NAME (*type);
 
-		if (typename == NULL)
+		if (type_name == NULL)
 		  {
 		    complaint (&symfile_complaints, _("need a type name"));
 		    break;
@@ -4970,7 +4971,7 @@ cleanup_undefined_types_1 (void)
 			    && (TYPE_INSTANCE_FLAGS (*type) ==
 				TYPE_INSTANCE_FLAGS (SYMBOL_TYPE (sym)))
 			    && strcmp (SYMBOL_LINKAGE_NAME (sym),
-				       typename) == 0)
+				       type_name) == 0)
                           replace_type (*type, SYMBOL_TYPE (sym));
 		      }
 		  }
@@ -5056,11 +5057,11 @@ scan_file_globals (struct objfile *objfile)
 	  /* Get the hash index and check all the symbols
 	     under that hash index.  */
 
-	  hash = hashname (SYMBOL_LINKAGE_NAME (msymbol));
+	  hash = hashname (MSYMBOL_LINKAGE_NAME (msymbol));
 
 	  for (sym = global_sym_chain[hash]; sym;)
 	    {
-	      if (strcmp (SYMBOL_LINKAGE_NAME (msymbol),
+	      if (strcmp (MSYMBOL_LINKAGE_NAME (msymbol),
 			  SYMBOL_LINKAGE_NAME (sym)) == 0)
 		{
 		  /* Splice this symbol out of the hash chain and
@@ -5082,14 +5083,15 @@ scan_file_globals (struct objfile *objfile)
 		      if (SYMBOL_CLASS (sym) == LOC_BLOCK)
 			{
 			  fix_common_block (sym,
-					    SYMBOL_VALUE_ADDRESS (msymbol));
+					    MSYMBOL_VALUE_ADDRESS (resolve_objfile,
+								   msymbol));
 			}
 		      else
 			{
 			  SYMBOL_VALUE_ADDRESS (sym)
-			    = SYMBOL_VALUE_ADDRESS (msymbol);
+			    = MSYMBOL_VALUE_ADDRESS (resolve_objfile, msymbol);
 			}
-		      SYMBOL_SECTION (sym) = SYMBOL_SECTION (msymbol);
+		      SYMBOL_SECTION (sym) = MSYMBOL_SECTION (msymbol);
 		    }
 
 		  if (prev)
@@ -5129,12 +5131,12 @@ scan_file_globals (struct objfile *objfile)
 
 	  /* Complain about unresolved common block symbols.  */
 	  if (SYMBOL_CLASS (prev) == LOC_STATIC)
-	    SYMBOL_CLASS (prev) = LOC_UNRESOLVED;
+	    SYMBOL_ACLASS_INDEX (prev) = LOC_UNRESOLVED;
 	  else
 	    complaint (&symfile_complaints,
 		       _("%s: common block `%s' from "
 			 "global_sym_chain unresolved"),
-		       objfile->name, SYMBOL_PRINT_NAME (prev));
+		       objfile_name (objfile), SYMBOL_PRINT_NAME (prev));
 	}
     }
   memset (global_sym_chain, 0, sizeof (global_sym_chain));
@@ -5237,11 +5239,14 @@ _initialize_stabsread (void)
 
   undef_types_allocated = 20;
   undef_types_length = 0;
-  undef_types = (struct type **)
-    xmalloc (undef_types_allocated * sizeof (struct type *));
+  undef_types = XNEWVEC (struct type *, undef_types_allocated);
 
   noname_undefs_allocated = 20;
   noname_undefs_length = 0;
-  noname_undefs = (struct nat *)
-    xmalloc (noname_undefs_allocated * sizeof (struct nat));
+  noname_undefs = XNEWVEC (struct nat, noname_undefs_allocated);
+
+  stab_register_index = register_symbol_register_impl (LOC_REGISTER,
+						       &stab_register_funcs);
+  stab_regparm_index = register_symbol_register_impl (LOC_REGPARM_ADDR,
+						      &stab_register_funcs);
 }

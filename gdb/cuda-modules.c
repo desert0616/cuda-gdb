@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -17,7 +17,7 @@
 
 #include "defs.h"
 #include "breakpoint.h"
-#include "gdb_assert.h"
+#include "common-defs.h"
 #include "objfiles.h"
 #include "source.h"
 
@@ -45,7 +45,7 @@ module_new (context_t context, uint64_t module_id, void *elf_image, uint64_t elf
 {
   module_t module;
 
-  module = xmalloc (sizeof *module);
+  module = (module_t) xmalloc (sizeof *module);
   module->context    = context;
   module->module_id  = module_id;
   module->elf_image  = cuda_elf_image_new (elf_image, elf_image_size, module);
@@ -115,7 +115,7 @@ modules_new (void)
 {
   modules_t modules;
 
-  modules = xmalloc (sizeof *modules);
+  modules = (modules_t) xmalloc (sizeof *modules);
   modules->head = NULL;
 
   return modules;

@@ -1,6 +1,5 @@
 /* BFD PowerPC CPU definition
-   Copyright 1994, 1995, 1996, 2000, 2001, 2002, 2003, 2005, 2007, 2008,
-   2010, 2012 Free Software Foundation, Inc.
+   Copyright (C) 1994-2016 Free Software Foundation, Inc.
    Contributed by Ian Lance Taylor, Cygnus Support.
 
    This file is part of BFD, the Binary File Descriptor library.
@@ -36,6 +35,10 @@ powerpc_compatible (const bfd_arch_info_type *a,
     default:
       return NULL;
     case bfd_arch_powerpc:
+      if (a->mach == bfd_mach_ppc_vle && b->bits_per_word == 32)
+	return a;
+      if (b->mach == bfd_mach_ppc_vle && a->bits_per_word == 32)
+	return b;
       return bfd_default_compatible (a, b);
     case bfd_arch_rs6000:
       if (b->mach == bfd_mach_rs6k)

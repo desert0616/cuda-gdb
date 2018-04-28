@@ -40,6 +40,7 @@ INSTALL_PROGRAM = @INSTALL_PROGRAM@
 LDFLAGS = @LDFLAGS@
 LIBICONV = @LIBICONV@
 PACKAGE = @PACKAGE@
+PICFLAG = @PICFLAG@
 RANLIB = @RANLIB@
 SHELL = @SHELL@
 objext = @OBJEXT@
@@ -57,7 +58,7 @@ enable_decimal_float= @enable_decimal_float@
 
 INCLUDES = -I$(srcdir) -I.
 
-ALL_CFLAGS = $(CFLAGS) $(WARN_CFLAGS) $(INCLUDES) $(CPPFLAGS)
+ALL_CFLAGS = $(CFLAGS) $(WARN_CFLAGS) $(INCLUDES) $(CPPFLAGS) $(PICFLAG)
 
 bid_OBJS = bid2dpd_dpd2bid.$(objext) host-ieee32.$(objext) \
 	host-ieee64.$(objext) host-ieee128.$(objext)
@@ -165,6 +166,8 @@ maintainer-clean: distclean
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
 	-rm -f $(srcdir)/configure $(srcdir)/aclocal.m4
+
+TAGS:
 
 check:
 installcheck:

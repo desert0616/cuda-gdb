@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -66,17 +66,21 @@ typedef enum {
   CUDA_SELECT_SNGL  = 0x008,
 } cuda_select_t;
 
-#define CUDA_INVALID_COORDS ((cuda_coords_t)                             \
-            { false, CUDA_INVALID, CUDA_INVALID,                         \
-            { CUDA_INVALID, CUDA_INVALID, CUDA_INVALID },                \
-            { CUDA_INVALID, CUDA_INVALID, CUDA_INVALID },                \
-            CUDA_INVALID, CUDA_INVALID, CUDA_INVALID, CUDA_INVALID })
+#define CUDA_INVALID_COORDS_INIT					\
+    { false, CUDA_INVALID, CUDA_INVALID,				\
+            { CUDA_INVALID, CUDA_INVALID, CUDA_INVALID },		\
+	    { CUDA_INVALID, CUDA_INVALID, CUDA_INVALID },		\
+	    CUDA_INVALID, CUDA_INVALID, CUDA_INVALID, CUDA_INVALID }
 
-#define CUDA_WILDCARD_COORDS ((cuda_coords_t)                            \
-            { true, CUDA_WILDCARD, CUDA_WILDCARD,                        \
-            { CUDA_WILDCARD, CUDA_WILDCARD, CUDA_WILDCARD },             \
-            { CUDA_WILDCARD, CUDA_WILDCARD, CUDA_WILDCARD },             \
-            CUDA_WILDCARD, CUDA_WILDCARD, CUDA_WILDCARD, CUDA_WILDCARD })
+#define CUDA_INVALID_COORDS ((cuda_coords_t) CUDA_INVALID_COORDS_INIT)
+
+#define CUDA_WILDCARD_COORDS_INIT					\
+    { true, CUDA_WILDCARD, CUDA_WILDCARD,				\
+            { CUDA_WILDCARD, CUDA_WILDCARD, CUDA_WILDCARD },		\
+	    { CUDA_WILDCARD, CUDA_WILDCARD, CUDA_WILDCARD },		\
+            CUDA_WILDCARD, CUDA_WILDCARD, CUDA_WILDCARD, CUDA_WILDCARD }
+
+#define CUDA_WILDCARD_COORDS ((cuda_coords_t) CUDA_WILDCARD_COORDS_INIT)
 
 #define CUDA_COORD_IS_SPECIAL(x)                                         \
   ((x) == CUDA_INVALID || (x) == CUDA_WILDCARD || (x) == CUDA_CURRENT)

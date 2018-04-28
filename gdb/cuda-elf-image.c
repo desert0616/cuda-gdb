@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -19,7 +19,7 @@
 
 #include "defs.h"
 #include "breakpoint.h"
-#include "gdb_assert.h"
+#include "common-defs.h"
 #include "source.h"
 
 #include "cuda-context.h"
@@ -52,7 +52,7 @@ cuda_elf_image_new (void *image, uint64_t size, module_t module)
 {
   elf_image_t elf_image;
 
-  elf_image = xmalloc (sizeof (*elf_image));
+  elf_image = (elf_image_t) xmalloc (sizeof (*elf_image));
   elf_image->size     = size;
   elf_image->loaded   = false;
   elf_image->uses_abi = false;
@@ -226,19 +226,20 @@ cuda_elf_image_load (elf_image_t elf_image, bool is_system)
 
   /* Load in the device ELF object file, forcing a symbol read and while
    * making sure that the breakpoints are not re-set automatically. */
-  objfile = symbol_file_add_from_bfd (abfd, SYMFILE_DEFER_BP_RESET,
-                                      NULL, 0, NULL);
+  objfile = symbol_file_add_from_bfd (abfd, bfd_get_filename (abfd),
+				      SYMFILE_DEFER_BP_RESET, NULL, 0,
+				      NULL);
   if (!objfile)
     error (_("Error: Failed to add symbols from device ELF symbol file!\n"));
 
   /* Identify this gdb objfile as being cuda-specific */
   objfile->cuda_objfile   = 1;
-  objfile->gdbarch        = cuda_get_gdbarch ();
+  objfile->per_bfd->gdbarch        = cuda_get_gdbarch ();
   /* CUDA - skip prologue - temporary */
   objfile->cuda_producer_is_open64 = cuda_producer_is_open64;
 
   /* CUDA - line info */
-  if (!objfile->symtabs)
+  if (!objfile->compunit_symtabs)
     cuda_decode_line_table (objfile);
 
   /* Initialize the elf_image object */
@@ -247,7 +248,7 @@ cuda_elf_image_load (elf_image_t elf_image, bool is_system)
   elf_image->system   = is_system;
   elf_image->uses_abi = cuda_is_bfd_version_call_abi (objfile->obfd);
   cuda_trace ("loaded ELF image (name=%s, module=%p, abi=%d, objfile=%p)",
-              objfile->name, elf_image->module,
+              objfile->original_name, elf_image->module,
               elf_image->uses_abi, objfile);
 
   cuda_resolve_breakpoints (0, elf_image);
@@ -267,7 +268,10 @@ cuda_elf_image_unload (elf_image_t elf_image)
   gdb_assert (objfile->cuda_objfile);
 
   cuda_trace ("unloading ELF image (name=%s, module=%p)",
-              objfile->name, elf_image->module);
+              objfile->original_name, elf_image->module);
+
+  /* Mark this objfile as being discarded.  */
+  objfile->discarding = 1;
 
   /* Make sure that all its users will be cleaned up. */
   clear_current_source_symtab_and_line ();
@@ -281,4 +285,14 @@ cuda_elf_image_unload (elf_image_t elf_image)
 
   cuda_auto_breakpoints_remove_locations (elf_image);
   cuda_unresolve_breakpoints (elf_image);
+}
+
+elf_image_t
+cuda_get_elf_image_by_objfile (struct objfile *objfile)
+{
+  elf_image_t elf_image;
+  CUDA_ALL_LOADED_ELF_IMAGES(elf_image)
+    if (cuda_elf_image_get_objfile(elf_image) == objfile)
+      return elf_image;
+  return NULL;
 }

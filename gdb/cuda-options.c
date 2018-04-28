@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -47,7 +47,7 @@ static void
 set_cuda (char *arg, int from_tty)
 {
   printf_unfiltered (_("\"set cuda\" must be followed by the name of a cuda subcommand.\n"));
-  help_list (setcudalist, "set cuda ", -1, gdb_stdout);
+  help_list (setcudalist, "set cuda ", (enum command_class) -1, gdb_stdout);
 }
 
 static void
@@ -75,7 +75,7 @@ static void
 set_debug_cuda (char *arg, int from_tty)
 {
   printf_unfiltered (_("\"set debug cuda\" must be followed by the name of a debug cuda subcommand.\n"));
-  help_list (setdebugcudalist, "set debug cuda ", -1, gdb_stdout);
+  help_list (setdebugcudalist, "set debug cuda ", (enum command_class) -1, gdb_stdout);
 }
 
 static void
@@ -112,7 +112,7 @@ static struct {
   {"api", CUDA_TRACE_API, "show/hide CUDA Debugger API trace messages"},
   {"textures", CUDA_TRACE_TEXTURES, "show/hide trace of CUDA texture accesses"},
   {"siginfo", CUDA_TRACE_SIGINFO, "When enabled, update $_siginfo if the application is signalled by a CUDA exception"},
-  {NULL, 0, NULL},
+  {NULL, (cuda_trace_domain_t) 0, NULL},
 };
 
 bool
@@ -236,7 +236,7 @@ cuda_options_initialize_debug_trace (void)
 }
 
 bool
-cuda_options_debug_general ()
+cuda_options_debug_general (void)
 {
   return cuda_options_trace_domain_enabled (CUDA_TRACE_GENERAL);
 }
@@ -262,7 +262,7 @@ cuda_set_debug_notifications (char *args, int from_tty,
 }
 
 static void
-cuda_options_initialize_debug_notifications ()
+cuda_options_initialize_debug_notifications (void)
 {
   cuda_debug_notifications = false;
 
@@ -275,7 +275,7 @@ cuda_options_initialize_debug_notifications ()
 }
 
 bool
-cuda_options_debug_notifications ()
+cuda_options_debug_notifications (void)
 {
   return cuda_debug_notifications;
 }
@@ -302,7 +302,7 @@ cuda_set_debug_libcudbg (char *args, int from_tty,
 }
 
 static void
-cuda_options_initialize_debug_libcudbg ()
+cuda_options_initialize_debug_libcudbg (void)
 {
   cuda_debug_libcudbg = false;
 
@@ -315,7 +315,7 @@ cuda_options_initialize_debug_libcudbg ()
 }
 
 bool
-cuda_options_debug_libcudbg ()
+cuda_options_debug_libcudbg (void)
 {
   return cuda_debug_libcudbg;
 }
@@ -398,7 +398,7 @@ cuda_show_debug_strict (struct ui_file *file, int from_tty,
 }
 
 static void
-cuda_options_initialize_debug_strict ()
+cuda_options_initialize_debug_strict (void)
 {
   cuda_debug_strict = false;
 
@@ -411,7 +411,7 @@ cuda_options_initialize_debug_strict ()
 }
 
 bool
-cuda_options_debug_strict ()
+cuda_options_debug_strict (void)
 {
   return cuda_debug_strict;
 }
@@ -430,7 +430,7 @@ cuda_show_cuda_memcheck (struct ui_file *file, int from_tty,
 }
 
 static void
-cuda_options_initialize_memcheck ()
+cuda_options_initialize_memcheck (void)
 {
   cuda_memcheck = AUTO_BOOLEAN_AUTO;
 
@@ -478,7 +478,7 @@ cuda_show_coalescing (struct ui_file *file, int from_tty,
 }
 
 static void
-cuda_options_initialize_coalescing ()
+cuda_options_initialize_coalescing (void)
 {
   cuda_coalescing_auto = true;
   cuda_coalescing      = AUTO_BOOLEAN_AUTO;
@@ -703,7 +703,7 @@ cuda_show_hide_internal_frames (struct ui_file *file, int from_tty,
 }
 
 static void
-cuda_options_initialize_hide_internal_frames ()
+cuda_options_initialize_hide_internal_frames (void)
 {
   cuda_hide_internal_frames = 1;
 
@@ -1065,7 +1065,7 @@ cuda_show_cuda_software_preemption (struct ui_file *file, int from_tty,
 }
 
 static void
-cuda_options_initialize_software_preemption ()
+cuda_options_initialize_software_preemption (void)
 {
   cuda_software_preemption = AUTO_BOOLEAN_AUTO;
 
@@ -1106,7 +1106,7 @@ cuda_show_cuda_gpu_busy_check (struct ui_file *file, int from_tty,
 }
 
 static void
-cuda_options_initialize_gpu_busy_check ()
+cuda_options_initialize_gpu_busy_check (void)
 {
   cuda_gpu_busy_check = AUTO_BOOLEAN_TRUE;
 
@@ -1139,7 +1139,7 @@ cuda_show_cuda_variable_value_cache_enabled (struct ui_file *file, int from_tty,
 }
 
 static void
-cuda_options_initialize_variable_value_cache_enabled ()
+cuda_options_initialize_variable_value_cache_enabled (void)
 {
   cuda_variable_value_cache_enabled = AUTO_BOOLEAN_TRUE;
 
@@ -1275,7 +1275,7 @@ cuda_print_regmap (char *args, int from_tty)
     {
       if (!objfile->cuda_objfile)
         continue;
-      printf( "Objfile %s \n", objfile->name);
+      printf( "Objfile %s \n", objfile->original_name);
       regmap_table_print (objfile);
     }
 }
@@ -1378,9 +1378,40 @@ cuda_options_initialize_stop_signal (void)
                           &setcudalist, &showcudalist);
 }
 
+/*
+ * set cuda device_resume_on_cpu_dynamic_function_call
+ */
+static int cuda_device_resume_on_cpu_dynamic_function_call;
+
+static void
+cuda_show_no_device_resume_on_cpu_dynamic_function_call (struct ui_file *file, int from_tty,
+                                                         struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("CUDA device resume during dynamic function call on host is %s.\n"), value);
+}
+
+static void
+cuda_options_initialize_device_resume_on_cpu_dynamic_function_call (void)
+{
+  cuda_device_resume_on_cpu_dynamic_function_call = true;
+
+  add_setshow_boolean_cmd ("device_resume_on_cpu_dynamic_function_call", class_maintenance, &cuda_device_resume_on_cpu_dynamic_function_call,
+                           _("Turn on/off resuming device during dynamic function call on host"),
+                           _("Show if resuming device during dynamic function call on host is enabled"),
+                           _("When non-zero, CUDA device is resumed during dynamic function call on host."),
+                           NULL, cuda_show_no_device_resume_on_cpu_dynamic_function_call,
+                           &setcudalist, &showcudalist);
+}
+
+bool
+cuda_options_device_resume_on_cpu_dynamic_function_call (void)
+{
+  return cuda_device_resume_on_cpu_dynamic_function_call;
+}
+
 /*Initialization */
 void
-cuda_options_initialize ()
+cuda_options_initialize (void)
 {
   cuda_options_initialize_cuda_prefix ();
   cuda_options_initialize_debug_cuda_prefix ();
@@ -1408,4 +1439,5 @@ cuda_options_initialize ()
   cuda_options_initialize_value_extrapolation ();
   cuda_options_initialize_single_stepping_optimization ();
   cuda_options_initialize_stop_signal ();
+  cuda_options_initialize_device_resume_on_cpu_dynamic_function_call ();
 }

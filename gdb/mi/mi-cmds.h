@@ -1,6 +1,6 @@
 /* MI Command Set for GDB, the GNU debugger.
 
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2016 Free Software Foundation, Inc.
 
    Contributed by Cygnus Solutions (a Red Hat company).
 
@@ -20,7 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2013 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Modified from the original GDB file referenced above by the CUDA-GDB 
  * team at NVIDIA <cudatools@nvidia.com>.
  *
@@ -46,10 +46,6 @@ enum print_values {
    PRINT_SIMPLE_VALUES
 };
 
-extern const char mi_no_values[];
-extern const char mi_simple_values[];
-extern const char mi_all_values[];
-
 typedef void (mi_cmd_argv_ftype) (char *command, char **argv, int argc);
 
 /* Declarations of the functions implementing each command.  */
@@ -57,6 +53,7 @@ typedef void (mi_cmd_argv_ftype) (char *command, char **argv, int argc);
 extern mi_cmd_argv_ftype mi_cmd_ada_task_info;
 extern mi_cmd_argv_ftype mi_cmd_add_inferior;
 extern mi_cmd_argv_ftype mi_cmd_break_insert;
+extern mi_cmd_argv_ftype mi_cmd_dprintf_insert;
 extern mi_cmd_argv_ftype mi_cmd_break_commands;
 extern mi_cmd_argv_ftype mi_cmd_break_passcount;
 extern mi_cmd_argv_ftype mi_cmd_break_watch;
@@ -72,6 +69,8 @@ extern mi_cmd_argv_ftype mi_cmd_cuda_info_launch_children;
 extern mi_cmd_argv_ftype mi_cmd_cuda_info_contexts;
 extern mi_cmd_argv_ftype mi_cmd_cuda_focus_query;
 extern mi_cmd_argv_ftype mi_cmd_cuda_focus_switch;
+extern mi_cmd_argv_ftype mi_cmd_catch_assert;
+extern mi_cmd_argv_ftype mi_cmd_catch_exception;
 extern mi_cmd_argv_ftype mi_cmd_catch_load;
 extern mi_cmd_argv_ftype mi_cmd_catch_unload;
 extern mi_cmd_argv_ftype mi_cmd_disassemble;
@@ -104,6 +103,8 @@ extern mi_cmd_argv_ftype mi_cmd_file_list_exec_source_files;
 extern mi_cmd_argv_ftype mi_cmd_gdb_exit;
 extern mi_cmd_argv_ftype mi_cmd_inferior_tty_set;
 extern mi_cmd_argv_ftype mi_cmd_inferior_tty_show;
+extern mi_cmd_argv_ftype mi_cmd_info_ada_exceptions;
+extern mi_cmd_argv_ftype mi_cmd_info_gdb_mi_command;
 extern mi_cmd_argv_ftype mi_cmd_info_os;
 extern mi_cmd_argv_ftype mi_cmd_interpreter_exec;
 extern mi_cmd_argv_ftype mi_cmd_list_features;
@@ -127,6 +128,7 @@ extern mi_cmd_argv_ftype mi_cmd_thread_list_ids;
 extern mi_cmd_argv_ftype mi_cmd_thread_select;
 extern mi_cmd_argv_ftype mi_cmd_trace_define_variable;
 extern mi_cmd_argv_ftype mi_cmd_trace_find;
+extern mi_cmd_argv_ftype mi_cmd_trace_frame_collected;
 extern mi_cmd_argv_ftype mi_cmd_trace_list_variables;
 extern mi_cmd_argv_ftype mi_cmd_trace_save;
 extern mi_cmd_argv_ftype mi_cmd_trace_start;
@@ -148,6 +150,7 @@ extern mi_cmd_argv_ftype mi_cmd_var_show_attributes;
 extern mi_cmd_argv_ftype mi_cmd_var_show_format;
 extern mi_cmd_argv_ftype mi_cmd_var_update;
 extern mi_cmd_argv_ftype mi_cmd_enable_pretty_printing;
+extern mi_cmd_argv_ftype mi_cmd_enable_frame_filters;
 extern mi_cmd_argv_ftype mi_cmd_var_set_update_range;
 
 /* Description of a single command.  */
@@ -183,9 +186,6 @@ extern struct mi_cmd *mi_lookup (const char *command);
 
 /* Debug flag */
 extern int mi_debug_p;
-
-/* Raw console output - FIXME: should this be a parameter? */
-extern struct ui_file *raw_stdout;
 
 extern void mi_execute_command (const char *cmd, int from_tty);
 

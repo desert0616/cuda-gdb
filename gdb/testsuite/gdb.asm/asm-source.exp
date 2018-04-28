@@ -1,4 +1,4 @@
-# Copyright 1998-2013 Free Software Foundation, Inc.
+# Copyright 1998-2016 Free Software Foundation, Inc.
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -39,6 +39,9 @@ switch -glob -- [istarget] {
     }
     "arm*-*-*" {
         set asm-arch arm
+    }
+    "aarch64*-*-*" {
+	set asm-arch aarch64
     }
     "bfin-*-*" {
         set asm-arch bfin
@@ -97,6 +100,11 @@ switch -glob -- [istarget] {
     "mips*-*" {
         set asm-arch mips
     }
+    "powerpc64le-*" {
+        set asm-arch powerpc64le
+        set asm-flags "-a64 -I${srcdir}/${subdir} $obj_include"
+        append link-flags " -m elf64lppc"
+    }
     "powerpc*-*" {
         if { [is_lp64_target] } {
             set asm-arch powerpc64
@@ -151,10 +159,6 @@ switch -glob -- [istarget] {
         set asm-arch pa
 	set debug-flags "-gdwarf-2"
     }
-    "hppa64-*-hpux*" {
-        set asm-arch pa64
-	set debug-flags "-gdwarf-2"
-    }
     "h83*-*" {
 	set asm-arch h8300
         set debug-flags "-gdwarf-2"
@@ -194,16 +198,19 @@ if [board_info $dest exists multilib_flags] {
 	if { "${multilib_flags}" != "" } {
 	   untested asm-source.exp
 	   return -1
-	   return;
+	   return
 	 }
 }
 
 standard_testfile asmsrc1.s asmsrc2.s
 
-remote_exec build "rm -f ${subdir}/arch.inc"
-remote_download host ${srcdir}/${subdir}/${asm-arch}.inc ${subdir}/arch.inc
-remote_exec build "rm -f ${subdir}/note.inc"
-remote_download host ${srcdir}/${subdir}/${asm-note}.inc ${subdir}/note.inc
+set arch_inc [standard_output_file arch.inc]
+set note_inc [standard_output_file note.inc]
+
+remote_exec build "rm -f $arch_inc"
+remote_download host ${srcdir}/${subdir}/${asm-arch}.inc $arch_inc
+remote_exec build "rm -f $note_inc"
+remote_download host ${srcdir}/${subdir}/${asm-note}.inc $note_inc
 
 if { [string equal ${asm-flags} ""] } {
     set asm-flags "-I${srcdir}/${subdir} $obj_include"
@@ -267,6 +274,7 @@ if { [istarget "m6811-*-*"] || [istarget "m6812-*-*"] } {
 }
 
 # Collect some line numbers.
+set line_enter      [expr [gdb_get_line_number "main enter" "asmsrc1.s"] + 1]
 set line_main       [expr [gdb_get_line_number "main start" "asmsrc1.s"] + 1]
 set line_call_foo2  [expr [gdb_get_line_number "call foo2"  "asmsrc1.s"] + 1]
 set line_search_comment [expr [gdb_get_line_number "search" "asmsrc1.s"] + 1]
@@ -290,7 +298,10 @@ if ![runto_main] then {
 }
 
 # Execute the `f' command and see if the result includes source info.
-gdb_test "f" "asmsrc1\[.\]s:$line_main.*several_nops" "f at main"
+gdb_test "f" "asmsrc1\[.\]s:$line_enter.*gdbasm_enter" "f at main"
+
+# Execute the `n' command.
+gdb_test "n" "$line_main\[ 	\]*.*several_nops" "n at main"
 
 # See if we properly `next' over a macro with several insns.
 gdb_test "n" "$line_call_foo2\[ 	\]*.*foo2" "next over macro"
@@ -467,5 +478,5 @@ test_dis "disassem &staticvar, &staticvar+1" "staticvar"
 gdb_test "disassem foostatic" ".*<\\+0>:.*End of assembler dump." \
 	"look at static function"
 
-remote_exec build "rm -f ${subdir}/arch.inc"
-remote_exec build "rm -f ${subdir}/note.inc"
+remote_exec build "rm -f $arch_inc"
+remote_exec build "rm -f $note_inc"

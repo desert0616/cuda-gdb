@@ -1,5 +1,5 @@
 /* GNU/Linux/CRIS specific low level interface, for the remote server for GDB.
-   Copyright (C) 1995-2013 Free Software Foundation, Inc.
+   Copyright (C) 1995-2016 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -18,10 +18,11 @@
 
 #include "server.h"
 #include "linux-low.h"
-#include <sys/ptrace.h>
+#include "nat/gdb_ptrace.h"
 
 /* Defined in auto-generated file reg-cris.c.  */
 void init_registers_cris (void);
+extern const struct target_desc *tdesc_cris;
 
 /* CRISv10 */
 #define cris_num_regs 32
@@ -58,27 +59,17 @@ cris_cannot_fetch_register (int regno)
   return (regno >= cris_num_regs);
 }
 
-extern int debug_threads;
-
-static CORE_ADDR
-cris_get_pc (struct regcache *regcache, void)
-{
-  unsigned long pc;
-  collect_register_by_name (regcache, "pc", &pc);
-  if (debug_threads)
-    fprintf (stderr, "stop pc is %08lx\n", pc);
-  return pc;
-}
-
-static void
-cris_set_pc (struct regcache *regcache, CORE_ADDR pc)
-{
-  unsigned long newpc = pc;
-  supply_register_by_name (regcache, "pc", &newpc);
-}
-
 static const unsigned short cris_breakpoint = 0xe938;
 #define cris_breakpoint_len 2
+
+/* Implementation of linux_target_ops method "sw_breakpoint_from_kind".  */
+
+static const gdb_byte *
+cris_sw_breakpoint_from_kind (int kind, int *size)
+{
+  *size = cris_breakpoint_len;
+  return (const gdb_byte *) &cris_breakpoint;
+}
 
 static int
 cris_breakpoint_at (CORE_ADDR where)
@@ -95,35 +86,47 @@ cris_breakpoint_at (CORE_ADDR where)
   return 0;
 }
 
-/* We only place breakpoints in empty marker functions, and thread locking
-   is outside of the function.  So rather than importing software single-step,
-   we can just run until exit.  */
-static CORE_ADDR
-cris_reinsert_addr (void)
+static void
+cris_arch_setup (void)
 {
-  struct regcache *regcache = get_thread_regcache (current_inferior, 1);
-  unsigned long pc;
-  collect_register_by_name (regcache, "srp", &pc);
-  return pc;
+  current_process ()->tdesc = tdesc_cris;
+}
+
+static struct usrregs_info cris_usrregs_info =
+  {
+    cris_num_regs,
+    cris_regmap,
+  };
+
+static struct regs_info regs_info =
+  {
+    NULL, /* regset_bitmap */
+    &cris_usrregs_info,
+  };
+
+static const struct regs_info *
+cris_regs_info (void)
+{
+  return &regs_info;
 }
 
 struct linux_target_ops the_low_target = {
-  init_registers_cris,
-  cris_num_regs,
-  cris_regmap,
-  NULL,
+  cris_arch_setup,
+  cris_regs_info,
   cris_cannot_fetch_register,
   cris_cannot_store_register,
   NULL, /* fetch_register */
-  cris_get_pc,
-  cris_set_pc,
-  (const unsigned char *) &cris_breakpoint,
-  cris_breakpoint_len,
-  cris_reinsert_addr,
+  linux_get_pc_32bit,
+  linux_set_pc_32bit,
+  NULL, /* breakpoint_kind_from_pc */
+  cris_sw_breakpoint_from_kind,
+  NULL, /* get_next_pcs */
   0,
   cris_breakpoint_at,
-  0,
-  0,
-  0,
-  0,
 };
+
+void
+initialize_low_arch (void)
+{
+  init_registers_cris ();
+}

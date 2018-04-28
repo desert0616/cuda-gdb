@@ -1,5 +1,5 @@
 /*
- * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2015 NVIDIA Corporation
+ * NVIDIA CUDA Debugger CUDA-GDB Copyright (C) 2007-2017 NVIDIA Corporation
  * Written by CUDA-GDB team at NVIDIA <cudatools@nvidia.com>
  * 
  * This program is free software; you can redistribute it and/or modify
@@ -19,7 +19,7 @@
 
 #include "defs.h"
 #include "breakpoint.h"
-#include "gdb_assert.h"
+#include "common-defs.h"
 
 #include "cuda-context.h"
 #include "cuda-defs.h"
@@ -74,8 +74,8 @@ typedef struct {
 typedef struct {
   bool valid_warps_mask_p;
   bool broken_warps_mask_p;
-  uint64_t valid_warps_mask;
-  uint64_t broken_warps_mask;
+  cuda_api_warpmask valid_warps_mask;
+  cuda_api_warpmask broken_warps_mask;
   warp_state_t wp[CUDBG_MAX_WARPS];
 } sm_state_t;
 
@@ -89,6 +89,7 @@ typedef struct {
   bool pci_bus_info_p;
   bool dev_type_p;
   bool sm_type_p;
+  bool inst_size_p;
   bool dev_name_p;
   bool sm_exception_mask_valid_p;
   bool valid;             // at least one active lane
@@ -97,6 +98,7 @@ typedef struct {
   char dev_type[256];
   char dev_name[256];
   char sm_type[16];
+  uint32_t inst_size;
   uint32_t num_sms;
   uint32_t num_warps;
   uint32_t num_lanes;
@@ -104,7 +106,7 @@ typedef struct {
   uint32_t num_predicates;
   uint32_t pci_dev_id;
   uint32_t pci_bus_id;
-  uint64_t sm_exception_mask;
+  uint64_t sm_exception_mask[(CUDBG_MAX_SMS + 63) / 64];    // Mask needs to be large enough to hold all the SMs, rounded up
   sm_state_t sm[CUDBG_MAX_SMS];
   contexts_t contexts;    // state for contexts associated with this device
 } device_state_t;
@@ -341,7 +343,7 @@ device_get (uint32_t dev_id)
   dev = cuda_system_info.dev[dev_id];
   if (!dev)
     {
-      dev = malloc (sizeof *dev);
+      dev = (device_state_t *) xmalloc (sizeof *dev);
       memset (dev, 0, sizeof *dev);
       cuda_system_info.dev[dev_id] = dev;
     }
@@ -456,6 +458,27 @@ device_get_device_name (uint32_t dev_id)
   cuda_api_get_device_name (dev_id, dev->dev_name, sizeof dev->dev_name);
   dev->dev_name_p = CACHED;
   return dev->dev_name;
+}
+
+/* This assumes that the GPU architecture has a uniform instruction size,
+ * which is true on all GPU architectures except FERMI. Since cuda-gdb no
+ * longer supports FERMI as of 9.0 toolkit, this assumption is valid.
+ */
+uint32_t
+device_get_inst_size (uint32_t dev_id)
+{
+  device_state_t *dev = device_get (dev_id);
+
+  return dev->inst_size_p ? dev->inst_size : 0;
+}
+
+void
+device_set_inst_size (uint32_t dev_id, uint32_t inst_size)
+{
+  device_state_t *dev = device_get (dev_id);
+
+  dev->inst_size = inst_size;
+  dev->inst_size_p = true;
 }
 
 uint32_t
@@ -639,23 +662,23 @@ device_has_exception (uint32_t dev_id)
   return dev->sm_exception_mask != 0;
 }
 
-uint64_t
-device_get_active_sms_mask (uint32_t dev_id)
+void
+device_get_active_sms_mask (uint32_t dev_id, uint32_t *mask)
 {
   device_state_t *dev = device_get (dev_id);
   uint32_t        sm;
   uint32_t        wp;
-  uint64_t        mask = 0;
+
+  gdb_assert (mask);
+  memset(mask, 0, ((CUDBG_MAX_SMS + 31) / 32) * sizeof(*mask));
 
   for (sm = 0; sm < device_get_num_sms (dev_id); ++sm)
     for (wp = 0; wp < device_get_num_warps (dev_id); ++wp)
       if (warp_is_valid (dev_id, sm, wp))
         {
-          mask |= 1ULL << sm;
+          mask[sm / 32] |= 1UL << (sm % 32);
           break;
         }
-
-  return mask;
 }
 
 contexts_t
@@ -755,6 +778,7 @@ device_update_exception_state (uint32_t dev_id)
 {
   device_state_t *dev;
   uint32_t sm_id;
+  uint32_t nsms;
 
   cuda_trace ("device %u: Looking for exception SMs\n");
   dev = device_get (dev_id);
@@ -762,13 +786,14 @@ device_update_exception_state (uint32_t dev_id)
   if (dev->sm_exception_mask_valid_p)
     return;
 
-  dev->sm_exception_mask = 0;
+  memset(&dev->sm_exception_mask, 0, sizeof(dev->sm_exception_mask));
+  nsms = device_get_num_sms (dev_id);
 
   if (device_is_any_context_present (dev_id))
-    cuda_api_read_device_exception_state (dev_id, &dev->sm_exception_mask);
+    cuda_api_read_device_exception_state (dev_id, dev->sm_exception_mask, (nsms+63) / 64);
 
-  for (sm_id = 0; sm_id < device_get_num_sms (dev_id); ++sm_id)
-    if (!((dev->sm_exception_mask >> sm_id) & 1ULL))
+  for (sm_id = 0; sm_id < nsms; ++sm_id)
+    if (!((dev->sm_exception_mask[sm_id / 64] >> (sm_id % 64)) & 1))
       sm_set_exception_none (dev_id, sm_id);
 
   dev->sm_exception_mask_valid_p = true;
@@ -856,41 +881,33 @@ sm_has_exception (uint32_t dev_id, uint32_t sm_id)
 
   device_update_exception_state (dev_id);
 
-  return (dev->sm_exception_mask >> sm_id) & 1ULL;
+  return (dev->sm_exception_mask[sm_id / 64] >> (sm_id % 64)) & 1ULL;
 }
 
-uint64_t
+cuda_api_warpmask*
 sm_get_valid_warps_mask (uint32_t dev_id, uint32_t sm_id)
 {
   sm_state_t *sm = sm_get (dev_id, sm_id);
-  uint64_t    valid_warps_mask = 0ULL;
 
-  if (sm->valid_warps_mask_p)
-    return sm->valid_warps_mask;
+  if (!sm->valid_warps_mask_p) {
+      cuda_api_read_valid_warps (dev_id, sm_id, &sm->valid_warps_mask);
+      sm->valid_warps_mask_p = CACHED;
+  }
 
-  cuda_api_read_valid_warps (dev_id, sm_id, &valid_warps_mask);
-
-  sm->valid_warps_mask   = valid_warps_mask;
-  sm->valid_warps_mask_p = CACHED;
-
-  return valid_warps_mask;
+  return &sm->valid_warps_mask;
 }
 
-uint64_t
+cuda_api_warpmask*
 sm_get_broken_warps_mask (uint32_t dev_id, uint32_t sm_id)
 {
   sm_state_t *sm = sm_get (dev_id, sm_id);
-  uint64_t    broken_warps_mask = 0ULL;
 
-  if (sm->broken_warps_mask_p)
-    return sm->broken_warps_mask;
+  if (!sm->broken_warps_mask_p) {
+      cuda_api_read_broken_warps (dev_id, sm_id, &sm->broken_warps_mask);
+      sm->broken_warps_mask_p = CACHED;
+  }
 
-  cuda_api_read_broken_warps (dev_id, sm_id, &broken_warps_mask);
-
-  sm->broken_warps_mask   = broken_warps_mask;
-  sm->broken_warps_mask_p = CACHED;
-
-  return broken_warps_mask;
+  return &sm->broken_warps_mask;
 }
 
 static void
@@ -950,14 +967,13 @@ warp_invalidate (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
 }
 
 bool
-warps_resume_until (uint32_t dev_id, uint32_t sm_id, uint64_t mask, uint64_t pc)
+warps_resume_until (uint32_t dev_id, uint32_t sm_id, cuda_api_warpmask* mask, uint64_t pc)
 {
   uint32_t i;
-  uint64_t broken_mask;
 
   /* No point in resuming warps, if one them is already there */
   for (i = 0; i < device_get_num_warps (dev_id); ++i)
-    if (((mask>>i)&1) != 0)
+    if (cuda_api_get_bit(mask, i))
       if (pc == warp_get_active_virtual_pc (dev_id, sm_id, i))
         return false;
 
@@ -972,7 +988,7 @@ warps_resume_until (uint32_t dev_id, uint32_t sm_id, uint64_t mask, uint64_t pc)
     }
   /* invalidate the cache for the warps that have been single-stepped. */
   for (i = 0; i < device_get_num_warps (dev_id); ++i)
-       if (((mask>>i)&1) != 0)
+    if (cuda_api_get_bit(mask, i))
           warp_invalidate (dev_id, sm_id, i);
 
   /* must invalidate the SM since that's where the warp valid mask lives */
@@ -983,23 +999,27 @@ warps_resume_until (uint32_t dev_id, uint32_t sm_id, uint64_t mask, uint64_t pc)
 
 bool
 warp_single_step (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,
-                  uint64_t *single_stepped_warp_mask)
+                  uint32_t nsteps, cuda_api_warpmask *single_stepped_warp_mask)
 {
   kernel_t kernel;
   uint64_t kernel_id;
   CuDim3   block_idx;
   uint32_t i;
   bool rc;
+  cuda_api_warpmask tmp;
 
-  cuda_trace ("device %u sm %u warp %u: single-step", dev_id, sm_id, wp_id);
+  cuda_trace ("device %u sm %u warp %u nsteps %u: single-step", dev_id, sm_id, wp_id, nsteps);
 
   gdb_assert (dev_id < cuda_system_get_num_devices ());
   gdb_assert (sm_id < device_get_num_sms (dev_id));
   gdb_assert (wp_id < device_get_num_warps (dev_id));
 
-  *single_stepped_warp_mask = 0ULL;
+  cuda_api_clear_mask(single_stepped_warp_mask);
+  cuda_api_clear_mask(&tmp);
+  cuda_api_set_bit(&tmp, wp_id, 1);
+  cuda_api_not_mask(&tmp, &tmp);    // Select all but the single-stepped warp in the mask
 
-  rc = cuda_api_single_step_warp (dev_id, sm_id, wp_id, single_stepped_warp_mask);
+  rc = cuda_api_single_step_warp (dev_id, sm_id, wp_id, nsteps, single_stepped_warp_mask);
   if (!rc)
     return rc;
 
@@ -1009,15 +1029,18 @@ warp_single_step (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,
       return true;
     }
 
-  if (*single_stepped_warp_mask & ~(1ULL << wp_id))
+  cuda_api_and_mask(&tmp, &tmp, single_stepped_warp_mask);
+
+  if (cuda_api_has_bit(&tmp))
     {
-      warning ("Warp(s) other than the current warp had to be single-stepped.");
+      warning ("Warp(s) other than the current warp had to be single-stepped:%"WARP_MASK_FORMAT,
+          cuda_api_mask_string(single_stepped_warp_mask));
       device_invalidate (dev_id);
     }
 
   /* invalidate the cache for the warps that have been single-stepped. */
   for (i = 0; i < device_get_num_warps (dev_id); ++i)
-    if ((1ULL << i) & *single_stepped_warp_mask)
+    if (cuda_api_get_bit(single_stepped_warp_mask, i))
       warp_invalidate (dev_id, sm_id, i);
 
   /* must invalidate the SM since that's where the warp valid mask lives */
@@ -1029,29 +1052,15 @@ warp_single_step (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id,
 bool
 warp_is_valid (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
 {
-  uint64_t valid_warps_mask;
-  bool     valid;
-
   gdb_assert (wp_id < device_get_num_warps (dev_id));
-
-  valid_warps_mask = sm_get_valid_warps_mask (dev_id, sm_id);
-  valid            = (valid_warps_mask >> wp_id) & 1ULL;
-
-  return valid;
+  return cuda_api_get_bit(sm_get_valid_warps_mask (dev_id, sm_id), wp_id) != 0;
 }
 
 bool
 warp_is_broken (uint32_t dev_id, uint32_t sm_id, uint32_t wp_id)
 {
-  uint64_t broken_warps_mask;
-  bool     broken;
-
   gdb_assert (wp_id < device_get_num_warps (dev_id));
-
-  broken_warps_mask = sm_get_broken_warps_mask (dev_id, sm_id);
-  broken            = (broken_warps_mask >> wp_id) & 1ULL;
-
-  return broken;
+  return cuda_api_get_bit(sm_get_broken_warps_mask (dev_id, sm_id), wp_id) != 0;
 }
 
 bool
