@@ -2201,7 +2201,11 @@ darwin_xfer_partial (struct target_ops *ops,
       }
     /* CUDA - siginfo */
     case TARGET_OBJECT_SIGNAL_INFO:
-      return darwin_xfer_siginfo (ops, object, annex, readbuf, writebuf, offset, len);
+      {
+        *xfered_len = (ULONGEST) darwin_xfer_siginfo (ops, object, annex, readbuf, writebuf, offset, len);
+        //return darwin_xfer_siginfo (ops, object, annex, readbuf, writebuf, offset, len);
+        return TARGET_XFER_OK;
+      }
 #ifdef TASK_DYLD_INFO_COUNT
     case TARGET_OBJECT_DARWIN_DYLD_INFO:
       if (writebuf != NULL || readbuf == NULL)
