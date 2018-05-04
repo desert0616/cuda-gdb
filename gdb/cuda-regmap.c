@@ -669,7 +669,7 @@ regmap_table_search (struct objfile *objfile, const char *func_name,
 
   /* Copy the function name to filter out the parameters, if any */
   func_name_len = strlen (func_name);
-  tmp = strchr (func_name, '(');
+  tmp = (char *) strchr (func_name, '(');
   if (tmp)
     func_name_len = (unsigned long) tmp - (unsigned long)func_name;
 
