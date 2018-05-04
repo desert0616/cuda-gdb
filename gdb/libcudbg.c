@@ -63,7 +63,7 @@ cudbgInitialize(void)
     CUDBG_IPC_APPEND(&major, sizeof(minor));
     CUDBG_IPC_APPEND(&minor, sizeof(minor));
     CUDBG_IPC_APPEND(&revision, sizeof(revision));
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *((CUDBGResult *)ipc_buf);
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -101,7 +101,7 @@ cudbgFinalize (void)
     CUDBGResult res, ipcres;
 
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_finalize);
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     res = *((CUDBGResult *)ipc_buf);
 
     ipcres = cudbgipcFinalize();
@@ -122,7 +122,7 @@ cudbgSuspendDevice (uint32_t dev)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_suspendDevice);
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -142,7 +142,7 @@ cudbgResumeDevice (uint32_t dev)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_resumeDevice);
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -195,7 +195,7 @@ cudbgReadThreadIdx (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, CuDim3 
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *threadIdx = *((CuDim3 *)ipc_buf); ipc_buf+=sizeof(CuDim3);
@@ -217,7 +217,7 @@ cudbgReadBrokenWarps (uint32_t dev, uint32_t sm, uint64_t *brokenWarpsMask)
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(brokenWarpsMask, ipc_buf, sizeof(uint64_t));
@@ -240,7 +240,7 @@ cudbgReadValidWarps (uint32_t dev, uint32_t sm, uint64_t *validWarpsMask)
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(validWarpsMask, ipc_buf, sizeof(uint64_t));
@@ -264,7 +264,7 @@ cudbgReadValidLanes (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *validLane
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *validLanesMask = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -287,7 +287,7 @@ cudbgReadActiveLanes (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *activeLa
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *activeLanesMask = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -310,7 +310,7 @@ cudbgReadCodeMemory (uint32_t dev, uint64_t addr, void *buf, uint32_t buf_size)
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -333,7 +333,7 @@ cudbgReadConstMemory (uint32_t dev, uint64_t addr, void *buf, uint32_t buf_size)
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -364,7 +364,7 @@ cudbgReadParamMemory (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t addr, voi
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -389,7 +389,7 @@ cudbgReadSharedMemory (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t addr, vo
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -415,7 +415,7 @@ cudbgReadLocalMemory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint6
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -440,7 +440,7 @@ cudbgReadRegister (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32_t
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
     CUDBG_IPC_APPEND(&regno,sizeof(regno));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *val = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -464,7 +464,7 @@ cudbgReadPC (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint64_t *pc)
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *pc = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -488,7 +488,7 @@ cudbgReadVirtualPC (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint64_
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *pc = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -512,7 +512,7 @@ cudbgReadLaneStatus (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, bool *
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *error = *((bool *)ipc_buf); ipc_buf+=sizeof(bool);
@@ -544,7 +544,7 @@ cudbgWriteParamMemory (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t addr, co
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
     CUDBG_IPC_APPEND((char *)buf,buf_size);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -569,7 +569,7 @@ cudbgWriteSharedMemory (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t addr, c
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
     CUDBG_IPC_APPEND((char *)buf,buf_size);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -595,7 +595,7 @@ cudbgWriteLocalMemory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
     CUDBG_IPC_APPEND((char *)buf,buf_size);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -620,7 +620,7 @@ cudbgWriteRegister (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32_
     CUDBG_IPC_APPEND(&regno,sizeof(regno));
     CUDBG_IPC_APPEND(&val,sizeof(val));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -648,7 +648,7 @@ cudbgGetBlockDim (uint32_t dev, uint32_t sm, uint32_t wp, CuDim3 *blockDim)
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *blockDim = *((CuDim3 *)ipc_buf); ipc_buf+=sizeof(CuDim3);
@@ -671,7 +671,7 @@ cudbgGetTID (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t *tid)
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *tid = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -699,7 +699,7 @@ cudbgGetDeviceType (uint32_t dev, char *buf, uint32_t buf_size)
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -721,7 +721,7 @@ cudbgGetSmType (uint32_t dev, char *buf, uint32_t buf_size)
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -741,7 +741,7 @@ cudbgGetNumDevices (uint32_t *numDev)
 
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_getNumDevices);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *numDev = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -762,7 +762,7 @@ cudbgGetNumSMs (uint32_t dev, uint32_t *numSMs)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_getNumSMs);
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *numSMs = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -783,7 +783,7 @@ cudbgGetNumWarps (uint32_t dev, uint32_t *numWarps)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_getNumWarps);
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *numWarps = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -804,7 +804,7 @@ cudbgGetNumLanes (uint32_t dev, uint32_t *numLanes)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_getNumLanes);
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *numLanes = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -825,7 +825,7 @@ cudbgGetNumRegisters (uint32_t dev, uint32_t *numRegs)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_getNumRegisters);
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *numRegs = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -854,7 +854,7 @@ cudbgDisassemble (uint32_t dev, uint64_t addr, uint32_t *instSize, char *buf, ui
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *instSize = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -881,7 +881,7 @@ cudbgLookupDeviceCodeSymbol (char *symName, bool *symFound, uintptr_t *symAddr)
 
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_lookupDeviceCodeSymbol);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *symName = *((char *)ipc_buf); ipc_buf+=sizeof(char);
@@ -925,7 +925,7 @@ cudbgGetGridAttribute (uint32_t dev, uint32_t sm, uint32_t wp, CUDBGAttribute at
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&attr,sizeof(attr));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *value = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -949,7 +949,7 @@ cudbgGetGridAttributes (uint32_t dev, uint32_t sm, uint32_t wp, CUDBGAttributeVa
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&numPairs,sizeof(numPairs));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *pairs = *((CUDBGAttributeValuePair *)ipc_buf); ipc_buf+=sizeof(CUDBGAttributeValuePair);
@@ -979,7 +979,7 @@ cudbgReadLaneException (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, CUD
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *exception = *((CUDBGException_t *)ipc_buf); ipc_buf+=sizeof(CUDBGException_t);
@@ -1043,7 +1043,7 @@ cudbgReadPinnedMemory (uint64_t addr, void *buf, uint32_t buf_size)
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -1066,7 +1066,7 @@ cudbgWritePinnedMemory (uint64_t addr, const void *buf, uint32_t buf_size)
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
     CUDBG_IPC_APPEND((char *)buf,buf_size);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1087,7 +1087,7 @@ cudbgSetBreakpoint (uint32_t dev, uint64_t addr)
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1108,7 +1108,7 @@ cudbgUnsetBreakpoint (uint32_t dev, uint64_t addr)
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1146,7 +1146,7 @@ cudbgReadTextureMemory (uint32_t devId, uint32_t vsm, uint32_t wp, uint32_t id, 
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
     CUDBG_IPC_APPEND((char *)coords,coords_size*sizeof(uint32_t));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -1169,7 +1169,7 @@ cudbgReadBlockIdx (uint32_t dev, uint32_t sm, uint32_t wp, CuDim3 *blockIdx)
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *blockIdx = *((CuDim3 *)ipc_buf); ipc_buf+=sizeof(CuDim3);
@@ -1192,7 +1192,7 @@ cudbgGetGridDim (uint32_t dev, uint32_t sm, uint32_t wp, CuDim3 *gridDim)
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *gridDim = *((CuDim3 *)ipc_buf); ipc_buf+=sizeof(CuDim3);
@@ -1216,7 +1216,7 @@ cudbgReadCallDepth (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32_
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *depth = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -1241,7 +1241,7 @@ cudbgReadReturnAddress (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uin
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
     CUDBG_IPC_APPEND(&level,sizeof(level));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *ra = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -1266,7 +1266,7 @@ cudbgReadVirtualReturnAddress (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t 
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
     CUDBG_IPC_APPEND(&level,sizeof(level));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *ra = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -1294,7 +1294,7 @@ cudbgGetHostAddrFromDeviceAddr (uint32_t dev, uint64_t device_addr, uint64_t *ho
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&device_addr,sizeof(device_addr));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *host_addr = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -1317,7 +1317,7 @@ cudbgSingleStepWarp41 (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *warpMas
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *warpMask = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -1341,7 +1341,7 @@ cudbgReadSyscallCallDepth (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, 
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *depth = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -1368,7 +1368,7 @@ cudbgReadTextureMemoryBindless (uint32_t devId, uint32_t vsm, uint32_t wp, uint3
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
     CUDBG_IPC_APPEND((char *)coords,coords_size*sizeof(uint32_t));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -1388,7 +1388,7 @@ cudbgClearAttachState (void)
 
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_clearAttachState);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1417,7 +1417,7 @@ cudbgMemcheckReadErrorAddress (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t 
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *address = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -1438,7 +1438,7 @@ cudbgAcknowledgeSyncEvents (void)
 
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_acknowledgeSyncEvents);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1469,7 +1469,7 @@ cudbgInitializeAttachStub (void)
 
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_initializeAttachStub);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1508,7 +1508,7 @@ cudbgGetGridInfo (uint32_t dev, uint64_t gridId64, CUDBGGridInfo *gridInfo)
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&gridId64,sizeof(gridId64));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *gridInfo = *((CUDBGGridInfo *)ipc_buf); ipc_buf+=sizeof(CUDBGGridInfo);
@@ -1531,7 +1531,7 @@ cudbgReadGridId (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t *gridId64)
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *gridId64 = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -1553,7 +1553,7 @@ cudbgGetGridStatus (uint32_t dev, uint64_t gridId64, CUDBGGridStatus *status)
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&gridId64,sizeof(gridId64));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *status = *((CUDBGGridStatus *)ipc_buf); ipc_buf+=sizeof(CUDBGGridStatus);
@@ -1574,7 +1574,7 @@ cudbgSetKernelLaunchNotificationMode (CUDBGKernelLaunchNotifyMode mode)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_setKernelLaunchNotificationMode);
     CUDBG_IPC_APPEND(&mode,sizeof(mode));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1594,7 +1594,7 @@ cudbgGetDevicePCIBusInfo (uint32_t devId, uint32_t *pciBusId, uint32_t *pciDevId
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_getDevicePCIBusInfo);
     CUDBG_IPC_APPEND(&devId,sizeof(devId));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *pciBusId = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -1623,7 +1623,7 @@ cudbgReadDeviceExceptionState (uint32_t devId, uint64_t *mask, uint32_t sz)
     CUDBG_IPC_APPEND(&devId,sizeof(devId));
     CUDBG_IPC_APPEND(&sz,sizeof(sz));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(mask, ipc_buf, sz*sizeof(*mask)); ipc_buf+=sz*sizeof(*mask);
@@ -1646,7 +1646,7 @@ cudbgGetAdjustedCodeAddress (uint32_t devId, uint64_t address, uint64_t *adjuste
     CUDBG_IPC_APPEND(&address,sizeof(address));
     CUDBG_IPC_APPEND(&adjAction,sizeof(adjAction));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *adjustedAddress = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -1669,7 +1669,7 @@ cudbgReadErrorPC (uint32_t devId, uint32_t sm, uint32_t wp, uint64_t *errorPC, b
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *errorPC = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);
@@ -1691,7 +1691,7 @@ cudbgGetNextEvent (CUDBGEventQueueType type, CUDBGEvent  *event)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_getNextEvent);
     CUDBG_IPC_APPEND(&type,sizeof(type));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *event = *((CUDBGEvent  *)ipc_buf); ipc_buf+=sizeof(CUDBGEvent);
@@ -1715,7 +1715,7 @@ cudbgGetElfImageByHandle (uint32_t devId, uint64_t handle, CUDBGElfImageType typ
     CUDBG_IPC_APPEND(&type,sizeof(type));
     CUDBG_IPC_APPEND(&elfImage_size,sizeof(elfImage_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(elfImage, ipc_buf, elfImage_size);
@@ -1739,7 +1739,7 @@ cudbgResumeWarpsUntilPC (uint32_t devId, uint32_t sm, uint64_t warpMask, uint64_
     CUDBG_IPC_APPEND(&warpMask,sizeof(warpMask));
     CUDBG_IPC_APPEND(&virtPC,sizeof(virtPC));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1761,7 +1761,7 @@ cudbgReadWarpState (uint32_t devId, uint32_t sm, uint32_t wp, CUDBGWarpState *st
     CUDBG_IPC_APPEND(&sm,sizeof(sm));
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *state = *((CUDBGWarpState *)ipc_buf); ipc_buf+=sizeof(CUDBGWarpState);
@@ -1787,7 +1787,7 @@ cudbgReadRegisterRange (uint32_t devId, uint32_t sm, uint32_t wp, uint32_t ln, u
     CUDBG_IPC_APPEND(&index,sizeof(index));
     CUDBG_IPC_APPEND(&registers_size,sizeof(registers_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(registers, ipc_buf, registers_size*sizeof(uint32_t));
@@ -1813,7 +1813,7 @@ cudbgReadGenericMemory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uin
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -1840,7 +1840,7 @@ cudbgWriteGenericMemory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, ui
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
     CUDBG_IPC_APPEND((char *)buf,buf_size);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1861,7 +1861,7 @@ cudbgReadGlobalMemory (uint64_t addr, void *buf, uint32_t buf_size)
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -1884,7 +1884,7 @@ cudbgWriteGlobalMemory (uint64_t addr, const void *buf, uint32_t buf_size)
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
     CUDBG_IPC_APPEND((char *)buf,buf_size);
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1905,7 +1905,7 @@ cudbgGetManagedMemoryRegionInfo (uint64_t startAddress, CUDBGMemoryInfo *memoryI
     CUDBG_IPC_APPEND(&startAddress,sizeof(startAddress));
     CUDBG_IPC_APPEND(&memoryInfo_size,sizeof(memoryInfo_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *numEntries = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -1927,7 +1927,7 @@ cudbgIsDeviceCodeAddress (uintptr_t addr, bool *isDeviceAddress)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_isDeviceCodeAddress);
     CUDBG_IPC_APPEND(&addr,sizeof(addr));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *isDeviceAddress = *((bool *)ipc_buf); ipc_buf+=sizeof(bool);
@@ -1948,7 +1948,7 @@ cudbgRequestCleanupOnDetach (uint32_t appResumeFlag)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_requestCleanupOnDetach);
     CUDBG_IPC_APPEND(&appResumeFlag,sizeof(appResumeFlag));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -1972,7 +1972,7 @@ cudbgReadPredicates (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
     CUDBG_IPC_APPEND(&predicates_size,sizeof(predicates_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(predicates, ipc_buf, predicates_size*sizeof(uint32_t));
@@ -1998,7 +1998,7 @@ cudbgWritePredicates (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint3
     CUDBG_IPC_APPEND(&predicates_size,sizeof(predicates_size));
     CUDBG_IPC_APPEND((char *)predicates,predicates_size*sizeof(const uint32_t));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -2018,7 +2018,7 @@ cudbgGetNumPredicates (uint32_t dev, uint32_t *numPredicates)
     CUDBG_IPC_BEGIN(CUDBGAPIREQ_getNumPredicates);
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *numPredicates = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -2042,7 +2042,7 @@ cudbgReadCCRegister (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint32
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *val = *((uint32_t *)ipc_buf); ipc_buf+=sizeof(uint32_t);
@@ -2067,7 +2067,7 @@ cudbgWriteCCRegister (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln, uint3
     CUDBG_IPC_APPEND(&ln,sizeof(ln));
     CUDBG_IPC_APPEND(&val,sizeof(val));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
 
@@ -2088,7 +2088,7 @@ cudbgGetDeviceName (uint32_t dev, char *buf, uint32_t buf_size)
     CUDBG_IPC_APPEND(&dev,sizeof(dev));
     CUDBG_IPC_APPEND(&buf_size,sizeof(buf_size));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     memcpy(buf, ipc_buf, buf_size);
@@ -2112,7 +2112,7 @@ cudbgSingleStepWarp (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t nsteps, ui
     CUDBG_IPC_APPEND(&wp,sizeof(wp));
     CUDBG_IPC_APPEND(&nsteps,sizeof(nsteps));
 
-    CUDBG_IPC_REQUEST((void *)&ipc_buf);
+    CUDBG_IPC_REQUEST((void **)&ipc_buf);
     result = *(CUDBGResult *)ipc_buf;
     ipc_buf +=sizeof(CUDBGResult);
     *warpMask = *((uint64_t *)ipc_buf); ipc_buf+=sizeof(uint64_t);

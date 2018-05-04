@@ -37,6 +37,10 @@ cuda_iterator cuda_iterator_create  (cuda_iterator_type type,
                                      cuda_coords_t *filter,
                                      cuda_select_t select_mask);
 
+cuda_iterator cuda_iterator_create  (cuda_iterator_type type,
+                                     cuda_coords_t *filter,
+                                     int int_mask);
+
 cuda_iterator cuda_iterator_start   (cuda_iterator itr);
 cuda_iterator cuda_iterator_next    (cuda_iterator itr);
 bool          cuda_iterator_end     (cuda_iterator itr);

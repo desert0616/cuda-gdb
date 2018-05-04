@@ -670,7 +670,7 @@ source_info (char *ignore, int from_tty)
       /* CUDA - filenames */
       char *lastsep;
       int dirnamelen;
-      lastsep = strrchr(s->filename, '/');
+      lastsep = (char *) strrchr(s->filename, '/');
       dirnamelen = strlen(SYMTAB_DIRNAME (s));
       if (lastsep)
         {

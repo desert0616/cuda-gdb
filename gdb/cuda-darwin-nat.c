@@ -140,7 +140,7 @@ DarwinGetSiblingsOfTypeCount(io_object_t obj, const char *type)
 static IOReturn
 DarwinGetPCIBusInfo(io_object_t obj, uint32_t *pci_bus_id, uint32_t *pci_dev_id, uint32_t *pci_func_id)
 {
-  CFDataRef reg_ref;
+  CFTypeRef reg_ref;
   uint32_t pci_id;
 
   reg_ref = IORegistryEntryCreateCFProperty (obj, CFSTR("reg"), kCFAllocatorDefault, kNilOptions);
@@ -151,7 +151,7 @@ DarwinGetPCIBusInfo(io_object_t obj, uint32_t *pci_bus_id, uint32_t *pci_dev_id,
       CFRelease (reg_ref);
       return kIOReturnNotFound;
     }
-  pci_id = ((uint32_t *)CFDataGetBytePtr(reg_ref))[0];
+  pci_id = ((uint32_t *)CFDataGetBytePtr((CFDataRef)reg_ref))[0];
   CFRelease (reg_ref);
 
   if (pci_bus_id)  *pci_bus_id  = (pci_id>>16)&0xff;

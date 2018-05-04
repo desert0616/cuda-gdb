@@ -296,6 +296,41 @@ cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, cuda_selec
   return itr;
 }
 
+cuda_iterator
+cuda_iterator_create (cuda_iterator_type type, cuda_coords_t *filter, int int_mask)
+{
+  uint32_t i;
+  cuda_iterator itr;
+
+  itr = (cuda_iterator) xmalloc (sizeof *itr);
+  itr->type         = type;
+  itr->filter       = filter ? *filter: CUDA_INVALID_COORDS;
+  itr->mask         = (cuda_select_t) int_mask;
+  itr->num_elements = 0;
+  itr->num_unique_elements = 0;
+  itr->list_size    = 1024;
+  itr->index        = 0;
+  itr->completed    = false;
+  itr->list         = (cuda_coords_t*) xmalloc (itr->list_size * sizeof (*itr->list));
+
+  if (filter)
+    itr->filter.valid = true;
+  itr->current.dev = itr->current.sm = itr->current.wp = itr->current.ln = 0;
+
+  /* Iterators by physical coordinates can be lazy */
+  if ((type & CUDA_ITERATOR_TYPE_MASK_PHYSICAL) != 0)
+    return itr;
+
+  while (cuda_iterator_step (itr));
+  itr->completed = true;
+
+  /* sort the list by coordinates */
+  qsort (itr->list, itr->num_elements, sizeof (*itr->list),
+         (int(*)(const void*, const void*))cuda_coords_compare_logical);
+
+  return itr;
+}
+
 void
 cuda_iterator_destroy (cuda_iterator itr)
 {

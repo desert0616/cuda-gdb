@@ -82,8 +82,8 @@ cuda_event_create_context (uint32_t dev_id, uint64_t context_id, uint32_t tid)
 
   if ( cuda_remote ||
        !target_can_run(&current_target) ||
-       !cuda_options_gpu_busy_check () ||
-       !cuda_darwin_cuda_device_used_for_graphics (dev_id))
+       !cuda_options_gpu_busy_check () /*||
+       !cuda_darwin_cuda_device_used_for_graphics (dev_id)*/)
     return;
 
   target_terminal_ours();
