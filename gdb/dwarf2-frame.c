@@ -1524,13 +1524,20 @@ dwarf2_frame_base_sniffer (struct frame_info *this_frame)
 CORE_ADDR
 dwarf2_frame_cfa (struct frame_info *this_frame)
 {
+  struct frame_info *prev_frame;
+
   if (frame_unwinder_is (this_frame, &record_btrace_tailcall_frame_unwind)
       || frame_unwinder_is (this_frame, &record_btrace_frame_unwind))
     throw_error (NOT_AVAILABLE_ERROR,
 		 _("cfa not available for record btrace target"));
 
   while (get_frame_type (this_frame) == INLINE_FRAME)
-    this_frame = get_prev_frame (this_frame);
+    {
+      prev_frame = get_prev_frame (this_frame);
+      if (!prev_frame)
+	break;
+      this_frame = prev_frame;
+    }
 
   /* Old note from NVIDIA.  This may no longer be valid since the original
      restriction was removed.  */

@@ -2803,6 +2803,9 @@ attach_post_wait (char *args, int from_tty, enum attach_post_wait_mode mode)
       if (deprecated_attach_hook)
 	deprecated_attach_hook ();
     }
+
+  /* CUDA - attach */
+  cuda_nat_attach ();
 }
 
 struct attach_command_continuation_args
@@ -2822,9 +2825,6 @@ attach_command_continuation (void *args, int err)
     return;
 
   attach_post_wait (a->args, a->from_tty, a->mode);
-
-  /* CUDA - attach */
-  cuda_nat_attach ();
 }
 
 static void

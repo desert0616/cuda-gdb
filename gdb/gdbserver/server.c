@@ -36,6 +36,7 @@
 #include "dll.h"
 #include "hostio.h"
 
+#include "cuda.h"
 #include "../cuda-utils.h"
 
 /* Android build hacks */
@@ -3316,13 +3317,14 @@ static void
 gdbserver_version (void)
 {
   printf ("NVIDIA (R) CUDA gdbserver\n"
-          "9.0 release\n"
-          "Portions Copyright (C) 2013-2017 NVIDIA Corporation\n"
+          "%d.%d release\n"
+          "Portions Copyright (C) 2013-2018 NVIDIA Corporation\n"
           "GNU gdbserver %s%s\n"
 	  "Copyright (C) 2016 Free Software Foundation, Inc.\n"
 	  "gdbserver is free software, covered by the "
 	  "GNU General Public License.\n"
 	  "This gdbserver was configured as \"%s\"\n",
+	  CUDA_VERSION / 1000, (CUDA_VERSION % 1000) / 10,
 	  PKGVERSION, version, host_name);
 }
 

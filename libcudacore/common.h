@@ -68,6 +68,7 @@ typedef struct {
 typedef struct {
 	char ident[MAPIDENT_LEN];
 	void *entryPtr;
+        int needsFree;
 	UT_hash_handle hh;
 } MapEntry;
 

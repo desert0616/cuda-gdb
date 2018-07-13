@@ -1602,6 +1602,8 @@ extern void create_cuda_driver_internal_error_breakpoint (struct gdbarch *,
                                                           CORE_ADDR);
 extern void create_cuda_uvm_breakpoint (struct gdbarch *, CORE_ADDR);
 
+extern void update_cuda_driver_api_error_breakpoint (void);
+
 extern void remove_jit_event_breakpoints (void);
 
 extern void remove_solib_event_breakpoints (void);

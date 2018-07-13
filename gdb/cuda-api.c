@@ -597,7 +597,7 @@ cuda_api_read_generic_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t l
   res = cudbgAPI->readGenericMemory (dev, sm, wp, ln, addr, buf, sz);
   cuda_api_print_api_call_result (res);
 
-  if (res == CUDBG_ERROR_INVALID_MEMORY_ACCESS) {
+  if (res == CUDBG_ERROR_MISSING_DATA) {
     cuda_api_error (res, _("Generic memory is not available in this corefile"));
     return;
   }
@@ -659,7 +659,7 @@ cuda_api_read_shared_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint64_t ad
   res = cudbgAPI->readSharedMemory (dev, sm, wp, addr, buf, sz);
   cuda_api_print_api_call_result (res);
 
-  if (res == CUDBG_ERROR_INVALID_MEMORY_ACCESS) {
+  if (res == CUDBG_ERROR_MISSING_DATA) {
     cuda_api_error (res, _("Shared memory is not available in this corefile"));
     return;
   }
@@ -710,7 +710,7 @@ cuda_api_read_local_memory (uint32_t dev, uint32_t sm, uint32_t wp, uint32_t ln,
   res = cudbgAPI->readLocalMemory (dev, sm, wp, ln, addr, buf, sz);
   cuda_api_print_api_call_result (res);
 
-  if (res == CUDBG_ERROR_INVALID_MEMORY_ACCESS) {
+  if (res == CUDBG_ERROR_MISSING_DATA) {
     cuda_api_error (res, _("Local memory is not available in this corefile"));
     return;
   }
@@ -1517,7 +1517,7 @@ cuda_api_read_global_memory (uint64_t addr, void *buf, uint32_t buf_size)
   res = cudbgAPI->readGlobalMemory (addr, buf, buf_size);
   cuda_api_print_api_call_result (res);
 
-  if (res == CUDBG_ERROR_INVALID_MEMORY_ACCESS) {
+  if (res == CUDBG_ERROR_MISSING_DATA) {
     cuda_api_error (res, _("Global memory is not available in this corefile"));
     return;
   }

@@ -2792,7 +2792,7 @@ cuda_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   set_gdbarch_register_type (gdbarch, cuda_register_type);
   set_gdbarch_register_reggroup_p (gdbarch, cuda_register_reggroup_p);
 
-  set_gdbarch_print_float_info     (gdbarch, NULL);
+  set_gdbarch_print_float_info     (gdbarch, default_print_float_info);
   set_gdbarch_print_vector_info    (gdbarch, NULL);
 
   set_gdbarch_convert_register_p  (gdbarch, cuda_convert_register_p);
@@ -2961,6 +2961,8 @@ cuda_update_report_driver_api_error_flags (void)
 {
   CORE_ADDR addr;
   CUDBGReportDriverApiErrorFlags flags;
+
+  update_cuda_driver_api_error_breakpoint ();
 
   addr   = cuda_get_symbol_address (_STRING_(CUDBG_REPORT_DRIVER_API_ERROR_FLAGS));
   flags  = cuda_options_api_failures_break_on_nonfatal() ?

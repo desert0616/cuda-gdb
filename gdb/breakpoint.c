@@ -8265,12 +8265,32 @@ create_cuda_driver_api_error_breakpoint (struct gdbarch *gdbarch, CORE_ADDR addr
   cuda_driver_api_error_ops.print_it = print_cuda_driver_api_error;
   b = create_internal_breakpoint (gdbarch, address, bp_cuda_driver_api_error, &cuda_driver_api_error_ops);
 
-  b->enable_state = bp_enabled;
+  if (cuda_options_api_failures_hide())
+    b->enable_state = bp_disabled;
+  else
+    b->enable_state = bp_enabled;
+
   /* location has to be used or breakpoint_re_set will delete me.  */
   b->location = new_address_location (address, NULL, 0);
 
   cuda_trace_breakpoint ("add driver API error handling breakpoint %u at 0x%llx",
                          b->number, (unsigned long long)address);
+}
+
+void update_cuda_driver_api_error_breakpoint (void)
+{
+  struct breakpoint *b;
+
+  ALL_BREAKPOINTS (b)
+    {
+      if (b->type == bp_cuda_driver_api_error)
+	{
+	  if (cuda_options_api_failures_hide())
+	    disable_breakpoint (b);
+	  else
+	    enable_breakpoint (b);
+	}
+    }
 }
 
 /* Inform the user that the driver has hit an internal error. */
@@ -8440,11 +8460,11 @@ cuda_add_location (struct breakpoint *b, elf_image_t elf_image)
 
   /* create the new location and populate it */
   loc = add_location_to_breakpoint (b, &sal);
-  loc->cuda_elf_image = elf_image;
-  gdb_assert(loc->cuda_elf_image == elf_image);
+  loc->cuda_elf_image   = elf_image;
   loc->cuda_breakpoint  = true;
   b->cuda_breakpoint    = true;
   b->gdbarch            = arch;
+  gdb_assert (loc->cuda_elf_image);
 
   loc->address = adjust_breakpoint_address (b->gdbarch, loc->address, b->type);
 
@@ -8645,6 +8665,7 @@ cuda_remove_duplicate_locations (struct bp_location *promoted_loc, struct breakp
   if (loc->cuda_elf_image == NULL)
     {
       loc->cuda_elf_image = promoted_loc->cuda_elf_image;
+      gdb_assert (loc->cuda_elf_image);
       loc->cuda_breakpoint = true;
     }
 
@@ -10058,7 +10079,10 @@ add_location_to_breakpoint (struct breakpoint *b,
   /* CUDA - breakpoints */
   if (loc->gdbarch == cuda_get_gdbarch ())
     {
-      loc->cuda_elf_image = sal->symtab ? cuda_get_elf_image_by_objfile (SYMTAB_OBJFILE(sal->symtab)) : NULL;
+      if (!loc->cuda_elf_image && sal->symtab)
+	loc->cuda_elf_image = cuda_get_elf_image_by_objfile (SYMTAB_OBJFILE(sal->symtab));
+      if (!loc->cuda_elf_image && sal->section)
+	loc->cuda_elf_image = cuda_get_elf_image_by_objfile (sal->section->objfile);
       loc->cuda_breakpoint = true;
       b->cuda_breakpoint =   true;
     }
@@ -17104,8 +17128,9 @@ cuda_auto_breakpoints_add_location (elf_image_t elf_image, CORE_ADDR addr)
       do_cleanups (cleanup);
 
       (*bp)->cuda_breakpoint = true;
-      gdb_assert((*bp)->loc->cuda_breakpoint == true);
+      gdb_assert ((*bp)->loc->cuda_breakpoint == true);
       (*bp)->loc->cuda_elf_image = elf_image;
+      gdb_assert ((*bp)->loc->cuda_elf_image);
 
       cuda_trace_breakpoint ("add auto breakpoint bp %d at 0x%llx",
                              (*bp)->number, (unsigned long long)addr);
@@ -17120,6 +17145,8 @@ cuda_auto_breakpoints_add_location (elf_image_t elf_image, CORE_ADDR addr)
       sal.pspace = current_program_space;
 
       loc = add_location_to_breakpoint (*bp, &sal);
+
+      gdb_assert (elf_image);
       (*bp)->loc->cuda_elf_image = elf_image;
       gdb_assert (loc->cuda_breakpoint == true);
 

@@ -1320,9 +1320,6 @@ cuda_options_single_stepping_optimizations_enabled (void)
 static void
 cuda_options_initialize_single_stepping_optimization (void)
 {
-#ifdef __ANDROID__
-  cuda_gpu_single_stepping_optimizations = 0;
-#endif
   add_setshow_boolean_cmd ("single_stepping_optimizations", class_cuda, &cuda_gpu_single_stepping_optimizations,
                            _("Turn on/off CUDA single-stepping optimizations"),
                            _("Show if CUDA single-stepping optimizations are enabled."),

@@ -188,9 +188,11 @@ typedef enum {
     CUDBG_ERROR_INVALID_WARP_MASK           = 0x002a,  /* Specified warp mask is zero, or contains invalid warps */
     CUDBG_ERROR_AMBIGUOUS_MEMORY_ADDRESS    = 0x002b,  /* Address cannot be resolved to a GPU unambiguously */
     CUDBG_ERROR_RECURSIVE_API_CALL          = 0x002c,  /* Debug API entry point called from within a debug API callback */
+    CUDBG_ERROR_MISSING_DATA                = 0x002d,  /* The requested data is missing */
+
 } CUDBGResult;
 
-static const char *CUDBGResultNames[45] = {
+static const char *CUDBGResultNames[46] = {
     "CUDBG_SUCCESS",
     "CUDBG_ERROR_UNKNOWN",
     "CUDBG_ERROR_BUFFER_TOO_SMALL",
@@ -235,7 +237,8 @@ static const char *CUDBGResultNames[45] = {
     "CUDBG_ERROR_WARP_RESUME_NOT_POSSIBLE",
     "CUDBG_ERROR_INVALID_WARP_MASK",
     "CUDBG_ERROR_AMBIGUOUS_MEMORY_ADDRESS",
-    "CUDBG_ERROR_RECURSIVE_API_CALL"
+    "CUDBG_ERROR_RECURSIVE_API_CALL",
+    "CUDBG_ERROR_MISSING_DATA",
 };
 
 static _CUDBG_INLINE const char *cudbgGetErrorString (CUDBGResult error)

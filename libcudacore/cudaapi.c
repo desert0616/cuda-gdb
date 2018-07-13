@@ -274,7 +274,7 @@ DEF_API_CALL(readGlobalMemory)(uint64_t addr, void *buf, uint32_t sz)
 	memorySeg = utarray_find(curcc->globalMemorySegs, &memorySegToFind,
 				 cuCoreSortMemorySegs);
 	if (memorySeg == NULL)
-		return CUDBG_ERROR_INVALID_MEMORY_ACCESS;
+		return CUDBG_ERROR_MISSING_DATA;
 
 	if (addr < memorySeg->address ||
 			addr + sz > memorySeg->address + memorySeg->size)
@@ -306,7 +306,7 @@ DEF_API_CALL(readSharedMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 	if (rc != CUDBG_SUCCESS)
 		return rc;
 
-	GET_TABLE_ENTRY(scn, CUDBG_ERROR_INVALID_MEMORY_ACCESS,
+	GET_TABLE_ENTRY(scn, CUDBG_ERROR_MISSING_DATA,
 			"cta%u_sm%u_dev%u_shared", ctaId, sm, dev);
 
 	if (cuCoreReadSectionData(curcc->e, scn, &data) != 0)
@@ -334,7 +334,7 @@ DEF_API_CALL(readLocalMemory)(uint32_t dev, uint32_t sm, uint32_t wp,
 
 	VERIFY_ARG(buf);
 
-	GET_TABLE_ENTRY(scn, CUDBG_ERROR_INVALID_MEMORY_ACCESS,
+	GET_TABLE_ENTRY(scn, CUDBG_ERROR_MISSING_DATA,
 			"ln%u_wp%u_sm%u_dev%u_local", ln, wp, sm, dev);
 
 	if (cuCoreReadSectionData(curcc->e, scn, &data) != 0)

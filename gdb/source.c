@@ -671,6 +671,7 @@ source_info (char *ignore, int from_tty)
       char *lastsep;
       int dirnamelen;
       lastsep = (char *) strrchr(s->filename, '/');
+      // lastsep = strrchr(s->filename, '/');
       dirnamelen = strlen(SYMTAB_DIRNAME (s));
       if (lastsep)
         {

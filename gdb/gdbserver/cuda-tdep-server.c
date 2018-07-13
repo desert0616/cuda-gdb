@@ -222,6 +222,8 @@ cuda_trace (char *fmt, ...)
 {
   struct cuda_trace_msg *msg;
   va_list ap;
+  int prefixLength;
+  size_t maxLength;
 
   if (!cuda_options_debug_general())
     return;
@@ -232,8 +234,12 @@ cuda_trace (char *fmt, ...)
     cuda_first_trace_msg = msg;
   else
     cuda_last_trace_msg->next = msg;
-  sprintf (msg->buf, "[CUDAGDB] ");
-  vsnprintf (msg->buf + strlen (msg->buf), sizeof (msg->buf), fmt, ap);
+
+  prefixLength = sprintf (msg->buf, "[CUDAGDB] ");
+  maxLength = sizeof (msg->buf) - prefixLength;
+  if (vsnprintf (msg->buf + prefixLength, maxLength, fmt, ap) >= (int) maxLength)
+    sprintf (msg->buf + sizeof (msg->buf) - 12, "[truncated]");
+
   msg->next = NULL;
   cuda_last_trace_msg = msg;
 }

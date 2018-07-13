@@ -16,6 +16,7 @@
  */
 
 #include "defs.h"
+#include "cuda.h"
 #include "cuda-gdb.h"
 
 void
@@ -23,6 +24,7 @@ cuda_print_message_nvidia_version (struct ui_file *stream)
 {
   fprintf_unfiltered (stream,
                       "NVIDIA (R) CUDA Debugger\n"
-                      "9.0 release\n"
-                      "Portions Copyright (C) 2007-2017 NVIDIA Corporation\n");
+                      "%d.%d release\n"
+                      "Portions Copyright (C) 2007-2018 NVIDIA Corporation\n",
+		      CUDA_VERSION / 1000, (CUDA_VERSION % 1000) / 10);
 }

@@ -60,10 +60,12 @@ save_original_signals_state (void)
 
       /* If we find a custom signal handler already installed, then
 	 this function was called too late.  */
+#if !(__ANDROID__ && __aarch64__)
       if (oldact->sa_handler != SIG_DFL && oldact->sa_handler != SIG_IGN)
 	internal_error (__FILE__, __LINE__, _("unexpected signal handler"));
+#endif // !(__ANDROID__ && __aarch64__)
     }
-#endif
+#endif // HAVE_SIGACTION
 }
 
 /* See signals-state-save-restore.h.   */

@@ -70,6 +70,9 @@ static struct {
    routines instead. */
 static struct target_ops host_target_ops;
 
+/* A flag to allow special processing in the first wait() after attach */
+static bool cuda_just_attached = false;
+
 static void cuda_nat_detach (struct target_ops *ops, const char *args,
 			     int from_tty);
 
@@ -146,7 +149,7 @@ cuda_nat_xfer_partial (struct target_ops *ops,
        * return right away to let cuda-gdb return the right error.
        */
        if (*xfered_len <= 0 && object != TARGET_OBJECT_MEMORY)
-         return TARGET_XFER_OK;
+         return status;
 
        /*
        * If the host memory xfer operation fails (i.e. *xfered_len is 0),
@@ -661,7 +664,16 @@ cuda_nat_wait (struct target_ops *ops, ptid_t ptid,
   else
     {
       cuda_trace ("cuda_wait: host_wait\n");
-      cuda_coords_invalidate_current ();
+      if (cuda_just_attached)
+        {
+          /* Do not invalidate the coords once, as we have just attached
+             and the target has been in a valid stopped state. */
+          cuda_just_attached = false;
+        }
+      else
+        {
+          cuda_coords_invalidate_current ();
+        }
       r = host_target_ops.to_wait (ops, ptid, ws, target_options);
 
       /* GDB reads events asynchronously without blocking. The target may have
@@ -1378,6 +1390,10 @@ cuda_nat_attach (void)
 
       /* No threads are running at this point.  */
       set_running (minus_one_ptid, 0);
+
+      /* We have just attached and the inferior is stopped. On the following wait()
+         we need to take this into account and not invalidate current_coords. */
+      cuda_just_attached = true;
 
       do_cleanups (cleanup);
       if (cuda_api_get_attach_state () != CUDA_ATTACH_STATE_APP_READY &&

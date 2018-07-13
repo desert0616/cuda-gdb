@@ -6125,7 +6125,7 @@ handle_signal_stop (struct execution_control_state *ecs)
 	      do_cleanups (old_cleanups);
 	    }
 	}
-      else
+      else if (!cuda_focus_is_device ())
 	{
 	  /* A delayed software breakpoint event.  Ignore the trap.  */
 	  if (debug_infrun)

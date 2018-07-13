@@ -109,6 +109,7 @@ print_exception_origin (cuda_exception_t exception)
   if (sal.symtab && sal.line)
     {
       filename = (char *) strrchr (sal.symtab->filename, '/');
+      // filename = strrchr (sal.symtab->filename, '/');
       if (filename)
         ++filename;
       else
