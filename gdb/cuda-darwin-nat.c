@@ -35,7 +35,7 @@
 /* Darwin process name length */
 #define DARWIN_PROC_NAME_LEN 128
 
-bool cuda_darwin_cuda_device_used_for_graphics (int dev_id);
+// bool cuda_darwin_cuda_device_used_for_graphics (int dev_id);
 bool cuda_darwin_is_launched_from_ssh_session (void);
 
 static IOReturn
@@ -163,56 +163,56 @@ DarwinGetPCIBusInfo(io_object_t obj, uint32_t *pci_bus_id, uint32_t *pci_dev_id,
 }
 
 
-/*
- * Tries to determine if GPU used for graphics is also used for CUDA
- * If any of the system calls fails, it assumes that's the case.
- * CUDA device is considered used for graphics if following conditions are met:
- * - Display is attached to given GPU
- * - At least one frame-buffer client is using this GPU (i.e. WindowServer is running)
- * - At least one compute client is using this GPU
- */
+// /*
+//  * Tries to determine if GPU used for graphics is also used for CUDA
+//  * If any of the system calls fails, it assumes that's the case.
+//  * CUDA device is considered used for graphics if following conditions are met:
+//  * - Display is attached to given GPU
+//  * - At least one frame-buffer client is using this GPU (i.e. WindowServer is running)
+//  * - At least one compute client is using this GPU
+//  */
 
-bool
-cuda_darwin_cuda_device_used_for_graphics(int dev_id)
-{
-  uint32_t cuda_pci_bus_id, cuda_pci_dev_id;
-  uint32_t pci_bus_id, pci_dev_id;
-  int i, count;
-  io_object_t displays[MAX_OBJLIST_LEN+1];
-  io_object_t parent;
-  IOReturn rc;
+// bool
+// cuda_darwin_cuda_device_used_for_graphics(int dev_id)
+// {
+//   uint32_t cuda_pci_bus_id, cuda_pci_dev_id;
+//   uint32_t pci_bus_id, pci_dev_id;
+//   int i, count;
+//   io_object_t displays[MAX_OBJLIST_LEN+1];
+//   io_object_t parent;
+//   IOReturn rc;
 
-  memset (displays, 0, sizeof(displays));
-  cuda_api_get_device_pci_bus_info (dev_id, &cuda_pci_bus_id, &cuda_pci_dev_id);
+//   memset (displays, 0, sizeof(displays));
+//   cuda_api_get_device_pci_bus_info (dev_id, &cuda_pci_bus_id, &cuda_pci_dev_id);
 
 
-  /* Get IODisplayConnect objects */
-  rc = DarwinGetObjects (kIOMasterPortDefault, &count, displays, "IODisplayConnect");
-  if (rc != kIOReturnSuccess)
-    return true;
+//   /* Get IODisplayConnect objects */
+//   rc = DarwinGetObjects (kIOMasterPortDefault, &count, displays, "IODisplayConnect");
+//   if (rc != kIOReturnSuccess)
+//     return true;
 
-  /* CUDA device is unlikely to be used for graphics in absence of displays */
-  if (count == 0) return false;
+//   /* CUDA device is unlikely to be used for graphics in absence of displays */
+//   if (count == 0) return false;
 
-  /* Iterate over IODisplayConnect objects*/
-  for (i=0;i<count;i++)
-    {
-      /* Find PCI device display connected to */
-      rc = DarwinGetParentOfType (displays[i], &parent, "IOPCIDevice");
-      if (rc != kIOReturnSuccess || parent == 0)
-        return true;
-      /* Get devices bus/dev ids*/
-      rc = DarwinGetPCIBusInfo (parent, &pci_bus_id, &pci_dev_id, NULL);
-      if (rc != kIOReturnSuccess) return true;
-      if (pci_bus_id != cuda_pci_bus_id || pci_dev_id != cuda_pci_dev_id) continue;
-      /* Found CUDA device with display attached to it */
-      /* Not safe to use unless we are in console mode */
-      rc = DarwinGetSiblingsOfTypeCount (displays[i], "IOFramebufferUserClient");
-      if (rc != 0) return true;
-    }
+//   /* Iterate over IODisplayConnect objects*/
+//   for (i=0;i<count;i++)
+//     {
+//       /* Find PCI device display connected to */
+//       rc = DarwinGetParentOfType (displays[i], &parent, "IOPCIDevice");
+//       if (rc != kIOReturnSuccess || parent == 0)
+//         return true;
+//       /* Get devices bus/dev ids*/
+//       rc = DarwinGetPCIBusInfo (parent, &pci_bus_id, &pci_dev_id, NULL);
+//       if (rc != kIOReturnSuccess) return true;
+//       if (pci_bus_id != cuda_pci_bus_id || pci_dev_id != cuda_pci_dev_id) continue;
+//       /* Found CUDA device with display attached to it */
+//       /* Not safe to use unless we are in console mode */
+//       rc = DarwinGetSiblingsOfTypeCount (displays[i], "IOFramebufferUserClient");
+//       if (rc != 0) return true;
+//     }
 
-  return false;
-}
+//   return false;
+// }
 
 static int
 darwin_find_session_leader (int *pPid, char *name)

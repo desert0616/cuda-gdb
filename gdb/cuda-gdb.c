@@ -25,5 +25,5 @@ cuda_print_message_nvidia_version (struct ui_file *stream)
   fprintf_unfiltered (stream,
                       "NVIDIA (R) CUDA Debugger\n"
                       "9.2 release\n"
-                      "Portions Copyright (C) 2007-2018 NVIDIA Corporation\n";
+                      "Portions Copyright (C) 2007-2018 NVIDIA Corporation\n");
 }

@@ -37,9 +37,9 @@
 #include "cuda-elf-image.h"
 #include "cuda-options.h"
 
-#ifdef __APPLE__
-bool cuda_darwin_cuda_device_used_for_graphics (uint32_t dev_id);
-#endif
+// #ifdef __APPLE__
+// bool cuda_darwin_cuda_device_used_for_graphics (uint32_t dev_id);
+// #endif
 
 static void
 cuda_trace_event (const char *fmt, ...)
